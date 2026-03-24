@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "shellstation",
+  "productName": "ShellStation",
   "version": "0.1.0",
   "identifier": "com.luminaapps.shellstation",
   "build": {
@@ -12,9 +12,11 @@
   "app": {
     "windows": [
       {
-        "title": "shellstation",
-        "width": 800,
-        "height": 600
+        "title": "ShellStation",
+        "width": 1200,
+        "height": 800,
+        "minWidth": 640,
+        "minHeight": 480
       }
     ],
     "security": {
