@@ -1,4 +1,5 @@
 import React, { useState } from "react";
+import { useTranslation } from "react-i18next";
 
 export interface QuickConnectParams {
   host: string;
@@ -14,6 +15,7 @@ interface QuickConnectProps {
 }
 
 export function QuickConnect({ onConnect, onCancel }: QuickConnectProps): React.JSX.Element {
+  const { t } = useTranslation();
   const [host, setHost] = useState("");
   const [port, setPort] = useState("22");
   const [username, setUsername] = useState("");
@@ -46,11 +48,11 @@ export function QuickConnect({ onConnect, onCancel }: QuickConnectProps): React.
         aria-labelledby="qc-title"
       >
         <h3 className="dialog-title" id="qc-title">
-          Quick Connect
+          {t("quickConnect.title")}
         </h3>
         <form onSubmit={handleSubmit}>
           <div className="dialog-field">
-            <label htmlFor="qc-host">Host</label>
+            <label htmlFor="qc-host">{t("quickConnect.hostLabel")}</label>
             <input
               id="qc-host"
               type="text"
@@ -58,12 +60,12 @@ export function QuickConnect({ onConnect, onCancel }: QuickConnectProps): React.
               onChange={(e) => {
                 setHost(e.target.value);
               }}
-              placeholder="hostname or IP"
+              placeholder={t("session.hostnamePlaceholder")}
               autoFocus
             />
           </div>
           <div className="dialog-field">
-            <label htmlFor="qc-port">Port</label>
+            <label htmlFor="qc-port">{t("session.portLabel")}</label>
             <input
               id="qc-port"
               type="number"
@@ -76,7 +78,7 @@ export function QuickConnect({ onConnect, onCancel }: QuickConnectProps): React.
             />
           </div>
           <div className="dialog-field">
-            <label htmlFor="qc-username">Username</label>
+            <label htmlFor="qc-username">{t("session.usernameLabel")}</label>
             <input
               id="qc-username"
               type="text"
@@ -84,11 +86,11 @@ export function QuickConnect({ onConnect, onCancel }: QuickConnectProps): React.
               onChange={(e) => {
                 setUsername(e.target.value);
               }}
-              placeholder="user"
+              placeholder={t("session.usernamePlaceholder")}
             />
           </div>
           <div className="dialog-field">
-            <label htmlFor="qc-auth">Auth Method</label>
+            <label htmlFor="qc-auth">{t("session.authMethodLabel")}</label>
             <select
               id="qc-auth"
               value={authMethod}
@@ -96,13 +98,13 @@ export function QuickConnect({ onConnect, onCancel }: QuickConnectProps): React.
                 setAuthMethod(e.target.value as "password" | "publickey");
               }}
             >
-              <option value="password">Password</option>
-              <option value="publickey">Public Key</option>
+              <option value="password">{t("session.authPassword")}</option>
+              <option value="publickey">{t("session.authPublicKey")}</option>
             </select>
           </div>
           <div className="dialog-field">
             <label htmlFor="qc-credential">
-              {authMethod === "password" ? "Password" : "Key Path"}
+              {authMethod === "password" ? t("session.passwordLabel") : t("session.keyPathLabel")}
             </label>
             <input
               id="qc-credential"
@@ -111,15 +113,19 @@ export function QuickConnect({ onConnect, onCancel }: QuickConnectProps): React.
               onChange={(e) => {
                 setCredential(e.target.value);
               }}
-              placeholder={authMethod === "password" ? "password" : "~/.ssh/id_ed25519"}
+              placeholder={
+                authMethod === "password"
+                  ? t("session.passwordPlaceholder")
+                  : t("session.keyPathPlaceholder")
+              }
             />
           </div>
           <div className="dialog-actions">
             <button type="button" className="dialog-btn dialog-btn-cancel" onClick={onCancel}>
-              Cancel
+              {t("dialog.cancel")}
             </button>
             <button type="submit" className="dialog-btn dialog-btn-primary">
-              Connect
+              {t("quickConnect.connect")}
             </button>
           </div>
         </form>

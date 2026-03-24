@@ -1,4 +1,5 @@
 import React, { useState } from "react";
+import { useTranslation } from "react-i18next";
 import type { Folder, Session } from "../stores/sessionStore";
 
 export interface SessionFormData {
@@ -33,6 +34,7 @@ export function SessionDialog({
   onSubmit,
   onCancel,
 }: SessionDialogProps): React.JSX.Element {
+  const { t } = useTranslation();
   const [folderId, setFolderId] = useState(initial?.folderId ?? defaultFolderId);
   const [name, setName] = useState(initial?.name ?? "");
   const [hostname, setHostname] = useState(initial?.hostname ?? "");
@@ -77,7 +79,7 @@ export function SessionDialog({
         </h3>
         <form onSubmit={handleSubmit}>
           <div className="dialog-field">
-            <label htmlFor="sd-folder">Folder</label>
+            <label htmlFor="sd-folder">{t("session.folderLabel")}</label>
             <select
               id="sd-folder"
               value={folderId}
@@ -93,7 +95,7 @@ export function SessionDialog({
             </select>
           </div>
           <div className="dialog-field">
-            <label htmlFor="sd-name">Name</label>
+            <label htmlFor="sd-name">{t("session.nameLabel")}</label>
             <input
               id="sd-name"
               type="text"
@@ -101,13 +103,13 @@ export function SessionDialog({
               onChange={(e) => {
                 setName(e.target.value);
               }}
-              placeholder="My Server"
+              placeholder={t("session.namePlaceholder")}
               autoFocus
             />
           </div>
           <div className="dialog-row">
             <div className="dialog-field dialog-field-grow">
-              <label htmlFor="sd-host">Hostname</label>
+              <label htmlFor="sd-host">{t("session.hostnameLabel")}</label>
               <input
                 id="sd-host"
                 type="text"
@@ -115,11 +117,11 @@ export function SessionDialog({
                 onChange={(e) => {
                   setHostname(e.target.value);
                 }}
-                placeholder="hostname or IP"
+                placeholder={t("session.hostnamePlaceholder")}
               />
             </div>
             <div className="dialog-field dialog-field-small">
-              <label htmlFor="sd-port">Port</label>
+              <label htmlFor="sd-port">{t("session.portLabel")}</label>
               <input
                 id="sd-port"
                 type="number"
@@ -133,7 +135,7 @@ export function SessionDialog({
             </div>
           </div>
           <div className="dialog-field">
-            <label htmlFor="sd-user">Username</label>
+            <label htmlFor="sd-user">{t("session.usernameLabel")}</label>
             <input
               id="sd-user"
               type="text"
@@ -141,11 +143,11 @@ export function SessionDialog({
               onChange={(e) => {
                 setUsername(e.target.value);
               }}
-              placeholder="user"
+              placeholder={t("session.usernamePlaceholder")}
             />
           </div>
           <div className="dialog-field">
-            <label htmlFor="sd-auth">Auth Method</label>
+            <label htmlFor="sd-auth">{t("session.authMethodLabel")}</label>
             <select
               id="sd-auth"
               value={authMethod}
@@ -153,13 +155,13 @@ export function SessionDialog({
                 setAuthMethod(e.target.value);
               }}
             >
-              <option value="password">Password</option>
-              <option value="publickey">Public Key</option>
+              <option value="password">{t("session.authPassword")}</option>
+              <option value="publickey">{t("session.authPublicKey")}</option>
             </select>
           </div>
           <div className="dialog-field">
             <label htmlFor="sd-credential">
-              {authMethod === "password" ? "Password" : "Key Path"}
+              {authMethod === "password" ? t("session.passwordLabel") : t("session.keyPathLabel")}
             </label>
             <input
               id="sd-credential"
@@ -172,11 +174,15 @@ export function SessionDialog({
                   setKeyPath(e.target.value);
                 }
               }}
-              placeholder={authMethod === "password" ? "password" : "~/.ssh/id_ed25519"}
+              placeholder={
+                authMethod === "password"
+                  ? t("session.passwordPlaceholder")
+                  : t("session.keyPathPlaceholder")
+              }
             />
           </div>
           <div className="dialog-field">
-            <label htmlFor="sd-jump">Jump Host</label>
+            <label htmlFor="sd-jump">{t("session.jumpHostLabel")}</label>
             <select
               id="sd-jump"
               value={jumpHostId}
@@ -184,7 +190,7 @@ export function SessionDialog({
                 setJumpHostId(e.target.value);
               }}
             >
-              <option value="">None</option>
+              <option value="">{t("session.jumpHostNone")}</option>
               {sessions.map((s) => (
                 <option key={s.id} value={s.id}>
                   {s.name} ({s.hostname})
@@ -193,7 +199,7 @@ export function SessionDialog({
             </select>
           </div>
           <div className="dialog-field">
-            <label htmlFor="sd-tags">Tags</label>
+            <label htmlFor="sd-tags">{t("session.tagsLabel")}</label>
             <input
               id="sd-tags"
               type="text"
@@ -201,15 +207,15 @@ export function SessionDialog({
               onChange={(e) => {
                 setTags(e.target.value);
               }}
-              placeholder="prod, eu, web (comma-separated)"
+              placeholder={t("session.tagsPlaceholder")}
             />
           </div>
           <div className="dialog-actions">
             <button type="button" className="dialog-btn dialog-btn-cancel" onClick={onCancel}>
-              Cancel
+              {t("dialog.cancel")}
             </button>
             <button type="submit" className="dialog-btn dialog-btn-primary">
-              Save
+              {t("dialog.save")}
             </button>
           </div>
         </form>

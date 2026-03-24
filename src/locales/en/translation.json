@@ -1,0 +1,81 @@
+{
+  "sidebar": {
+    "title": "Sessions",
+    "newFolder": "New Folder",
+    "newSession": "New Session",
+    "createFolderFirst": "Create a folder first.",
+    "searchPlaceholder": "Search sessions\u2026",
+    "empty": "No folders yet. Click +F to create one."
+  },
+  "contextMenu": {
+    "newSession": "New Session",
+    "newSubfolder": "New Subfolder",
+    "rename": "Rename",
+    "moveTo": "Move To\u2026",
+    "delete": "Delete",
+    "connect": "Connect",
+    "edit": "Edit"
+  },
+  "folder": {
+    "deleteWithSessions": "Delete folder and its {{count}} session(s)?",
+    "deleteEmpty": "Delete this folder?",
+    "dialogCreate": "New Folder",
+    "dialogRename": "Rename Folder",
+    "nameLabel": "Name",
+    "namePlaceholder": "Folder name"
+  },
+  "session": {
+    "deleteConfirm": "Delete session \"{{name}}\"?",
+    "dialogCreate": "New Session",
+    "dialogEdit": "Edit Session",
+    "folderLabel": "Folder",
+    "nameLabel": "Name",
+    "namePlaceholder": "My Server",
+    "hostnameLabel": "Hostname",
+    "hostnamePlaceholder": "hostname or IP",
+    "portLabel": "Port",
+    "usernameLabel": "Username",
+    "usernamePlaceholder": "user",
+    "authMethodLabel": "Auth Method",
+    "authPassword": "Password",
+    "authPublicKey": "Public Key",
+    "passwordLabel": "Password",
+    "keyPathLabel": "Key Path",
+    "passwordPlaceholder": "password",
+    "keyPathPlaceholder": "~/.ssh/id_ed25519",
+    "jumpHostLabel": "Jump Host",
+    "jumpHostNone": "None",
+    "tagsLabel": "Tags",
+    "tagsPlaceholder": "prod, eu, web (comma-separated)"
+  },
+  "dialog": {
+    "cancel": "Cancel",
+    "save": "Save",
+    "move": "Move",
+    "moveTo": "Move To\u2026",
+    "targetFolder": "Target Folder",
+    "root": "(Root)"
+  },
+  "terminal": {
+    "newTab": "Terminal {{count}}",
+    "newLocalTerminal": "New local terminal",
+    "sshConnection": "SSH connection",
+    "ssh": "SSH",
+    "processExited": "[Process exited]",
+    "connectionFailed": "Connection failed: {{message}}",
+    "sshConnectionFailed": "SSH connection failed: {{message}}"
+  },
+  "hostVerify": {
+    "title": "Verify Host Key",
+    "authenticity": "The authenticity of host <1>{{host}}:{{port}}</1> cannot be established.",
+    "fingerprint": "{{keyType}} key fingerprint:",
+    "confirmConnect": "Are you sure you want to continue connecting?",
+    "reject": "Reject",
+    "accept": "Accept"
+  },
+  "quickConnect": {
+    "title": "Quick Connect",
+    "hostLabel": "Host",
+    "connect": "Connect"
+  }
+}

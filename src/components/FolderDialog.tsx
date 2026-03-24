@@ -1,4 +1,5 @@
 import React, { useState } from "react";
+import { useTranslation } from "react-i18next";
 
 interface FolderDialogProps {
   title: string;
@@ -13,6 +14,7 @@ export function FolderDialog({
   onSubmit,
   onCancel,
 }: FolderDialogProps): React.JSX.Element {
+  const { t } = useTranslation();
   const [name, setName] = useState(initialName);
 
   const handleSubmit = (e: React.SyntheticEvent): void => {
@@ -37,7 +39,7 @@ export function FolderDialog({
         </h3>
         <form onSubmit={handleSubmit}>
           <div className="dialog-field">
-            <label htmlFor="fd-name">Name</label>
+            <label htmlFor="fd-name">{t("folder.nameLabel")}</label>
             <input
               id="fd-name"
               type="text"
@@ -45,16 +47,16 @@ export function FolderDialog({
               onChange={(e) => {
                 setName(e.target.value);
               }}
-              placeholder="Folder name"
+              placeholder={t("folder.namePlaceholder")}
               autoFocus
             />
           </div>
           <div className="dialog-actions">
             <button type="button" className="dialog-btn dialog-btn-cancel" onClick={onCancel}>
-              Cancel
+              {t("dialog.cancel")}
             </button>
             <button type="submit" className="dialog-btn dialog-btn-primary">
-              Save
+              {t("dialog.save")}
             </button>
           </div>
         </form>

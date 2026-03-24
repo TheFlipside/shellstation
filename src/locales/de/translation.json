@@ -1,0 +1,81 @@
+{
+  "sidebar": {
+    "title": "Sitzungen",
+    "newFolder": "Neuer Ordner",
+    "newSession": "Neue Sitzung",
+    "createFolderFirst": "Erstelle zuerst einen Ordner.",
+    "searchPlaceholder": "Sitzungen suchen\u2026",
+    "empty": "Noch keine Ordner vorhanden. Klicke +F um einen zu erstellen."
+  },
+  "contextMenu": {
+    "newSession": "Neue Sitzung",
+    "newSubfolder": "Neuer Unterordner",
+    "rename": "Umbenennen",
+    "moveTo": "Verschieben nach\u2026",
+    "delete": "L\u00f6schen",
+    "connect": "Verbinden",
+    "edit": "Bearbeiten"
+  },
+  "folder": {
+    "deleteWithSessions": "Ordner und seine {{count}} Sitzung(en) l\u00f6schen?",
+    "deleteEmpty": "Diesen Ordner l\u00f6schen?",
+    "dialogCreate": "Neuer Ordner",
+    "dialogRename": "Ordner umbenennen",
+    "nameLabel": "Name",
+    "namePlaceholder": "Ordnername"
+  },
+  "session": {
+    "deleteConfirm": "Sitzung \"{{name}}\" l\u00f6schen?",
+    "dialogCreate": "Neue Sitzung",
+    "dialogEdit": "Sitzung bearbeiten",
+    "folderLabel": "Ordner",
+    "nameLabel": "Name",
+    "namePlaceholder": "Mein Server",
+    "hostnameLabel": "Hostname",
+    "hostnamePlaceholder": "Hostname oder IP",
+    "portLabel": "Port",
+    "usernameLabel": "Benutzername",
+    "usernamePlaceholder": "benutzer",
+    "authMethodLabel": "Authentifizierung",
+    "authPassword": "Passwort",
+    "authPublicKey": "\u00d6ffentlicher Schl\u00fcssel",
+    "passwordLabel": "Passwort",
+    "keyPathLabel": "Schl\u00fcsselpfad",
+    "passwordPlaceholder": "Passwort",
+    "keyPathPlaceholder": "~/.ssh/id_ed25519",
+    "jumpHostLabel": "Jump-Host",
+    "jumpHostNone": "Keiner",
+    "tagsLabel": "Tags",
+    "tagsPlaceholder": "prod, eu, web (kommagetrennt)"
+  },
+  "dialog": {
+    "cancel": "Abbrechen",
+    "save": "Speichern",
+    "move": "Verschieben",
+    "moveTo": "Verschieben nach\u2026",
+    "targetFolder": "Zielordner",
+    "root": "(Stammverzeichnis)"
+  },
+  "terminal": {
+    "newTab": "Terminal {{count}}",
+    "newLocalTerminal": "Neues lokales Terminal",
+    "sshConnection": "SSH-Verbindung",
+    "ssh": "SSH",
+    "processExited": "[Prozess beendet]",
+    "connectionFailed": "Verbindung fehlgeschlagen: {{message}}",
+    "sshConnectionFailed": "SSH-Verbindung fehlgeschlagen: {{message}}"
+  },
+  "hostVerify": {
+    "title": "Hostschl\u00fcssel \u00fcberpr\u00fcfen",
+    "authenticity": "Die Authentizit\u00e4t des Hosts <1>{{host}}:{{port}}</1> konnte nicht \u00fcberpr\u00fcft werden.",
+    "fingerprint": "{{keyType}}-Schl\u00fcsselfingerabdruck:",
+    "confirmConnect": "Sind Sie sicher, dass Sie die Verbindung fortsetzen m\u00f6chten?",
+    "reject": "Ablehnen",
+    "accept": "Akzeptieren"
+  },
+  "quickConnect": {
+    "title": "Schnellverbindung",
+    "hostLabel": "Host",
+    "connect": "Verbinden"
+  }
+}

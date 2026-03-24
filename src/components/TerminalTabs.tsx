@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { useTerminalStore } from "../stores/terminalStore";
@@ -10,6 +11,7 @@ import { HostVerifyDialog, type HostVerifyRequest } from "./HostVerifyDialog";
 const noop = (): void => {};
 
 export function TerminalTabs(): React.JSX.Element {
+  const { t } = useTranslation();
   const { tabs, activeTabId, addTab, removeTab, setActiveTab } = useTerminalStore();
   const [showQuickConnect, setShowQuickConnect] = useState(false);
   const [hostVerifyRequest, setHostVerifyRequest] = useState<HostVerifyRequest | null>(null);
@@ -17,8 +19,8 @@ export function TerminalTabs(): React.JSX.Element {
 
   const createLocalTab = useCallback(async () => {
     const id = await invoke<string>("pty_spawn", { cols: 80, rows: 24 });
-    addTab(id, `Terminal ${String(tabs.length + 1)}`, "local");
-  }, [addTab, tabs.length]);
+    addTab(id, t("terminal.newTab", { count: String(tabs.length + 1) }), "local");
+  }, [addTab, tabs.length, t]);
 
   const handleSshConnect = useCallback(
     async (params: QuickConnectParams) => {
@@ -39,10 +41,10 @@ export function TerminalTabs(): React.JSX.Element {
         });
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : String(err);
-        alert(`SSH connection failed: ${message}`);
+        alert(t("terminal.sshConnectionFailed", { message }));
       }
     },
-    [addTab],
+    [addTab, t],
   );
 
   const showNextVerifyRequest = useCallback(() => {
@@ -60,7 +62,7 @@ export function TerminalTabs(): React.JSX.Element {
 
   const destroyTab = useCallback(
     async (id: string) => {
-      const tab = tabs.find((t) => t.id === id);
+      const tab = tabs.find((tb) => tb.id === id);
       if (tab?.type === "ssh") {
         await invoke("ssh_disconnect", { id }).catch(noop);
       } else {
@@ -146,7 +148,7 @@ export function TerminalTabs(): React.JSX.Element {
             createLocalTab().catch(noop);
           }}
           type="button"
-          title="New local terminal"
+          title={t("terminal.newLocalTerminal")}
         >
           +
         </button>
@@ -156,9 +158,9 @@ export function TerminalTabs(): React.JSX.Element {
             setShowQuickConnect(true);
           }}
           type="button"
-          title="SSH connection"
+          title={t("terminal.sshConnection")}
         >
-          SSH
+          {t("terminal.ssh")}
         </button>
       </div>
       <div className="terminal-pane">

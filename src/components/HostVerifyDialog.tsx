@@ -1,4 +1,5 @@
 import React from "react";
+import { Trans, useTranslation } from "react-i18next";
 
 export interface HostVerifyRequest {
   sessionId: string;
@@ -14,22 +15,24 @@ interface HostVerifyDialogProps {
 }
 
 export function HostVerifyDialog({ request, onRespond }: HostVerifyDialogProps): React.JSX.Element {
+  const { t } = useTranslation();
+
   return (
     <div className="dialog-overlay" role="presentation">
       <div className="dialog" role="dialog" aria-modal="true" aria-labelledby="hv-title">
         <h3 className="dialog-title" id="hv-title">
-          Verify Host Key
+          {t("hostVerify.title")}
         </h3>
         <p className="dialog-text">
-          The authenticity of host{" "}
-          <strong>
-            {request.host}:{request.port}
-          </strong>{" "}
-          cannot be established.
+          <Trans
+            i18nKey="hostVerify.authenticity"
+            values={{ host: request.host, port: request.port }}
+            components={{ 1: <strong /> }}
+          />
         </p>
-        <p className="dialog-text">{request.keyType} key fingerprint:</p>
+        <p className="dialog-text">{t("hostVerify.fingerprint", { keyType: request.keyType })}</p>
         <code className="dialog-fingerprint">{request.fingerprint}</code>
-        <p className="dialog-text">Are you sure you want to continue connecting?</p>
+        <p className="dialog-text">{t("hostVerify.confirmConnect")}</p>
         <div className="dialog-actions">
           <button
             type="button"
@@ -38,7 +41,7 @@ export function HostVerifyDialog({ request, onRespond }: HostVerifyDialogProps):
               onRespond(request.sessionId, false);
             }}
           >
-            Reject
+            {t("hostVerify.reject")}
           </button>
           <button
             type="button"
@@ -47,7 +50,7 @@ export function HostVerifyDialog({ request, onRespond }: HostVerifyDialogProps):
               onRespond(request.sessionId, true);
             }}
           >
-            Accept
+            {t("hostVerify.accept")}
           </button>
         </div>
       </div>

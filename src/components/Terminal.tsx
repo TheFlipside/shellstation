@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useCallback } from "react";
+import i18n from "../i18n";
 import { Terminal as XTerm } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebglAddon } from "@xterm/addon-webgl";
@@ -118,7 +119,7 @@ export function Terminal({ sessionId, sessionType, visible }: TerminalProps): Re
       });
 
       exitUnlisten = await listen(`terminal-exit-${sessionId}`, () => {
-        term.write("\r\n[Process exited]\r\n");
+        term.write(`\r\n${i18n.t("terminal.processExited")}\r\n`);
       });
     };
 

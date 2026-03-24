@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { useSessionStore } from "../stores/sessionStore";
 import { SessionTree } from "./SessionTree";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
@@ -32,6 +33,7 @@ interface MoveTarget {
 }
 
 export function SessionSidebar(): React.JSX.Element {
+  const { t } = useTranslation();
   const store = useSessionStore();
   const {
     folders,
@@ -82,10 +84,10 @@ export function SessionSidebar(): React.JSX.Element {
     (id: string) => {
       connectSession(id).catch((err: unknown) => {
         const msg = err instanceof Error ? err.message : String(err);
-        alert(`Connection failed: ${msg}`);
+        alert(t("terminal.connectionFailed", { message: msg }));
       });
     },
-    [connectSession],
+    [connectSession, t],
   );
 
   const getContextItems = (): ContextMenuItem[] => {
@@ -95,19 +97,19 @@ export function SessionSidebar(): React.JSX.Element {
       const folder = folders.find((f) => f.id === ctx.id);
       return [
         {
-          label: "New Session",
+          label: t("contextMenu.newSession"),
           onClick: () => {
             setSessionDialog({ mode: "create", folderId: ctx.id });
           },
         },
         {
-          label: "New Subfolder",
+          label: t("contextMenu.newSubfolder"),
           onClick: () => {
             setFolderDialog({ mode: "create", parentId: ctx.id });
           },
         },
         {
-          label: "Rename",
+          label: t("contextMenu.rename"),
           onClick: () => {
             setFolderDialog({
               mode: "rename",
@@ -118,20 +120,20 @@ export function SessionSidebar(): React.JSX.Element {
           },
         },
         {
-          label: "Move To\u2026",
+          label: t("contextMenu.moveTo"),
           onClick: () => {
             setMoveTarget({ id: ctx.id, type: "folder" });
           },
         },
         {
-          label: "Delete",
+          label: t("contextMenu.delete"),
           danger: true,
           onClick: () => {
             const childCount = sessions.filter((s) => s.folder_id === ctx.id).length;
             const msg =
               childCount > 0
-                ? `Delete folder and its ${String(childCount)} session(s)?`
-                : "Delete this folder?";
+                ? t("folder.deleteWithSessions", { count: String(childCount) })
+                : t("folder.deleteEmpty");
             if (window.confirm(msg)) {
               deleteFolder(ctx.id).catch(noop);
             }
@@ -144,13 +146,13 @@ export function SessionSidebar(): React.JSX.Element {
     const session = sessions.find((s) => s.id === ctx.id);
     return [
       {
-        label: "Connect",
+        label: t("contextMenu.connect"),
         onClick: () => {
           handleSessionDoubleClick(ctx.id);
         },
       },
       {
-        label: "Edit",
+        label: t("contextMenu.edit"),
         onClick: () => {
           if (session) {
             setSessionDialog({
@@ -172,16 +174,16 @@ export function SessionSidebar(): React.JSX.Element {
         },
       },
       {
-        label: "Move To\u2026",
+        label: t("contextMenu.moveTo"),
         onClick: () => {
           setMoveTarget({ id: ctx.id, type: "session" });
         },
       },
       {
-        label: "Delete",
+        label: t("contextMenu.delete"),
         danger: true,
         onClick: () => {
-          if (window.confirm(`Delete session "${session?.name ?? ""}"?`)) {
+          if (window.confirm(t("session.deleteConfirm", { name: session?.name ?? "" }))) {
             deleteSession(ctx.id).catch(noop);
           }
         },
@@ -205,7 +207,7 @@ export function SessionSidebar(): React.JSX.Element {
       ? JSON.stringify(
           data.tags
             .split(",")
-            .map((t) => t.trim())
+            .map((tg) => tg.trim())
             .filter(Boolean),
         )
       : "[]";
@@ -263,12 +265,12 @@ export function SessionSidebar(): React.JSX.Element {
   return (
     <div className="session-sidebar">
       <div className="sidebar-header">
-        <span className="sidebar-title">Sessions</span>
+        <span className="sidebar-title">{t("sidebar.title")}</span>
         <div className="sidebar-actions">
           <button
             type="button"
             className="sidebar-btn"
-            title="New Folder"
+            title={t("sidebar.newFolder")}
             onClick={() => {
               setFolderDialog({ mode: "create", parentId: null });
             }}
@@ -278,10 +280,10 @@ export function SessionSidebar(): React.JSX.Element {
           <button
             type="button"
             className="sidebar-btn"
-            title="New Session"
+            title={t("sidebar.newSession")}
             onClick={() => {
               if (folders.length === 0) {
-                alert("Create a folder first.");
+                alert(t("sidebar.createFolderFirst"));
                 return;
               }
               setSessionDialog({ mode: "create", folderId: folders[0].id });
@@ -294,7 +296,7 @@ export function SessionSidebar(): React.JSX.Element {
       <div className="sidebar-search">
         <input
           type="text"
-          placeholder="Search sessions\u2026"
+          placeholder={t("sidebar.searchPlaceholder")}
           value={searchQuery}
           onChange={(e) => {
             if (e.target.value) {
@@ -341,7 +343,7 @@ export function SessionSidebar(): React.JSX.Element {
           />
         )}
         {!searchResults && folders.length === 0 && (
-          <div className="sidebar-empty">No folders yet. Click +F to create one.</div>
+          <div className="sidebar-empty">{t("sidebar.empty")}</div>
         )}
       </div>
 
@@ -358,7 +360,9 @@ export function SessionSidebar(): React.JSX.Element {
 
       {folderDialog && (
         <FolderDialog
-          title={folderDialog.mode === "create" ? "New Folder" : "Rename Folder"}
+          title={
+            folderDialog.mode === "create" ? t("folder.dialogCreate") : t("folder.dialogRename")
+          }
           initialName={folderDialog.initialName}
           onSubmit={handleFolderSubmit}
           onCancel={() => {
@@ -369,7 +373,9 @@ export function SessionSidebar(): React.JSX.Element {
 
       {sessionDialog && (
         <SessionDialog
-          title={sessionDialog.mode === "create" ? "New Session" : "Edit Session"}
+          title={
+            sessionDialog.mode === "create" ? t("session.dialogCreate") : t("session.dialogEdit")
+          }
           folders={folders}
           sessions={sessions}
           defaultFolderId={sessionDialog.folderId}
@@ -399,12 +405,14 @@ export function SessionSidebar(): React.JSX.Element {
             aria-labelledby="mv-title"
           >
             <h3 className="dialog-title" id="mv-title">
-              Move To&hellip;
+              {t("dialog.moveTo")}
             </h3>
             <div className="dialog-field">
-              <label htmlFor="mv-folder">Target Folder</label>
+              <label htmlFor="mv-folder">{t("dialog.targetFolder")}</label>
               <select id="mv-folder" defaultValue="">
-                {moveTarget.type === "folder" && <option value="__root__">(Root)</option>}
+                {moveTarget.type === "folder" && (
+                  <option value="__root__">{t("dialog.root")}</option>
+                )}
                 {folders
                   .filter((f) => f.id !== moveTarget.id)
                   .map((f) => (
@@ -422,7 +430,7 @@ export function SessionSidebar(): React.JSX.Element {
                   setMoveTarget(null);
                 }}
               >
-                Cancel
+                {t("dialog.cancel")}
               </button>
               <button
                 type="button"
@@ -432,7 +440,7 @@ export function SessionSidebar(): React.JSX.Element {
                   if (sel.value) handleMoveSubmit(sel.value);
                 }}
               >
-                Move
+                {t("dialog.move")}
               </button>
             </div>
           </div>
