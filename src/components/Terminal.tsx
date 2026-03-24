@@ -5,9 +5,11 @@ import { WebglAddon } from "@xterm/addon-webgl";
 import { SearchAddon } from "@xterm/addon-search";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import type { SessionType } from "../stores/terminalStore";
 
 interface TerminalProps {
   sessionId: string;
+  sessionType: SessionType;
   visible: boolean;
 }
 
@@ -24,10 +26,13 @@ function base64Decode(encoded: string): Uint8Array {
 // eslint-disable-next-line @typescript-eslint/no-empty-function
 const noop = (): void => {};
 
-export function Terminal({ sessionId, visible }: TerminalProps): React.JSX.Element {
+export function Terminal({ sessionId, sessionType, visible }: TerminalProps): React.JSX.Element {
   const containerRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<XTerm | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
+
+  const writeCmd = sessionType === "ssh" ? "ssh_write" : "pty_write";
+  const resizeCmd = sessionType === "ssh" ? "ssh_resize" : "pty_resize";
 
   const handleResize = useCallback(() => {
     const fit = fitAddonRef.current;
@@ -35,12 +40,12 @@ export function Terminal({ sessionId, visible }: TerminalProps): React.JSX.Eleme
     if (!fit || !term) return;
 
     fit.fit();
-    invoke("pty_resize", {
+    invoke(resizeCmd, {
       id: sessionId,
       cols: term.cols,
       rows: term.rows,
     }).catch(noop);
-  }, [sessionId]);
+  }, [sessionId, resizeCmd]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -96,23 +101,23 @@ export function Terminal({ sessionId, visible }: TerminalProps): React.JSX.Eleme
     termRef.current = term;
     fitAddonRef.current = fitAddon;
 
-    // Forward user input to PTY.
+    // Forward user input to the backend.
     const onDataDisposable = term.onData((data: string) => {
-      invoke("pty_write", { id: sessionId, data }).catch(noop);
+      invoke(writeCmd, { id: sessionId, data }).catch(noop);
     });
 
-    // Listen for PTY output.
+    // Listen for terminal output.
     let outputUnlisten: UnlistenFn | null = null;
     let exitUnlisten: UnlistenFn | null = null;
 
     const setupListeners = async (): Promise<void> => {
-      outputUnlisten = await listen<string>(`pty-output-${sessionId}`, (event) => {
+      outputUnlisten = await listen<string>(`terminal-output-${sessionId}`, (event) => {
         const bytes = base64Decode(event.payload);
         const text = new TextDecoder().decode(bytes);
         term.write(text);
       });
 
-      exitUnlisten = await listen(`pty-exit-${sessionId}`, () => {
+      exitUnlisten = await listen(`terminal-exit-${sessionId}`, () => {
         term.write("\r\n[Process exited]\r\n");
       });
     };
@@ -122,7 +127,7 @@ export function Terminal({ sessionId, visible }: TerminalProps): React.JSX.Eleme
     // Handle window resize.
     const resizeObserver = new ResizeObserver(() => {
       fitAddon.fit();
-      invoke("pty_resize", {
+      invoke(resizeCmd, {
         id: sessionId,
         cols: term.cols,
         rows: term.rows,
@@ -139,7 +144,7 @@ export function Terminal({ sessionId, visible }: TerminalProps): React.JSX.Eleme
       termRef.current = null;
       fitAddonRef.current = null;
     };
-  }, [sessionId, handleResize]);
+  }, [sessionId, sessionType, writeCmd, resizeCmd, handleResize]);
 
   // Re-fit when visibility changes.
   useEffect(() => {

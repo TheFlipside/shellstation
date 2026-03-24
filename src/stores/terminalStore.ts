@@ -1,14 +1,23 @@
 import { create } from "zustand";
 
+export type SessionType = "local" | "ssh";
+
+export interface SshMeta {
+  host: string;
+  username: string;
+}
+
 export interface TerminalTab {
   id: string;
   title: string;
+  type: SessionType;
+  meta?: SshMeta;
 }
 
 interface TerminalState {
   tabs: TerminalTab[];
   activeTabId: string | null;
-  addTab: (id: string, title: string) => void;
+  addTab: (id: string, title: string, type: SessionType, meta?: SshMeta) => void;
   removeTab: (id: string) => void;
   setActiveTab: (id: string) => void;
   updateTabTitle: (id: string, title: string) => void;
@@ -18,9 +27,9 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
   tabs: [],
   activeTabId: null,
 
-  addTab: (id: string, title: string) => {
+  addTab: (id: string, title: string, type_: SessionType, meta?: SshMeta) => {
     set((state) => ({
-      tabs: [...state.tabs, { id, title }],
+      tabs: [...state.tabs, { id, title, type: type_, meta }],
       activeTabId: id,
     }));
   },

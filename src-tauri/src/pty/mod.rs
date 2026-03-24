@@ -21,6 +21,9 @@ pub struct PtyManager {
 }
 
 impl PtyManager {
+    /// Maximum number of concurrent PTY sessions.
+    const MAX_SESSIONS: usize = 100;
+
     /// Spawn a new PTY session and start streaming output via Tauri events.
     ///
     /// Returns the session ID on success.
@@ -31,6 +34,13 @@ impl PtyManager {
         rows: u16,
         app_handle: AppHandle,
     ) -> Result<(), String> {
+        if self.sessions.len() >= Self::MAX_SESSIONS {
+            return Err(format!(
+                "Session limit reached (max {})",
+                Self::MAX_SESSIONS
+            ));
+        }
+
         let pty_system = native_pty_system();
 
         let size = PtySize {
@@ -52,7 +62,7 @@ impl PtyManager {
         let writer = pair.master.take_writer().map_err(|e| e.to_string())?;
         let mut reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
 
-        let event_name = format!("pty-output-{id}");
+        let event_name = format!("terminal-output-{id}");
         let session_id = id.to_string();
 
         thread::spawn(move || {
@@ -61,7 +71,7 @@ impl PtyManager {
                 match reader.read(&mut buf) {
                     Ok(0) => {
                         info!(session_id = %session_id, "PTY reader EOF");
-                        let _ = app_handle.emit(&format!("pty-exit-{session_id}"), ());
+                        let _ = app_handle.emit(&format!("terminal-exit-{session_id}"), ());
                         break;
                     }
                     Ok(n) => {
@@ -73,7 +83,7 @@ impl PtyManager {
                     }
                     Err(e) => {
                         error!(session_id = %session_id, error = %e, "PTY read error");
-                        let _ = app_handle.emit(&format!("pty-exit-{session_id}"), ());
+                        let _ = app_handle.emit(&format!("terminal-exit-{session_id}"), ());
                         break;
                     }
                 }
