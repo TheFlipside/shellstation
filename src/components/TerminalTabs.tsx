@@ -11,7 +11,11 @@ import { useSettingsStore } from "../stores/settingsStore";
 // eslint-disable-next-line @typescript-eslint/no-empty-function
 const noop = (): void => {};
 
-export function TerminalTabs(): React.JSX.Element {
+interface TerminalTabsProps {
+  uiScale: number;
+}
+
+export function TerminalTabs({ uiScale }: TerminalTabsProps): React.JSX.Element {
   const { t } = useTranslation();
   const { tabs, activeTabId, addTab, removeTab, setActiveTab } = useTerminalStore();
   const { closeOnDisconnect, openLocalOnStartup } = useSettingsStore();
@@ -113,7 +117,7 @@ export function TerminalTabs(): React.JSX.Element {
 
   return (
     <div className="terminal-container">
-      <div className="tab-bar">
+      <div className="tab-bar" style={{ zoom: uiScale / 100 }}>
         {tabs.map((tab) => (
           <button
             key={tab.id}

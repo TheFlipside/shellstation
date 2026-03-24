@@ -47,15 +47,22 @@ export function SessionDialog({
   const [keyPath, setKeyPath] = useState(initial?.keyPath ?? "");
   const [tags, setTags] = useState(initial?.tags ?? "");
   const [jumpHostId, setJumpHostId] = useState(initial?.jumpHostId ?? "");
+  const [error, setError] = useState("");
 
   const handleSubmit = (e: React.SyntheticEvent): void => {
     e.preventDefault();
+    setError("");
     if (!name.trim() || !hostname.trim() || !username.trim()) return;
+    const portNum = Number(port);
+    if (!Number.isInteger(portNum) || portNum < 1 || portNum > 65535) {
+      setError(t("session.portRange"));
+      return;
+    }
     onSubmit({
       folderId,
       name: name.trim(),
       hostname: hostname.trim(),
-      port: Number(port) || 22,
+      port: portNum,
       username: username.trim(),
       authMethod,
       tags,
@@ -130,9 +137,8 @@ export function SessionDialog({
                 value={port}
                 onChange={(e) => {
                   setPort(e.target.value);
+                  setError("");
                 }}
-                min={1}
-                max={65535}
               />
             </div>
           </div>
@@ -212,6 +218,7 @@ export function SessionDialog({
               placeholder={t("session.tagsPlaceholder")}
             />
           </div>
+          {error && <p className="dialog-error">{error}</p>}
           <div className="dialog-actions">
             <button type="button" className="dialog-btn dialog-btn-cancel" onClick={onCancel}>
               {t("dialog.cancel")}

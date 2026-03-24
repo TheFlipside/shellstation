@@ -10,6 +10,7 @@ import { useTerminalStore } from "./stores/terminalStore";
 
 function App(): React.JSX.Element {
   const { t } = useTranslation();
+  const uiScale = useSettingsStore((s) => s.uiScale);
   const [sidebarWidth, setSidebarWidth] = useState(260);
   const [showQuitConfirm, setShowQuitConfirm] = useState(false);
   const dragging = useRef(false);
@@ -87,9 +88,12 @@ function App(): React.JSX.Element {
   }, []);
 
   return (
-    <div className="app">
+    <div className="app" style={{ "--ui-zoom": uiScale / 100 } as React.CSSProperties}>
       <div className="app-layout">
-        <div className="app-sidebar" style={{ width: `${String(sidebarWidth)}px` }}>
+        <div
+          className="app-sidebar"
+          style={{ width: `${String(sidebarWidth)}px`, zoom: uiScale / 100 }}
+        >
           <SessionSidebar />
         </div>
         <div
@@ -100,7 +104,7 @@ function App(): React.JSX.Element {
           tabIndex={0}
         />
         <div className="app-main">
-          <TerminalTabs />
+          <TerminalTabs uiScale={uiScale} />
         </div>
       </div>
       {showQuitConfirm && (

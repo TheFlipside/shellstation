@@ -8,6 +8,8 @@ const AVAILABLE_LANGUAGES = [
   { code: "de", label: "Deutsch" },
 ];
 
+const UI_SCALE_OPTIONS = [75, 80, 90, 100, 110, 120, 125, 150];
+
 interface SettingsDialogProps {
   onClose: () => void;
 }
@@ -17,6 +19,8 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
   const {
     language,
     setLanguage,
+    uiScale,
+    setUiScale,
     closeOnDisconnect,
     setCloseOnDisconnect,
     openLocalOnStartup,
@@ -56,6 +60,22 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
             {AVAILABLE_LANGUAGES.map((lang) => (
               <option key={lang.code} value={lang.code}>
                 {lang.label}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="dialog-field">
+          <label htmlFor="settings-ui-scale">{t("settings.uiScaleLabel")}</label>
+          <select
+            id="settings-ui-scale"
+            value={uiScale}
+            onChange={(e) => {
+              setUiScale(Number(e.target.value));
+            }}
+          >
+            {UI_SCALE_OPTIONS.map((scale) => (
+              <option key={scale} value={scale}>
+                {String(scale)}%
               </option>
             ))}
           </select>
