@@ -5,7 +5,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use base64::Engine;
 use russh::keys::key;
-use russh::{client, ChannelMsg, CryptoVec, Disconnect};
+use russh::{client, ChannelMsg, Disconnect};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 use tokio::sync::{mpsc, oneshot, Mutex};
@@ -23,14 +23,14 @@ pub struct HostVerifyPayload {
 }
 
 /// Resize request sent to the reader task which owns the channel.
-struct ResizeRequest {
-    cols: u32,
-    rows: u32,
+pub struct ResizeRequest {
+    pub cols: u32,
+    pub rows: u32,
 }
 
 /// Per-connection SSH session state.
 struct SshSession {
-    handle: client::Handle<SshHandler>,
+    handle: Arc<client::Handle<SshHandler>>,
     channel_id: russh::ChannelId,
     reader_task: JoinHandle<()>,
     resize_tx: mpsc::Sender<ResizeRequest>,
@@ -191,7 +191,7 @@ impl SshManager {
         self.sessions.insert(
             id.clone(),
             SshSession {
-                handle,
+                handle: Arc::new(handle),
                 channel_id,
                 reader_task,
                 resize_tx,
@@ -203,33 +203,27 @@ impl SshManager {
         Ok(())
     }
 
-    /// Write data to an SSH session's channel.
-    pub async fn write(&self, id: &str, data: &[u8]) -> Result<(), String> {
+    /// Get the handle and channel ID for writing to a session.
+    /// The caller should drop the manager lock before performing the async write.
+    pub fn get_write_handle(
+        &self,
+        id: &str,
+    ) -> Result<(Arc<client::Handle<SshHandler>>, russh::ChannelId), String> {
         let session = self
             .sessions
             .get(id)
             .ok_or_else(|| format!("SSH session {id} not found"))?;
-        session
-            .handle
-            .data(session.channel_id, CryptoVec::from_slice(data))
-            .await
-            .map_err(|_| "Failed to write to SSH channel".to_string())
+        Ok((Arc::clone(&session.handle), session.channel_id))
     }
 
-    /// Resize the PTY on an SSH session.
-    pub async fn resize(&self, id: &str, cols: u16, rows: u16) -> Result<(), String> {
+    /// Get the resize sender for a session.
+    /// The caller should drop the manager lock before sending.
+    pub fn get_resize_sender(&self, id: &str) -> Result<mpsc::Sender<ResizeRequest>, String> {
         let session = self
             .sessions
             .get(id)
             .ok_or_else(|| format!("SSH session {id} not found"))?;
-        session
-            .resize_tx
-            .send(ResizeRequest {
-                cols: u32::from(cols),
-                rows: u32::from(rows),
-            })
-            .await
-            .map_err(|_| "Failed to send resize request".to_string())
+        Ok(session.resize_tx.clone())
     }
 
     /// Disconnect an SSH session and clean up resources.
@@ -507,7 +501,7 @@ async fn authenticate_handle(
 }
 
 /// SSH client handler implementing TOFU host key verification.
-struct SshHandler {
+pub(crate) struct SshHandler {
     session_id: String,
     host: String,
     port: u16,
