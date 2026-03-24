@@ -1,22 +1,39 @@
 # ShellStation — Development Environment Setup
 
-This guide walks through every step needed to set up a Linux workstation for ShellStation development, from system dependencies to a fully working build. It assumes a Debian/Ubuntu-based distribution and VS Code already installed.
+This guide walks through every step needed to set up a development workstation for ShellStation, from system dependencies to a fully working build. It covers Linux and Windows 11, plus instructions for producing release-ready production builds.
 
-> **Tested on:** Ubuntu 22.04+ and Debian 12+. If you are on Fedora, Arch, or another distribution, equivalent packages are noted where applicable.
+> **Tested on:** Ubuntu 22.04+, Debian 12+, Windows 11 23H2+. Fedora/Arch equivalents are noted where applicable for Linux.
 
 ---
 
 ## Table of Contents
 
-1. [System Dependencies](#1-system-dependencies)
-2. [Rust Toolchain](#2-rust-toolchain)
-3. [Node.js and npm](#3-nodejs-and-npm)
-4. [Tauri CLI](#4-tauri-cli)
-5. [Database Tooling](#5-database-tooling)
-6. [VS Code Extensions](#6-vs-code-extensions)
-7. [Project Bootstrap](#7-project-bootstrap)
-8. [Verify the Environment](#8-verify-the-environment)
-9. [Common Issues](#9-common-issues)
+### Linux
+
+- [System Dependencies](#1-system-dependencies)
+- [Rust Toolchain](#2-rust-toolchain)
+- [Node.js and npm](#3-nodejs-and-npm)
+- [Tauri CLI](#4-tauri-cli)
+- [Database Tooling](#5-database-tooling)
+- [VS Code Extensions](#6-vs-code-extensions)
+- [Project Bootstrap](#7-project-bootstrap)
+- [Verify the Environment](#8-verify-the-environment)
+- [Common Issues (Linux)](#9-common-issues-linux)
+
+### Windows 11
+
+- [Prerequisites](#10-windows-11-prerequisites)
+- [Rust Toolchain (Windows)](#11-windows-11-rust-toolchain)
+- [Node.js and npm (Windows)](#12-windows-11-nodejs-and-npm)
+- [Tauri CLI and Database Tooling (Windows)](#13-windows-11-tauri-cli-and-database-tooling)
+- [Project Bootstrap and Verify (Windows)](#14-windows-11-project-bootstrap-and-verify)
+- [Common Issues (Windows)](#15-windows-11-common-issues)
+
+### Production Builds
+
+- [Building for Release](#16-building-for-release)
+- [Code Signing](#17-code-signing)
+- [CI/CD Release Pipeline](#18-cicd-release-pipeline)
 
 ---
 
@@ -491,7 +508,7 @@ If all commands pass without errors, your development environment is ready.
 
 ---
 
-## 9. Common Issues
+## 9. Common Issues (Linux)
 
 ### `webkit2gtk-4.1` not found (Ubuntu < 22.04)
 
@@ -534,3 +551,552 @@ Then ensure a keyring daemon is running in your session.
 ### WebGL not available in Tauri dev mode
 
 Some Linux environments (particularly VMs or Wayland sessions) may not expose WebGL to the webview. xterm.js will automatically fall back to the canvas renderer. This is not a bug — the application handles it gracefully.
+
+---
+
+## 10. Windows 11 Prerequisites
+
+Tauri 2.x on Windows uses Microsoft Edge WebView2 (pre-installed on Windows 11) for its webview. The primary build dependency is the Microsoft C++ Build Tools.
+
+### Install Visual Studio Build Tools
+
+Download **Visual Studio 2022 Build Tools** from <https://visualstudio.microsoft.com/visual-cpp-build-tools/>.
+
+During installation, select the following workload:
+
+- **Desktop development with C++**
+
+Under "Individual components", ensure these are checked (they should be by default with the workload):
+
+- MSVC v143 — VS 2022 C++ x64/x86 build tools (Latest)
+- Windows 11 SDK (10.0.22621.0 or later)
+- C++ CMake tools for Windows
+
+> This provides `cl.exe`, `link.exe`, the Windows SDK headers, and the CRT libraries that Rust's MSVC toolchain requires. You do **not** need the full Visual Studio IDE — the Build Tools installer is sufficient.
+
+### Verify WebView2
+
+WebView2 ships with Windows 11. Confirm it is present:
+
+```powershell
+Get-ItemProperty -Path "HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}" -Name pv
+```
+
+If this returns a version string, WebView2 is installed. If not, download the Evergreen Bootstrapper from <https://developer.microsoft.com/en-us/microsoft-edge/webview2/>.
+
+### Install Git for Windows
+
+If not already installed:
+
+```powershell
+winget install Git.Git
+```
+
+After installation, open a new terminal and verify:
+
+```powershell
+git --version
+```
+
+### Optional: Windows Terminal
+
+Windows Terminal provides a better experience than the default console. Install via:
+
+```powershell
+winget install Microsoft.WindowsTerminal
+```
+
+---
+
+## 11. Windows 11 Rust Toolchain
+
+### Install Rust via rustup
+
+Open PowerShell and run:
+
+```powershell
+winget install Rustlang.Rustup
+```
+
+Or download the installer from <https://rustup.rs/>.
+
+Follow the prompts and select the default installation (which uses the `stable-x86_64-pc-windows-msvc` toolchain). Close and reopen your terminal after installation.
+
+### Verify Rust installation
+
+```powershell
+rustc --version
+cargo --version
+rustup --version
+```
+
+### Install required Rust components
+
+```powershell
+rustup component add clippy rustfmt
+```
+
+### Install cargo utilities (Windows)
+
+```powershell
+cargo install cargo-watch
+cargo install sqlx-cli --no-default-features --features native-tls,sqlite,postgres
+```
+
+### Keep Rust up to date (Windows)
+
+```powershell
+rustup update
+```
+
+---
+
+## 12. Windows 11 Node.js and npm
+
+### Install Node.js 20 LTS
+
+```powershell
+winget install OpenJS.NodeJS.LTS
+```
+
+Close and reopen your terminal, then verify:
+
+```powershell
+node --version
+npm --version
+```
+
+### Install global npm tools (Windows)
+
+```powershell
+npm install -g typescript
+```
+
+---
+
+## 13. Windows 11 Tauri CLI and Database Tooling
+
+### Tauri CLI
+
+```powershell
+cargo install tauri-cli --version "^2"
+```
+
+Verify:
+
+```powershell
+cargo tauri --version
+```
+
+Run the environment diagnostic:
+
+```powershell
+cargo tauri info
+```
+
+Review the output. Every line should show a checkmark. If anything is marked with a cross, install the missing dependency before continuing.
+
+### SQLite (Windows)
+
+SQLite is compiled from source by the `sqlx` crate via the bundled `sqlite3` feature — no separate installation is needed on Windows. However, if you want the `sqlite3` CLI for inspecting databases:
+
+```powershell
+winget install SQLite.SQLite
+```
+
+### PostgreSQL (optional, Windows)
+
+For local PostgreSQL development:
+
+```powershell
+winget install PostgreSQL.PostgreSQL
+```
+
+Follow the installer prompts to set a superuser password and create the default cluster. Then open a new terminal and create the development database:
+
+```powershell
+createuser --interactive --pwprompt shellstation
+createdb --owner=shellstation shellstation_dev
+```
+
+Set the environment variable (add to your PowerShell profile or system environment variables):
+
+```powershell
+$env:DATABASE_URL = "postgres://shellstation:<your-password>@localhost/shellstation_dev"
+```
+
+To make it permanent, use System Settings > Environment Variables, or add the line to your `$PROFILE` file.
+
+### SQLite for development (default, Windows)
+
+```powershell
+$env:DATABASE_URL = "sqlite:///$env:APPDATA/shellstation/dev.db"
+New-Item -ItemType Directory -Force -Path "$env:APPDATA\shellstation"
+```
+
+---
+
+## 14. Windows 11 Project Bootstrap and Verify
+
+### Clone and install
+
+```powershell
+git clone https://git.fiedler.live/tux/shellstation.git
+cd shellstation
+npm install
+```
+
+### Run database migrations
+
+```powershell
+sqlx database create
+sqlx migrate run
+```
+
+### First build and run (Windows)
+
+```powershell
+cargo tauri dev
+```
+
+The first build compiles all Rust dependencies and takes several minutes. Subsequent builds are incremental.
+
+### Run the full quality check suite
+
+Rust checks:
+
+```powershell
+cd src-tauri
+cargo clippy -- -D warnings
+cargo fmt -- --check
+cargo test
+cd ..
+```
+
+Frontend checks:
+
+```powershell
+npx eslint src/ --ext .ts,.tsx
+npx prettier --check "src/**/*.{ts,tsx,css,json}"
+npx tsc --noEmit
+npx vitest run
+```
+
+Tauri environment check:
+
+```powershell
+cargo tauri info
+```
+
+If all commands pass without errors, your Windows development environment is ready.
+
+---
+
+## 15. Windows 11 Common Issues
+
+### `link.exe` not found or MSVC errors
+
+The Rust MSVC toolchain requires the Visual Studio Build Tools. If you see linker errors, ensure you installed the "Desktop development with C++" workload and are using a terminal that has the MSVC environment loaded. Opening **Developer PowerShell for VS 2022** from the Start menu guarantees the correct paths are set.
+
+### `pkg-config` not found
+
+Some crates probe for system libraries using `pkg-config`, which is not natively available on Windows. Most ShellStation dependencies use vendored/bundled C libraries (e.g., SQLite via `sqlx`), so this should not be an issue. If a crate does require it, install via:
+
+```powershell
+winget install bloodrock.pkg-config-lite
+```
+
+### Long path errors
+
+Enable long path support if you encounter `MAX_PATH` (260 character) errors:
+
+```powershell
+# Run PowerShell as Administrator
+New-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem" -Name "LongPathsEnabled" -Value 1 -PropertyType DWORD -Force
+```
+
+Also configure Git:
+
+```powershell
+git config --global core.longpaths true
+```
+
+### Windows Defender slowing builds
+
+Windows Defender real-time scanning can significantly slow Rust compilation. Add exclusions for:
+
+- Your project directory (e.g., `C:\Users\<you>\Projects\shellstation`)
+- The Cargo registry and build cache (`%USERPROFILE%\.cargo`)
+- The Rust toolchain directory (`%USERPROFILE%\.rustup`)
+
+Open **Windows Security > Virus & threat protection > Manage settings > Exclusions > Add or remove exclusions** and add each path as a folder exclusion.
+
+### WebView2 runtime issues
+
+If the application window opens but shows a blank white screen, WebView2 may need reinstalling. Download the Evergreen Standalone Installer from the Microsoft Edge WebView2 page and run it.
+
+---
+
+## 16. Building for Release
+
+This section covers producing optimized, distributable binaries for all platforms.
+
+### Prerequisites
+
+Ensure all quality checks pass before building a release:
+
+```bash
+# Rust
+cd src-tauri && cargo clippy -- -D warnings && cargo fmt -- --check && cargo test && cd ..
+
+# Frontend
+npx eslint src/ --ext .ts,.tsx
+npx prettier --check "src/**/*.{ts,tsx,css,json}"
+npx tsc --noEmit
+npx vitest run
+```
+
+### Build the release bundle
+
+```bash
+cargo tauri build
+```
+
+This command:
+
+1. Runs `npm run build` (TypeScript type check + Vite production build with minification).
+2. Compiles the Rust backend in release mode (`--release`) with full optimizations.
+3. Produces platform-specific installers in `src-tauri/target/release/bundle/`.
+
+### Output artifacts by platform
+
+| Platform | Artifacts | Location |
+| --- | --- | --- |
+| Windows | `.msi` installer, `.exe` (NSIS installer) | `src-tauri/target/release/bundle/msi/` and `nsis/` |
+| macOS | `.dmg` disk image, `.app` bundle | `src-tauri/target/release/bundle/dmg/` and `macos/` |
+| Linux | `.deb` package, `.AppImage` | `src-tauri/target/release/bundle/deb/` and `appimage/` |
+
+### Configuring bundle targets
+
+The `tauri.conf.json` `bundle.targets` field controls which formats are built. The current setting `"all"` builds every format available on the host OS. To build only specific formats:
+
+```json
+{
+  "bundle": {
+    "targets": ["msi", "nsis"]
+  }
+}
+```
+
+Valid targets: `msi`, `nsis`, `dmg`, `app`, `deb`, `appimage`, `rpm`.
+
+### Version bumping
+
+Update the version in three places before a release:
+
+1. `tauri.conf.json` — `"version"` field (drives installer version metadata).
+2. `src-tauri/Cargo.toml` — `version` under `[package]`.
+3. `package.json` — `"version"` field.
+
+All three must match. The Tauri bundler reads the version from `tauri.conf.json` for the installer filename and metadata.
+
+### Release profile optimization
+
+The default Cargo release profile is sufficient for most cases. For maximum binary size reduction, add to `src-tauri/Cargo.toml`:
+
+```toml
+[profile.release]
+strip = true        # Strip debug symbols
+lto = true          # Link-time optimization (slower build, smaller binary)
+codegen-units = 1   # Single codegen unit (slower build, better optimization)
+opt-level = "s"     # Optimize for size over speed
+```
+
+Trade-off: `lto = true` with `codegen-units = 1` increases release build time significantly (10-20 min) but produces binaries 20-40% smaller.
+
+---
+
+## 17. Code Signing
+
+Unsigned binaries trigger OS warnings (Windows SmartScreen, macOS Gatekeeper). Code signing is required for a professional release.
+
+### Windows (Authenticode)
+
+You need a code signing certificate from a Certificate Authority (e.g., DigiCert, Sectigo, SSL.com) or an EV certificate for immediate SmartScreen trust.
+
+Configure in `tauri.conf.json`:
+
+```json
+{
+  "bundle": {
+    "windows": {
+      "certificateThumbprint": "<YOUR_CERT_THUMBPRINT>",
+      "digestAlgorithm": "sha256",
+      "timestampUrl": "http://timestamp.digicert.com"
+    }
+  }
+}
+```
+
+The certificate must be installed in the Windows Certificate Store. For CI, use `signtool.exe` with a PFX file or Azure Trusted Signing.
+
+Environment variables for CI signing:
+
+```text
+TAURI_SIGNING_PRIVATE_KEY              Base64-encoded private key for Tauri updater
+TAURI_SIGNING_PRIVATE_KEY_PASSWORD     Password for the private key
+```
+
+### macOS (codesign + notarization)
+
+Requires an Apple Developer account ($99/year) and a "Developer ID Application" certificate.
+
+Configure environment variables:
+
+```bash
+export APPLE_CERTIFICATE="<base64-encoded .p12>"
+export APPLE_CERTIFICATE_PASSWORD="<p12 password>"
+export APPLE_SIGNING_IDENTITY="Developer ID Application: Your Name (TEAMID)"
+export APPLE_ID="your@email.com"
+export APPLE_PASSWORD="<app-specific-password>"
+export APPLE_TEAM_ID="TEAMID"
+```
+
+Tauri handles `codesign` and `notarytool submit` automatically when these variables are set during `cargo tauri build`.
+
+### Linux (GPG signing, optional)
+
+Linux packages (`.deb`, `.AppImage`) do not require code signing for distribution. Optional GPG signing of `.deb` packages can be done post-build with `dpkg-sig`.
+
+---
+
+## 18. CI/CD Release Pipeline
+
+A GitHub Actions workflow that builds, signs, and publishes releases for all three platforms.
+
+### Workflow file: `.github/workflows/release.yml`
+
+```yaml
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - platform: ubuntu-22.04
+            target: linux
+          - platform: windows-latest
+            target: windows
+          - platform: macos-latest
+            target: macos
+
+    runs-on: ${{ matrix.platform }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux dependencies
+        if: matrix.target == 'linux'
+        run: |
+          sudo apt update
+          sudo apt install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libssl-dev \
+            libsoup-3.0-dev \
+            libjavascriptcoregtk-4.1-dev
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Lint (Rust)
+        working-directory: src-tauri
+        run: |
+          cargo clippy -- -D warnings
+          cargo fmt -- --check
+
+      - name: Lint (Frontend)
+        run: |
+          npx eslint src/ --ext .ts,.tsx
+          npx prettier --check "src/**/*.{ts,tsx,css,json}"
+          npx tsc --noEmit
+
+      - name: Run tests
+        run: |
+          cd src-tauri && cargo test && cd ..
+          npx vitest run
+
+      - name: Build Tauri release
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Windows signing
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          # macOS signing
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: "ShellStation ${{ github.ref_name }}"
+          releaseBody: "See the changelog for details."
+          releaseDraft: true
+          prerelease: false
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: shellstation-${{ matrix.target }}
+          path: src-tauri/target/release/bundle/**/*
+```
+
+### Creating a release
+
+```bash
+# Bump versions in tauri.conf.json, Cargo.toml, and package.json
+# Commit the version bump
+git add -A && git commit -m "Bump version to 0.2.0"
+
+# Tag and push
+git tag v0.2.0
+git push origin main --tags
+```
+
+The workflow triggers on the tag push, builds all three platforms in parallel, runs the full lint and test suite, produces signed installers, and creates a draft GitHub Release with the artifacts attached. Review the draft and publish when ready.
+
+### Manual release build (no CI)
+
+If building locally without CI:
+
+```bash
+# Build for the current platform
+cargo tauri build
+
+# Artifacts are in src-tauri/target/release/bundle/
+ls src-tauri/target/release/bundle/
+```
+
+Cross-compilation is not supported by Tauri — each platform must be built on its native OS. For a multi-platform release without CI, build on each target machine and collect the artifacts manually.
