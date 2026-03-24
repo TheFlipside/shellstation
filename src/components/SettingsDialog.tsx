@@ -73,8 +73,10 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
           <label htmlFor="settings-close-on-disconnect">
             {t("settings.closeOnDisconnectLabel")}
           </label>
+          <span className="settings-help" title={t("settings.closeOnDisconnectHint")}>
+            ?
+          </span>
         </div>
-        <p className="settings-hint">{t("settings.closeOnDisconnectHint")}</p>
         <div className="dialog-field dialog-field-row">
           <input
             type="checkbox"
@@ -87,8 +89,10 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
           <label htmlFor="settings-open-local-on-startup">
             {t("settings.openLocalOnStartupLabel")}
           </label>
+          <span className="settings-help" title={t("settings.openLocalOnStartupHint")}>
+            ?
+          </span>
         </div>
-        <p className="settings-hint">{t("settings.openLocalOnStartupHint")}</p>
         <div className="dialog-field dialog-field-row">
           <input
             type="checkbox"
@@ -99,8 +103,10 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
             }}
           />
           <label htmlFor="settings-confirm-on-quit">{t("settings.confirmOnQuitLabel")}</label>
+          <span className="settings-help" title={t("settings.confirmOnQuitHint")}>
+            ?
+          </span>
         </div>
-        <p className="settings-hint">{t("settings.confirmOnQuitHint")}</p>
         <div className="dialog-actions">
           <button type="button" className="dialog-btn dialog-btn-primary" onClick={onClose}>
             {t("settings.close")}

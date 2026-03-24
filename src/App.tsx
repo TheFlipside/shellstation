@@ -37,27 +37,47 @@ function App(): React.JSX.Element {
     document.addEventListener("mouseup", handleMouseUp);
   }, []);
 
+  const requestQuit = useCallback(() => {
+    const tabs = useTerminalStore.getState().tabs;
+    if (tabs.length === 0) {
+      void getCurrentWindow().destroy();
+      return;
+    }
+    const { confirmOnQuit } = useSettingsStore.getState();
+    if (confirmOnQuit) {
+      setShowQuitConfirm(true);
+    } else {
+      void getCurrentWindow().destroy();
+    }
+  }, []);
+
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent): void => {
       const modKey = e.metaKey || e.ctrlKey;
       if (modKey && e.key.toLowerCase() === "q") {
         e.preventDefault();
-        const tabs = useTerminalStore.getState().tabs;
-        if (tabs.length === 0) {
-          void getCurrentWindow().destroy();
-          return;
-        }
-        const { confirmOnQuit } = useSettingsStore.getState();
-        if (confirmOnQuit) {
-          setShowQuitConfirm(true);
-        } else {
-          void getCurrentWindow().destroy();
-        }
+        requestQuit();
       }
     };
     document.addEventListener("keydown", handleKeyDown, true);
     return () => {
       document.removeEventListener("keydown", handleKeyDown, true);
+    };
+  }, [requestQuit]);
+
+  useEffect(() => {
+    const unlisten = getCurrentWindow().onCloseRequested((event) => {
+      const tabs = useTerminalStore.getState().tabs;
+      const { confirmOnQuit } = useSettingsStore.getState();
+      if (tabs.length > 0 && confirmOnQuit) {
+        event.preventDefault();
+        setShowQuitConfirm(true);
+      }
+    });
+    return () => {
+      void unlisten.then((fn) => {
+        fn();
+      });
     };
   }, []);
 
