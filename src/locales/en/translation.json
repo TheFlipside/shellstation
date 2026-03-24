@@ -82,6 +82,9 @@
     "title": "Settings",
     "general": "General",
     "languageLabel": "Language",
+    "sessions": "Sessions",
+    "closeOnDisconnectLabel": "Close tab on disconnect",
+    "closeOnDisconnectHint": "When enabled, terminal tabs are automatically closed when the session ends. When disabled, the tab stays open showing the disconnected state.",
     "close": "Close"
   }
 }

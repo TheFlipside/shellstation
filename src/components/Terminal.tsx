@@ -12,6 +12,7 @@ interface TerminalProps {
   sessionId: string;
   sessionType: SessionType;
   visible: boolean;
+  onExit?: () => void;
 }
 
 /** Decode a base64 string to bytes using the built-in atob. */
@@ -27,10 +28,17 @@ function base64Decode(encoded: string): Uint8Array {
 // eslint-disable-next-line @typescript-eslint/no-empty-function
 const noop = (): void => {};
 
-export function Terminal({ sessionId, sessionType, visible }: TerminalProps): React.JSX.Element {
+export function Terminal({
+  sessionId,
+  sessionType,
+  visible,
+  onExit,
+}: TerminalProps): React.JSX.Element {
   const containerRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<XTerm | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
+  const onExitRef = useRef(onExit);
+  onExitRef.current = onExit;
 
   const writeCmd = sessionType === "ssh" ? "ssh_write" : "pty_write";
   const resizeCmd = sessionType === "ssh" ? "ssh_resize" : "pty_resize";
@@ -119,7 +127,11 @@ export function Terminal({ sessionId, sessionType, visible }: TerminalProps): Re
       });
 
       exitUnlisten = await listen(`terminal-exit-${sessionId}`, () => {
-        term.write(`\r\n${i18n.t("terminal.processExited")}\r\n`);
+        if (onExitRef.current) {
+          onExitRef.current();
+        } else {
+          term.write(`\r\n${i18n.t("terminal.processExited")}\r\n`);
+        }
       });
     };
 

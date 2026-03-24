@@ -6,6 +6,7 @@ import { useTerminalStore } from "../stores/terminalStore";
 import { Terminal } from "./Terminal";
 import { QuickConnect, type QuickConnectParams } from "./QuickConnect";
 import { HostVerifyDialog, type HostVerifyRequest } from "./HostVerifyDialog";
+import { useSettingsStore } from "../stores/settingsStore";
 
 // eslint-disable-next-line @typescript-eslint/no-empty-function
 const noop = (): void => {};
@@ -13,6 +14,7 @@ const noop = (): void => {};
 export function TerminalTabs(): React.JSX.Element {
   const { t } = useTranslation();
   const { tabs, activeTabId, addTab, removeTab, setActiveTab } = useTerminalStore();
+  const { closeOnDisconnect } = useSettingsStore();
   const [showQuickConnect, setShowQuickConnect] = useState(false);
   const [hostVerifyRequest, setHostVerifyRequest] = useState<HostVerifyRequest | null>(null);
   const verifyQueueRef = useRef<HostVerifyRequest[]>([]);
@@ -170,6 +172,13 @@ export function TerminalTabs(): React.JSX.Element {
             sessionId={tab.id}
             sessionType={tab.type}
             visible={tab.id === activeTabId}
+            onExit={
+              closeOnDisconnect
+                ? () => {
+                    destroyTab(tab.id).catch(noop);
+                  }
+                : undefined
+            }
           />
         ))}
       </div>
