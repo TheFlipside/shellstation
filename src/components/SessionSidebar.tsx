@@ -5,6 +5,7 @@ import { SessionTree } from "./SessionTree";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { FolderDialog } from "./FolderDialog";
 import { SessionDialog, type SessionFormData } from "./SessionDialog";
+import { SettingsDialog } from "./SettingsDialog";
 
 // eslint-disable-next-line @typescript-eslint/no-empty-function
 const noop = (): void => {};
@@ -68,6 +69,7 @@ export function SessionSidebar(): React.JSX.Element {
     initial?: Partial<SessionFormData>;
   } | null>(null);
   const [moveTarget, setMoveTarget] = useState<MoveTarget | null>(null);
+  const [showSettings, setShowSettings] = useState(false);
 
   useEffect(() => {
     loadAll().catch(noop);
@@ -383,6 +385,27 @@ export function SessionSidebar(): React.JSX.Element {
           onSubmit={handleSessionSubmit}
           onCancel={() => {
             setSessionDialog(null);
+          }}
+        />
+      )}
+
+      <div className="sidebar-footer">
+        <button
+          type="button"
+          className="sidebar-btn sidebar-btn-settings"
+          title={t("settings.title")}
+          onClick={() => {
+            setShowSettings(true);
+          }}
+        >
+          {"\u2699"}
+        </button>
+      </div>
+
+      {showSettings && (
+        <SettingsDialog
+          onClose={() => {
+            setShowSettings(false);
           }}
         />
       )}

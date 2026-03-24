@@ -77,5 +77,11 @@
     "title": "Schnellverbindung",
     "hostLabel": "Host",
     "connect": "Verbinden"
+  },
+  "settings": {
+    "title": "Einstellungen",
+    "general": "Allgemein",
+    "languageLabel": "Sprache",
+    "close": "Schlie\u00dfen"
   }
 }

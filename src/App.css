@@ -371,6 +371,30 @@ body,
   text-align: center;
 }
 
+.sidebar-footer {
+  display: flex;
+  align-items: center;
+  padding: 6px 12px;
+  border-top: 1px solid #313244;
+  flex-shrink: 0;
+}
+
+.sidebar-btn-settings {
+  font-size: 14px;
+  padding: 2px 6px;
+}
+
+/* ── Settings Dialog ──────────────────────────────────────────── */
+
+.settings-section-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #a6adc8;
+  margin-bottom: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
 /* ── Tree Items ────────────────────────────────────────────────── */
 
 .tree-item {

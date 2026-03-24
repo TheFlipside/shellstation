@@ -77,5 +77,11 @@
     "title": "Quick Connect",
     "hostLabel": "Host",
     "connect": "Connect"
+  },
+  "settings": {
+    "title": "Settings",
+    "general": "General",
+    "languageLabel": "Language",
+    "close": "Close"
   }
 }
