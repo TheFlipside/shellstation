@@ -1,0 +1,12 @@
+# Build artifacts
+dist
+target
+src-tauri/target
+out
+
+# Dependencies
+node_modules
+
+# Misc
+package-lock.json
+*.log

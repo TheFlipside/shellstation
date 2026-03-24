@@ -161,7 +161,7 @@ npm --version     # should be 10.x or later
 ### Install global npm tools
 
 ```bash
-npm install -g typescript
+sudo npm install -g typescript
 ```
 
 ---
@@ -183,7 +183,7 @@ cargo tauri --version
 Alternatively, you can use the npm-based CLI wrapper (useful if you prefer npx-style invocation):
 
 ```bash
-npm install -g @tauri-apps/cli@latest
+sudo npm install -g @tauri-apps/cli@latest
 ```
 
 ### Run the environment check
@@ -267,6 +267,12 @@ For day-to-day development without PostgreSQL, sqlx can operate against a local 
 
 ```bash
 export DATABASE_URL="sqlite:///home/$USER/.config/shellstation/dev.db"
+```
+
+Create the directory:
+
+```bash
+mkdir -pv /home/$USER/.config/shellstation
 ```
 
 sqlx-cli will create the file automatically when you run migrations.
@@ -392,7 +398,9 @@ npm install -D \
     eslint \
     @eslint/js \
     typescript-eslint \
+    eslint-plugin-react \
     eslint-plugin-react-hooks \
+    eslint-plugin-security \
     prettier \
     vitest \
     @testing-library/react \
