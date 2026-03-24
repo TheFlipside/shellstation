@@ -125,10 +125,16 @@ pub async fn ssh_write(state: State<'_, SshState>, id: String, data: String) -> 
         let manager = state.0.lock().await;
         manager.get_write_handle(&id)?
     };
-    handle
-        .data(channel_id, russh::CryptoVec::from_slice(data.as_bytes()))
-        .await
-        .map_err(|_| "Failed to write to SSH channel".to_string())
+    // Fire-and-forget: spawn the actual network write so the IPC response
+    // returns immediately.  Waiting for handle.data() here would block the
+    // Tauri command handler for the full SSH round-trip, adding visible
+    // latency to every keystroke.
+    tokio::spawn(async move {
+        let _ = handle
+            .data(channel_id, russh::CryptoVec::from_slice(data.as_bytes()))
+            .await;
+    });
+    Ok(())
 }
 
 /// Resize the PTY on an SSH session.
