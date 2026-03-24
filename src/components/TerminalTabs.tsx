@@ -14,7 +14,7 @@ const noop = (): void => {};
 export function TerminalTabs(): React.JSX.Element {
   const { t } = useTranslation();
   const { tabs, activeTabId, addTab, removeTab, setActiveTab } = useTerminalStore();
-  const { closeOnDisconnect } = useSettingsStore();
+  const { closeOnDisconnect, openLocalOnStartup } = useSettingsStore();
   const [showQuickConnect, setShowQuickConnect] = useState(false);
   const [hostVerifyRequest, setHostVerifyRequest] = useState<HostVerifyRequest | null>(null);
   const verifyQueueRef = useRef<HostVerifyRequest[]>([]);
@@ -102,9 +102,11 @@ export function TerminalTabs(): React.JSX.Element {
     };
   }, []);
 
-  // Open a terminal on first mount.
+  // Open a local terminal on first mount if the setting is enabled.
+  const didSpawnRef = useRef(false);
   useEffect(() => {
-    if (tabs.length === 0) {
+    if (!didSpawnRef.current && openLocalOnStartup && tabs.length === 0) {
+      didSpawnRef.current = true;
       createLocalTab().catch(noop);
     }
   }, []);

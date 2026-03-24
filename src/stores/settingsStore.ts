@@ -5,8 +5,10 @@ import i18n from "../i18n";
 interface SettingsState {
   language: string;
   closeOnDisconnect: boolean;
+  openLocalOnStartup: boolean;
   setLanguage: (lang: string) => void;
   setCloseOnDisconnect: (value: boolean) => void;
+  setOpenLocalOnStartup: (value: boolean) => void;
 }
 
 export const useSettingsStore = create<SettingsState>()(
@@ -14,12 +16,16 @@ export const useSettingsStore = create<SettingsState>()(
     (set) => ({
       language: "",
       closeOnDisconnect: false,
+      openLocalOnStartup: true,
       setLanguage: (lang: string) => {
         void i18n.changeLanguage(lang);
         set({ language: lang });
       },
       setCloseOnDisconnect: (value: boolean) => {
         set({ closeOnDisconnect: value });
+      },
+      setOpenLocalOnStartup: (value: boolean) => {
+        set({ openLocalOnStartup: value });
       },
     }),
     {

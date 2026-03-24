@@ -85,6 +85,8 @@
     "sessions": "Sitzungen",
     "closeOnDisconnectLabel": "Tab bei Verbindungsende schlie\u00dfen",
     "closeOnDisconnectHint": "Wenn aktiviert, werden Terminal-Tabs automatisch geschlossen, sobald die Sitzung endet. Wenn deaktiviert, bleibt der Tab ge\u00f6ffnet und zeigt den getrennten Zustand an.",
+    "openLocalOnStartupLabel": "Lokales Terminal beim Start \u00f6ffnen",
+    "openLocalOnStartupHint": "Wenn aktiviert, wird beim Starten der Anwendung automatisch ein lokaler Terminal-Tab ge\u00f6ffnet. Wenn deaktiviert, startet die Anwendung ohne offene Tabs.",
     "close": "Schlie\u00dfen"
   }
 }

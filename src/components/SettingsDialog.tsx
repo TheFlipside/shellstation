@@ -13,7 +13,14 @@ interface SettingsDialogProps {
 
 export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Element {
   const { t, i18n } = useTranslation();
-  const { language, setLanguage, closeOnDisconnect, setCloseOnDisconnect } = useSettingsStore();
+  const {
+    language,
+    setLanguage,
+    closeOnDisconnect,
+    setCloseOnDisconnect,
+    openLocalOnStartup,
+    setOpenLocalOnStartup,
+  } = useSettingsStore();
 
   const currentLang = language !== "" ? language : (i18n.resolvedLanguage ?? "en");
 
@@ -63,6 +70,20 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
           </label>
         </div>
         <p className="settings-hint">{t("settings.closeOnDisconnectHint")}</p>
+        <div className="dialog-field dialog-field-row">
+          <input
+            type="checkbox"
+            id="settings-open-local-on-startup"
+            checked={openLocalOnStartup}
+            onChange={(e) => {
+              setOpenLocalOnStartup(e.target.checked);
+            }}
+          />
+          <label htmlFor="settings-open-local-on-startup">
+            {t("settings.openLocalOnStartupLabel")}
+          </label>
+        </div>
+        <p className="settings-hint">{t("settings.openLocalOnStartupHint")}</p>
         <div className="dialog-actions">
           <button type="button" className="dialog-btn dialog-btn-primary" onClick={onClose}>
             {t("settings.close")}

@@ -85,6 +85,8 @@
     "sessions": "Sessions",
     "closeOnDisconnectLabel": "Close tab on disconnect",
     "closeOnDisconnectHint": "When enabled, terminal tabs are automatically closed when the session ends. When disabled, the tab stays open showing the disconnected state.",
+    "openLocalOnStartupLabel": "Open local terminal on startup",
+    "openLocalOnStartupHint": "When enabled, a local terminal tab is automatically opened when the application starts. When disabled, the application starts with no open tabs.",
     "close": "Close"
   }
 }
