@@ -1,0 +1,25 @@
+# ssh-testlab — paste into ~/.ssh/config
+#
+# After adding this, you can simply run:
+#   ssh lab-jumphost          # direct to jumphost
+#   ssh lab-target             # auto-proxied through jumphost
+
+Host lab-jumphost
+    HostName 127.0.0.1
+    Port 2222
+    User testuser
+    IdentityFile ~/path/to/ssh-testlab/keys/id_ed25519
+    # Uncomment the next line to force password auth for testing:
+    # PreferredAuthentications password
+    StrictHostKeyChecking no
+    UserKnownHostsFile /dev/null
+
+Host lab-target
+    HostName target
+    User testuser
+    IdentityFile ~/path/to/ssh-testlab/keys/id_ed25519
+    ProxyJump lab-jumphost
+    # Uncomment the next line to force password auth for testing:
+    # PreferredAuthentications password
+    StrictHostKeyChecking no
+    UserKnownHostsFile /dev/null

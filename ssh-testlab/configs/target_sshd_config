@@ -1,0 +1,37 @@
+# ssh-testlab: target sshd configuration
+# -----------------------------------------------------------
+# This node is only reachable through the jumphost.  TCP
+# forwarding is disabled to simulate a locked-down endpoint.
+# -----------------------------------------------------------
+
+Port 22
+AddressFamily any
+ListenAddress 0.0.0.0
+
+# --- Host keys ---
+HostKey /etc/ssh/ssh_host_ed25519_key
+HostKey /etc/ssh/ssh_host_rsa_key
+
+# --- Authentication methods ---
+PermitRootLogin no
+PasswordAuthentication yes
+PubkeyAuthentication yes
+AuthorizedKeysFile .ssh/authorized_keys
+
+# --- Forwarding (locked down on target) ---
+AllowTcpForwarding no
+GatewayPorts no
+AllowStreamLocalForwarding no
+
+# --- Session behaviour ---
+X11Forwarding no
+PrintMotd yes
+UseDNS no
+MaxAuthTries 6
+MaxSessions 10
+
+# --- Subsystems ---
+Subsystem sftp /usr/lib/ssh/sftp-server
+
+# --- Logging ---
+LogLevel INFO

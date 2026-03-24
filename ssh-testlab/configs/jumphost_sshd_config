@@ -1,0 +1,37 @@
+# ssh-testlab: jumphost sshd configuration
+# -----------------------------------------------------------
+# This node acts as a bastion / jump host.  TCP forwarding is
+# enabled so ProxyJump and port-forwarding work as expected.
+# -----------------------------------------------------------
+
+Port 22
+AddressFamily any
+ListenAddress 0.0.0.0
+
+# --- Host keys ---
+HostKey /etc/ssh/ssh_host_ed25519_key
+HostKey /etc/ssh/ssh_host_rsa_key
+
+# --- Authentication methods ---
+PermitRootLogin no
+PasswordAuthentication yes
+PubkeyAuthentication yes
+AuthorizedKeysFile .ssh/authorized_keys
+
+# --- Forwarding (the key setting for a jump host) ---
+AllowTcpForwarding yes
+GatewayPorts no
+AllowStreamLocalForwarding yes
+
+# --- Session behaviour ---
+X11Forwarding no
+PrintMotd yes
+UseDNS no
+MaxAuthTries 6
+MaxSessions 10
+
+# --- Subsystems ---
+Subsystem sftp /usr/lib/ssh/sftp-server
+
+# --- Logging ---
+LogLevel INFO

@@ -1,0 +1,53 @@
+###############################################################
+# ssh-testlab — lightweight SSH test environment
+#
+# Usage:
+#   ./setup.sh          # generate keys, build, and start
+#   docker compose down  # tear down
+#
+# Network topology:
+#   host :2222 ──► jumphost :22 ──► target :22
+#
+# The target container has no published ports; it is only
+# reachable from the jumphost via the internal network.
+###############################################################
+
+services:
+  jumphost:
+    build:
+      context: .
+      args:
+        TEST_USER: testuser
+        TEST_PASSWORD: testpass
+    container_name: ssh-jumphost
+    hostname: jumphost
+    ports:
+      - "2222:22"
+    volumes:
+      - ./configs/jumphost_sshd_config:/tmp/sshd_config/sshd_config:ro
+      - ./keys/id_ed25519.pub:/tmp/ssh-pubkey/id_ed25519.pub:ro
+    environment:
+      TEST_USER: testuser
+    networks:
+      - sshlab
+
+  target:
+    build:
+      context: .
+      args:
+        TEST_USER: testuser
+        TEST_PASSWORD: testpass
+    container_name: ssh-target
+    hostname: target
+    # No published ports — only reachable through jumphost.
+    volumes:
+      - ./configs/target_sshd_config:/tmp/sshd_config/sshd_config:ro
+      - ./keys/id_ed25519.pub:/tmp/ssh-pubkey/id_ed25519.pub:ro
+    environment:
+      TEST_USER: testuser
+    networks:
+      - sshlab
+
+networks:
+  sshlab:
+    driver: bridge

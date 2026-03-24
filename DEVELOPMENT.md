@@ -35,6 +35,10 @@ This guide walks through every step needed to set up a development workstation f
 - [Code Signing](#17-code-signing)
 - [CI/CD Release Pipeline](#18-cicd-release-pipeline)
 
+### Testlab
+
+- [Docker SSH Testlab](#19-docker-ssh-testlab)
+
 ---
 
 ## 1. System Dependencies
@@ -1100,3 +1104,9 @@ ls src-tauri/target/release/bundle/
 ```
 
 Cross-compilation is not supported by Tauri — each platform must be built on its native OS. For a multi-platform release without CI, build on each target machine and collect the artifacts manually.
+
+## 19. Docker SSH Testlab
+
+To test the functionality of connecting to a remote system via ssh,
+including with the use of a jumphost, see the Readme in the directory **ssh-testlab**.
+The setup allows tests on a small footprint docker container construct.
