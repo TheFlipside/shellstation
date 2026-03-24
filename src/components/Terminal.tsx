@@ -159,11 +159,12 @@ export function Terminal({
     };
   }, [sessionId, sessionType, writeCmd, resizeCmd, handleResize]);
 
-  // Re-fit when visibility changes.
+  // Re-fit and focus when visibility changes.
   useEffect(() => {
     if (visible && fitAddonRef.current) {
       const timer = setTimeout(() => {
         fitAddonRef.current?.fit();
+        termRef.current?.focus();
       }, 50);
       return () => {
         clearTimeout(timer);

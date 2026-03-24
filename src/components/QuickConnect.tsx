@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import { useTranslation } from "react-i18next";
+import { useEscapeKey } from "../hooks/useEscapeKey";
 
 export interface QuickConnectParams {
   host: string;
@@ -16,6 +17,7 @@ interface QuickConnectProps {
 
 export function QuickConnect({ onConnect, onCancel }: QuickConnectProps): React.JSX.Element {
   const { t } = useTranslation();
+  useEscapeKey(onCancel);
   const [host, setHost] = useState("");
   const [port, setPort] = useState("22");
   const [username, setUsername] = useState("");

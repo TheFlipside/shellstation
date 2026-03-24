@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import { useTranslation } from "react-i18next";
+import { useEscapeKey } from "../hooks/useEscapeKey";
 import type { Folder, Session } from "../stores/sessionStore";
 
 export interface SessionFormData {
@@ -35,6 +36,7 @@ export function SessionDialog({
   onCancel,
 }: SessionDialogProps): React.JSX.Element {
   const { t } = useTranslation();
+  useEscapeKey(onCancel);
   const [folderId, setFolderId] = useState(initial?.folderId ?? defaultFolderId);
   const [name, setName] = useState(initial?.name ?? "");
   const [hostname, setHostname] = useState(initial?.hostname ?? "");

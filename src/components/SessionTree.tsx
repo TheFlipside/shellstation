@@ -79,6 +79,9 @@ export function SessionTree({
             onClick={() => {
               selectItem(session.id, "session");
             }}
+            onMouseDown={(e) => {
+              if (e.detail > 1) e.preventDefault();
+            }}
             onDoubleClick={() => {
               onSessionDoubleClick(session.id);
             }}

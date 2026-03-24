@@ -1,5 +1,6 @@
 import React from "react";
 import { useTranslation } from "react-i18next";
+import { useEscapeKey } from "../hooks/useEscapeKey";
 import { useSettingsStore } from "../stores/settingsStore";
 
 const AVAILABLE_LANGUAGES = [
@@ -20,9 +21,13 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
     setCloseOnDisconnect,
     openLocalOnStartup,
     setOpenLocalOnStartup,
+    confirmOnQuit,
+    setConfirmOnQuit,
   } = useSettingsStore();
 
   const currentLang = language !== "" ? language : (i18n.resolvedLanguage ?? "en");
+
+  useEscapeKey(onClose);
 
   return (
     <div className="dialog-overlay" onClick={onClose} role="presentation">
@@ -84,6 +89,18 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
           </label>
         </div>
         <p className="settings-hint">{t("settings.openLocalOnStartupHint")}</p>
+        <div className="dialog-field dialog-field-row">
+          <input
+            type="checkbox"
+            id="settings-confirm-on-quit"
+            checked={confirmOnQuit}
+            onChange={(e) => {
+              setConfirmOnQuit(e.target.checked);
+            }}
+          />
+          <label htmlFor="settings-confirm-on-quit">{t("settings.confirmOnQuitLabel")}</label>
+        </div>
+        <p className="settings-hint">{t("settings.confirmOnQuitHint")}</p>
         <div className="dialog-actions">
           <button type="button" className="dialog-btn dialog-btn-primary" onClick={onClose}>
             {t("settings.close")}

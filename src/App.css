@@ -232,6 +232,16 @@ body,
   background: #74c7ec;
 }
 
+.dialog-btn-danger {
+  background: #f38ba8;
+  color: #1e1e2e;
+  font-weight: 600;
+}
+
+.dialog-btn-danger:hover {
+  background: #eba0ac;
+}
+
 .dialog-wide {
   min-width: 420px;
   max-width: 520px;

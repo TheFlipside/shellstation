@@ -1,5 +1,6 @@
-import React from "react";
+import React, { useCallback } from "react";
 import { Trans, useTranslation } from "react-i18next";
+import { useEscapeKey } from "../hooks/useEscapeKey";
 
 export interface HostVerifyRequest {
   sessionId: string;
@@ -16,6 +17,10 @@ interface HostVerifyDialogProps {
 
 export function HostVerifyDialog({ request, onRespond }: HostVerifyDialogProps): React.JSX.Element {
   const { t } = useTranslation();
+  const handleReject = useCallback(() => {
+    onRespond(request.sessionId, false);
+  }, [onRespond, request.sessionId]);
+  useEscapeKey(handleReject);
 
   return (
     <div className="dialog-overlay" role="presentation">

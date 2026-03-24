@@ -2,8 +2,10 @@ import React, { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useSessionStore } from "../stores/sessionStore";
 import { SessionTree } from "./SessionTree";
+import { ConfirmDialog } from "./ConfirmDialog";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { FolderDialog } from "./FolderDialog";
+import { MoveDialog } from "./MoveDialog";
 import { SessionDialog, type SessionFormData } from "./SessionDialog";
 import { SettingsDialog } from "./SettingsDialog";
 
@@ -69,6 +71,10 @@ export function SessionSidebar(): React.JSX.Element {
     initial?: Partial<SessionFormData>;
   } | null>(null);
   const [moveTarget, setMoveTarget] = useState<MoveTarget | null>(null);
+  const [confirmDialog, setConfirmDialog] = useState<{
+    message: string;
+    onConfirm: () => void;
+  } | null>(null);
   const [showSettings, setShowSettings] = useState(false);
 
   useEffect(() => {
@@ -131,14 +137,19 @@ export function SessionSidebar(): React.JSX.Element {
           label: t("contextMenu.delete"),
           danger: true,
           onClick: () => {
-            const childCount = sessions.filter((s) => s.folder_id === ctx.id).length;
+            const folderId = ctx.id;
+            const childCount = sessions.filter((s) => s.folder_id === folderId).length;
             const msg =
               childCount > 0
                 ? t("folder.deleteWithSessions", { count: String(childCount) })
                 : t("folder.deleteEmpty");
-            if (window.confirm(msg)) {
-              deleteFolder(ctx.id).catch(noop);
-            }
+            setConfirmDialog({
+              message: msg,
+              onConfirm: () => {
+                deleteFolder(folderId).catch(noop);
+                setConfirmDialog(null);
+              },
+            });
           },
         },
       ];
@@ -185,9 +196,14 @@ export function SessionSidebar(): React.JSX.Element {
         label: t("contextMenu.delete"),
         danger: true,
         onClick: () => {
-          if (window.confirm(t("session.deleteConfirm", { name: session?.name ?? "" }))) {
-            deleteSession(ctx.id).catch(noop);
-          }
+          const sessionId = ctx.id;
+          setConfirmDialog({
+            message: t("session.deleteConfirm", { name: session?.name ?? "" }),
+            onConfirm: () => {
+              deleteSession(sessionId).catch(noop);
+              setConfirmDialog(null);
+            },
+          });
         },
       },
     ];
@@ -411,63 +427,25 @@ export function SessionSidebar(): React.JSX.Element {
       )}
 
       {moveTarget && (
-        <div
-          className="dialog-overlay"
-          onClick={() => {
+        <MoveDialog
+          folders={folders}
+          excludeId={moveTarget.id}
+          showRoot={moveTarget.type === "folder"}
+          onSubmit={handleMoveSubmit}
+          onCancel={() => {
             setMoveTarget(null);
           }}
-          role="presentation"
-        >
-          <div
-            className="dialog"
-            onClick={(e) => {
-              e.stopPropagation();
-            }}
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="mv-title"
-          >
-            <h3 className="dialog-title" id="mv-title">
-              {t("dialog.moveTo")}
-            </h3>
-            <div className="dialog-field">
-              <label htmlFor="mv-folder">{t("dialog.targetFolder")}</label>
-              <select id="mv-folder" defaultValue="">
-                {moveTarget.type === "folder" && (
-                  <option value="__root__">{t("dialog.root")}</option>
-                )}
-                {folders
-                  .filter((f) => f.id !== moveTarget.id)
-                  .map((f) => (
-                    <option key={f.id} value={f.id}>
-                      {f.name}
-                    </option>
-                  ))}
-              </select>
-            </div>
-            <div className="dialog-actions">
-              <button
-                type="button"
-                className="dialog-btn dialog-btn-cancel"
-                onClick={() => {
-                  setMoveTarget(null);
-                }}
-              >
-                {t("dialog.cancel")}
-              </button>
-              <button
-                type="button"
-                className="dialog-btn dialog-btn-primary"
-                onClick={() => {
-                  const sel = document.getElementById("mv-folder") as HTMLSelectElement;
-                  if (sel.value) handleMoveSubmit(sel.value);
-                }}
-              >
-                {t("dialog.move")}
-              </button>
-            </div>
-          </div>
-        </div>
+        />
+      )}
+
+      {confirmDialog && (
+        <ConfirmDialog
+          message={confirmDialog.message}
+          onConfirm={confirmDialog.onConfirm}
+          onCancel={() => {
+            setConfirmDialog(null);
+          }}
+        />
       )}
     </div>
   );

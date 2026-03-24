@@ -6,9 +6,11 @@ interface SettingsState {
   language: string;
   closeOnDisconnect: boolean;
   openLocalOnStartup: boolean;
+  confirmOnQuit: boolean;
   setLanguage: (lang: string) => void;
   setCloseOnDisconnect: (value: boolean) => void;
   setOpenLocalOnStartup: (value: boolean) => void;
+  setConfirmOnQuit: (value: boolean) => void;
 }
 
 export const useSettingsStore = create<SettingsState>()(
@@ -17,6 +19,7 @@ export const useSettingsStore = create<SettingsState>()(
       language: "",
       closeOnDisconnect: false,
       openLocalOnStartup: true,
+      confirmOnQuit: true,
       setLanguage: (lang: string) => {
         void i18n.changeLanguage(lang);
         set({ language: lang });
@@ -26,6 +29,9 @@ export const useSettingsStore = create<SettingsState>()(
       },
       setOpenLocalOnStartup: (value: boolean) => {
         set({ openLocalOnStartup: value });
+      },
+      setConfirmOnQuit: (value: boolean) => {
+        set({ confirmOnQuit: value });
       },
     }),
     {
