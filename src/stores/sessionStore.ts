@@ -83,7 +83,9 @@ export interface UpdateSessionParams {
 export const useSessionStore = create<SessionState>((set, get) => ({
   folders: [],
   sessions: [],
-  expandedFolderIds: new Set<string>(),
+  expandedFolderIds: new Set<string>(
+    JSON.parse(localStorage.getItem("shellstation:expandedFolders") ?? "[]") as string[],
+  ),
   selectedItemId: null,
   selectedItemType: null,
   searchQuery: "",
@@ -94,7 +96,22 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       invoke<Folder[]>("folder_list"),
       invoke<Session[]>("session_list_all"),
     ]);
-    set({ folders, sessions });
+    // Prune expanded folder IDs that no longer exist (e.g. deleted externally)
+    const folderIds = new Set(folders.map((f) => f.id));
+    const expanded = get().expandedFolderIds;
+    let pruned = false;
+    const next = new Set<string>();
+    for (const id of expanded) {
+      if (folderIds.has(id)) {
+        next.add(id);
+      } else {
+        pruned = true;
+      }
+    }
+    if (pruned) {
+      localStorage.setItem("shellstation:expandedFolders", JSON.stringify([...next]));
+    }
+    set({ folders, sessions, expandedFolderIds: pruned ? next : expanded });
   },
 
   // ── Folders ──────────────────────────────────────────────────────────
@@ -116,6 +133,13 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
   deleteFolder: async (id) => {
     await invoke("folder_delete", { id });
+    // Clean up persisted expand state for deleted folder
+    set((state) => {
+      const next = new Set(state.expandedFolderIds);
+      next.delete(id);
+      localStorage.setItem("shellstation:expandedFolders", JSON.stringify([...next]));
+      return { expandedFolderIds: next };
+    });
     await get().loadAll();
   },
 
@@ -187,6 +211,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       } else {
         next.add(id);
       }
+      localStorage.setItem("shellstation:expandedFolders", JSON.stringify([...next]));
       return { expandedFolderIds: next };
     });
   },
