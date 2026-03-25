@@ -206,42 +206,53 @@ impl DatabaseProvider for PostgresProvider {
 
     async fn update_session(&self, id: Uuid, update: UpdateSession) -> DbResult<()> {
         let mut sets = Vec::new();
-        let mut values: Vec<String> = Vec::new();
         let mut idx: usize = 1;
+
+        // Track bind values with their types so PostgreSQL receives correct
+        // types (it does not coerce TEXT → INTEGER like SQLite does).
+        enum BindVal {
+            Text(String),
+            Int(i32),
+            Null,
+        }
+        let mut values: Vec<BindVal> = Vec::new();
 
         if let Some(ref name) = update.name {
             sets.push(format!("name = ${idx}"));
-            values.push(name.clone());
+            values.push(BindVal::Text(name.clone()));
             idx += 1;
         }
         if let Some(ref hostname) = update.hostname {
             sets.push(format!("hostname = ${idx}"));
-            values.push(hostname.clone());
+            values.push(BindVal::Text(hostname.clone()));
             idx += 1;
         }
         if let Some(port) = update.port {
             sets.push(format!("port = ${idx}"));
-            values.push(port.to_string());
+            values.push(BindVal::Int(port));
             idx += 1;
         }
         if let Some(ref username) = update.username {
             sets.push(format!("username = ${idx}"));
-            values.push(username.clone());
+            values.push(BindVal::Text(username.clone()));
             idx += 1;
         }
         if let Some(ref auth_method) = update.auth_method {
             sets.push(format!("auth_method = ${idx}"));
-            values.push(auth_method.clone());
+            values.push(BindVal::Text(auth_method.clone()));
             idx += 1;
         }
         if let Some(ref jump_host_id) = update.jump_host_id {
             sets.push(format!("jump_host_id = ${idx}"));
-            values.push(jump_host_id.map(|u| u.to_string()).unwrap_or_default());
+            match jump_host_id {
+                Some(u) => values.push(BindVal::Text(u.to_string())),
+                None => values.push(BindVal::Null),
+            }
             idx += 1;
         }
         if let Some(ref tags) = update.tags {
             sets.push(format!("tags = ${idx}"));
-            values.push(tags.clone());
+            values.push(BindVal::Text(tags.clone()));
             idx += 1;
         }
 
@@ -252,7 +263,11 @@ impl DatabaseProvider for PostgresProvider {
         let sql = format!("UPDATE sessions SET {} WHERE id = ${idx}", sets.join(", "));
         let mut query = sqlx::query(&sql);
         for val in &values {
-            query = query.bind(val);
+            match val {
+                BindVal::Text(s) => query = query.bind(s.as_str()),
+                BindVal::Int(n) => query = query.bind(*n),
+                BindVal::Null => query = query.bind(None::<String>),
+            }
         }
         query = query.bind(id.to_string());
 
