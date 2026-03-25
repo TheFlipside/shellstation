@@ -3,6 +3,8 @@ use std::collections::HashSet;
 use tauri::{AppHandle, State};
 use uuid::Uuid;
 
+use zeroize::Zeroizing;
+
 use crate::db::models::{Credential, Folder, NewFolder, NewSession, Session, UpdateSession};
 use crate::db::{CredentialDbState, DbState};
 use crate::ssh::{SshConnectParams, SshState};
@@ -266,10 +268,11 @@ pub async fn session_connect(
             .await?
             .ok_or_else(|| format!("Session {id} not found"))?;
 
-    // Retrieve credential from local store.
-    let auth_credential = match cred_db.0.get_credential(session_id).await? {
-        Some(cred) => cred.secret,
-        None if session.auth_method == "none" => String::new(),
+    // Retrieve credential from local store — wrapped in Zeroizing so it is
+    // scrubbed from memory as soon as it is no longer needed.
+    let auth_credential: Zeroizing<String> = match cred_db.0.get_credential(session_id).await? {
+        Some(cred) => Zeroizing::new(cred.secret),
+        None if session.auth_method == "none" => Zeroizing::new(String::new()),
         None => {
             return Err(format!(
                 "No credential stored for session \"{}\". \
@@ -338,8 +341,8 @@ async fn resolve_jump_chain(
                 .ok_or_else(|| format!("Jump host session {jump_id} not found"))?;
 
         let jump_credential = match cred_db.0.get_credential(jump_id).await? {
-            Some(cred) => cred.secret,
-            None => String::new(),
+            Some(cred) => Zeroizing::new(cred.secret),
+            None => Zeroizing::new(String::new()),
         };
 
         hops.push(crate::ssh::JumpHop {

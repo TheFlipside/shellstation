@@ -34,6 +34,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 async-trait = "0.1"
 dirs = "6"
+zeroize = { version = "1", features = ["serde"] }
 
 [profile.release]
 strip = true        # Strip debug symbols

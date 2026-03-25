@@ -1,5 +1,6 @@
 use tauri::{AppHandle, State};
 use uuid::Uuid;
+use zeroize::Zeroizing;
 
 use crate::ssh::{JumpHop, SshConnectParams, SshState};
 
@@ -34,7 +35,7 @@ pub async fn ssh_connect(
             port,
             username,
             auth_method,
-            auth_credential,
+            auth_credential: Zeroizing::new(auth_credential),
             cols,
             rows,
             app_handle,

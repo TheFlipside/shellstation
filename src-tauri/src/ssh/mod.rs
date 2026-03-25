@@ -11,6 +11,7 @@ use tauri::{AppHandle, Emitter};
 use tokio::sync::{mpsc, oneshot, Mutex};
 use tokio::task::JoinHandle;
 use tracing::{error, info, warn};
+use zeroize::Zeroizing;
 
 /// Payload emitted to the frontend when the server key needs user verification.
 #[derive(Clone, Serialize)]
@@ -46,7 +47,7 @@ pub struct JumpHop {
     pub port: u16,
     pub username: String,
     pub auth_method: String,
-    pub auth_credential: String,
+    pub auth_credential: Zeroizing<String>,
 }
 
 /// Parameters for establishing an SSH connection.
@@ -56,7 +57,7 @@ pub struct SshConnectParams {
     pub port: u16,
     pub username: String,
     pub auth_method: String,
-    pub auth_credential: String,
+    pub auth_credential: Zeroizing<String>,
     pub cols: u16,
     pub rows: u16,
     pub app_handle: AppHandle,
@@ -264,7 +265,7 @@ impl Default for SshState {
 
 /// Parse a public key credential string. Format: "key_path" or "key_path\npassphrase".
 /// Expands `~` to the user's home directory and validates the path is within it.
-fn parse_key_credential(credential: &str) -> Result<(String, Option<String>), String> {
+fn parse_key_credential(credential: &str) -> Result<(String, Option<Zeroizing<String>>), String> {
     let (raw_path, passphrase) = match credential.find('\n') {
         Some(idx) => {
             let path = &credential[..idx];
@@ -274,7 +275,7 @@ fn parse_key_credential(credential: &str) -> Result<(String, Option<String>), St
                 if pass.is_empty() {
                     None
                 } else {
-                    Some(pass.to_string())
+                    Some(Zeroizing::new(pass.to_string()))
                 },
             )
         }
@@ -483,8 +484,9 @@ async fn authenticate_handle(
             .map_err(|e| format!("Auth failed: {e}"))?,
         "publickey" => {
             let (key_path, passphrase) = parse_key_credential(auth_credential)?;
-            let key_pair = russh::keys::load_secret_key(&key_path, passphrase.as_deref())
-                .map_err(|e| format!("Failed to load SSH key: {e}"))?;
+            let key_pair =
+                russh::keys::load_secret_key(&key_path, passphrase.as_ref().map(|s| s.as_str()))
+                    .map_err(|e| format!("Failed to load SSH key: {e}"))?;
             handle
                 .authenticate_publickey(username, Arc::new(key_pair))
                 .await
