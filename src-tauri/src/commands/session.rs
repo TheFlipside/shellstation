@@ -4,7 +4,7 @@ use tauri::{AppHandle, State};
 use uuid::Uuid;
 
 use crate::db::models::{Credential, Folder, NewFolder, NewSession, Session, UpdateSession};
-use crate::db::DbState;
+use crate::db::{CredentialDbState, DbState};
 use crate::ssh::{SshConnectParams, SshState};
 
 use super::{validate_dimensions, validate_port, MAX_JUMP_HOPS};
@@ -62,6 +62,7 @@ pub async fn folder_delete(state: State<'_, DbState>, id: String) -> Result<(), 
 #[allow(clippy::too_many_arguments)]
 pub async fn session_create(
     state: State<'_, DbState>,
+    cred_db: State<'_, CredentialDbState>,
     folder_id: String,
     name: String,
     hostname: String,
@@ -92,7 +93,10 @@ pub async fn session_create(
         })
         .await?;
 
-    // Store credential in DB if provided.
+    // Store credential locally (never in the shared central DB).
+    // Credential failure must not block session creation — the session is
+    // valid without a credential; the user just cannot connect until they
+    // set one via session_update.
     let secret = match auth_method.as_str() {
         "password" => password,
         "publickey" => key_path,
@@ -100,7 +104,7 @@ pub async fn session_create(
     };
     if let Some(secret_value) = secret {
         let keychain_ref = format!("session-{}", session.id);
-        state
+        if let Err(e) = cred_db
             .0
             .upsert_credential(Credential {
                 id: Uuid::new_v4(),
@@ -109,7 +113,10 @@ pub async fn session_create(
                 keychain_ref,
                 secret: secret_value,
             })
-            .await?;
+            .await
+        {
+            tracing::error!(session_id = %session.id, "credential upsert failed: {e}");
+        }
     }
 
     Ok(session)
@@ -129,6 +136,7 @@ pub async fn session_list_all(state: State<'_, DbState>) -> Result<Vec<Session>,
 #[allow(clippy::too_many_arguments)]
 pub async fn session_update(
     state: State<'_, DbState>,
+    cred_db: State<'_, CredentialDbState>,
     id: String,
     name: Option<String>,
     hostname: Option<String>,
@@ -164,7 +172,7 @@ pub async fn session_update(
         )
         .await?;
 
-    // Update credential if a new secret was provided.
+    // Update credential locally if a new secret was provided.
     let effective_method = auth_method;
     let secret = match effective_method.as_deref() {
         Some("password") => password,
@@ -173,7 +181,7 @@ pub async fn session_update(
     };
     if let Some(secret_value) = secret {
         let keychain_ref = format!("session-{session_id}");
-        state
+        if let Err(e) = cred_db
             .0
             .upsert_credential(Credential {
                 id: Uuid::new_v4(),
@@ -182,7 +190,10 @@ pub async fn session_update(
                 keychain_ref,
                 secret: secret_value,
             })
-            .await?;
+            .await
+        {
+            tracing::error!(session_id = %session_id, "credential upsert failed: {e}");
+        }
     }
 
     Ok(())
@@ -202,7 +213,9 @@ pub async fn session_move(
 
 #[tauri::command]
 pub async fn session_delete(state: State<'_, DbState>, id: String) -> Result<(), String> {
-    // Credential row is cascade-deleted with the session.
+    // Credential row is cascade-deleted in the central DB.
+    // Local credentials are orphaned but harmless — they'll be ignored
+    // since the session no longer exists.
     state.0.delete_session(parse_uuid(&id)?).await
 }
 
@@ -217,13 +230,14 @@ pub async fn session_search(
 // ── Connect a saved session ──────────────────────────────────────────
 
 /// Load a saved session from the database, retrieve its credential from the
-/// OS keychain, resolve jump host chains, and open an SSH connection.
+/// local credential store, resolve jump host chains, and open an SSH connection.
 /// Returns the live connection ID for use with ssh_write/ssh_resize.
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 pub async fn session_connect(
     app_handle: AppHandle,
     db: State<'_, DbState>,
+    cred_db: State<'_, CredentialDbState>,
     ssh: State<'_, SshState>,
     id: String,
     cols: u16,
@@ -237,20 +251,21 @@ pub async fn session_connect(
             .await?
             .ok_or_else(|| format!("Session {id} not found"))?;
 
-    // Retrieve credential from DB.
-    let auth_credential = match db.0.get_credential(session_id).await? {
+    // Retrieve credential from local store.
+    let auth_credential = match cred_db.0.get_credential(session_id).await? {
         Some(cred) => cred.secret,
         None if session.auth_method == "none" => String::new(),
         None => {
             return Err(format!(
-                "No credential stored for session \"{}\". Edit the session to set a password or key path.",
+                "No credential stored for session \"{}\". \
+                 Edit the session to set a password or key path.",
                 session.name
             ))
         }
     };
 
     // Resolve jump host chain.
-    let jump_hops = resolve_jump_chain(&db, &session).await?;
+    let jump_hops = resolve_jump_chain(&db, &cred_db, &session).await?;
     if jump_hops.len() > MAX_JUMP_HOPS {
         return Err(format!("Too many jump hops (max {MAX_JUMP_HOPS})"));
     }
@@ -282,9 +297,10 @@ fn parse_uuid(s: &str) -> Result<Uuid, String> {
 }
 
 /// Walk the jump_host_id chain in the database to build a list of JumpHop
-/// entries for the SSH connect call.
+/// entries for the SSH connect call. Credentials come from local store.
 async fn resolve_jump_chain(
     db: &State<'_, DbState>,
+    cred_db: &State<'_, CredentialDbState>,
     session: &Session,
 ) -> Result<Vec<crate::ssh::JumpHop>, String> {
     let mut hops = Vec::new();
@@ -306,7 +322,7 @@ async fn resolve_jump_chain(
                 .await?
                 .ok_or_else(|| format!("Jump host session {jump_id} not found"))?;
 
-        let jump_credential = match db.0.get_credential(jump_id).await? {
+        let jump_credential = match cred_db.0.get_credential(jump_id).await? {
             Some(cred) => cred.secret,
             None => String::new(),
         };

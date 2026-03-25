@@ -1,17 +1,17 @@
 use async_trait::async_trait;
-use sqlx::sqlite::SqliteRow;
-use sqlx::{Row, SqlitePool};
+use sqlx::postgres::PgRow;
+use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
 use super::models::{Credential, Folder, NewFolder, NewSession, Session, UpdateSession};
 use super::{DatabaseProvider, DbResult};
 
-pub struct SqliteProvider {
-    pool: SqlitePool,
+pub struct PostgresProvider {
+    pool: PgPool,
 }
 
-impl SqliteProvider {
-    pub fn new(pool: SqlitePool) -> Self {
+impl PostgresProvider {
+    pub fn new(pool: PgPool) -> Self {
         Self { pool }
     }
 }
@@ -27,7 +27,7 @@ fn parse_optional_uuid(s: Option<&str>) -> DbResult<Option<Uuid>> {
     }
 }
 
-fn row_to_folder(row: &SqliteRow) -> DbResult<Folder> {
+fn row_to_folder(row: &PgRow) -> DbResult<Folder> {
     Ok(Folder {
         id: parse_uuid(row.get("id"))?,
         name: row.get("name"),
@@ -35,7 +35,7 @@ fn row_to_folder(row: &SqliteRow) -> DbResult<Folder> {
     })
 }
 
-fn row_to_session(row: &SqliteRow) -> DbResult<Session> {
+fn row_to_session(row: &PgRow) -> DbResult<Session> {
     Ok(Session {
         id: parse_uuid(row.get("id"))?,
         folder_id: parse_uuid(row.get("folder_id"))?,
@@ -50,7 +50,7 @@ fn row_to_session(row: &SqliteRow) -> DbResult<Session> {
     })
 }
 
-fn row_to_credential(row: &SqliteRow) -> DbResult<Credential> {
+fn row_to_credential(row: &PgRow) -> DbResult<Credential> {
     Ok(Credential {
         id: parse_uuid(row.get("id"))?,
         session_id: parse_uuid(row.get("session_id"))?,
@@ -61,7 +61,7 @@ fn row_to_credential(row: &SqliteRow) -> DbResult<Credential> {
 }
 
 #[async_trait]
-impl DatabaseProvider for SqliteProvider {
+impl DatabaseProvider for PostgresProvider {
     // ── Folders ──────────────────────────────────────────────────────────
 
     async fn create_folder(&self, folder: NewFolder) -> DbResult<Folder> {
@@ -69,7 +69,7 @@ impl DatabaseProvider for SqliteProvider {
         let id_str = id.to_string();
         let parent_str = folder.parent_id.map(|u| u.to_string());
 
-        sqlx::query("INSERT INTO folders (id, name, parent_id) VALUES (?, ?, ?)")
+        sqlx::query("INSERT INTO folders (id, name, parent_id) VALUES ($1, $2, $3)")
             .bind(&id_str)
             .bind(&folder.name)
             .bind(&parent_str)
@@ -94,7 +94,7 @@ impl DatabaseProvider for SqliteProvider {
     }
 
     async fn rename_folder(&self, id: Uuid, name: &str) -> DbResult<()> {
-        let result = sqlx::query("UPDATE folders SET name = ? WHERE id = ?")
+        let result = sqlx::query("UPDATE folders SET name = $1 WHERE id = $2")
             .bind(name)
             .bind(id.to_string())
             .execute(&self.pool)
@@ -110,7 +110,7 @@ impl DatabaseProvider for SqliteProvider {
     async fn move_folder(&self, id: Uuid, new_parent_id: Option<Uuid>) -> DbResult<()> {
         let parent_str = new_parent_id.map(|u| u.to_string());
 
-        let result = sqlx::query("UPDATE folders SET parent_id = ? WHERE id = ?")
+        let result = sqlx::query("UPDATE folders SET parent_id = $1 WHERE id = $2")
             .bind(&parent_str)
             .bind(id.to_string())
             .execute(&self.pool)
@@ -124,7 +124,7 @@ impl DatabaseProvider for SqliteProvider {
     }
 
     async fn delete_folder(&self, id: Uuid) -> DbResult<()> {
-        let result = sqlx::query("DELETE FROM folders WHERE id = ?")
+        let result = sqlx::query("DELETE FROM folders WHERE id = $1")
             .bind(id.to_string())
             .execute(&self.pool)
             .await
@@ -146,7 +146,7 @@ impl DatabaseProvider for SqliteProvider {
 
         sqlx::query(
             "INSERT INTO sessions (id, folder_id, name, hostname, port, protocol, username, auth_method, jump_host_id, tags) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
         )
         .bind(&id_str)
         .bind(&folder_str)
@@ -179,7 +179,7 @@ impl DatabaseProvider for SqliteProvider {
     async fn get_session(&self, id: Uuid) -> DbResult<Option<Session>> {
         let row = sqlx::query(
             "SELECT id, folder_id, name, hostname, port, protocol, username, auth_method, jump_host_id, tags \
-             FROM sessions WHERE id = ?",
+             FROM sessions WHERE id = $1",
         )
         .bind(id.to_string())
         .fetch_optional(&self.pool)
@@ -207,47 +207,53 @@ impl DatabaseProvider for SqliteProvider {
     async fn update_session(&self, id: Uuid, update: UpdateSession) -> DbResult<()> {
         let mut sets = Vec::new();
         let mut values: Vec<String> = Vec::new();
+        let mut idx: usize = 1;
 
         if let Some(ref name) = update.name {
-            sets.push("name = ?");
+            sets.push(format!("name = ${idx}"));
             values.push(name.clone());
+            idx += 1;
         }
         if let Some(ref hostname) = update.hostname {
-            sets.push("hostname = ?");
+            sets.push(format!("hostname = ${idx}"));
             values.push(hostname.clone());
+            idx += 1;
         }
         if let Some(port) = update.port {
-            sets.push("port = ?");
+            sets.push(format!("port = ${idx}"));
             values.push(port.to_string());
+            idx += 1;
         }
         if let Some(ref username) = update.username {
-            sets.push("username = ?");
+            sets.push(format!("username = ${idx}"));
             values.push(username.clone());
+            idx += 1;
         }
         if let Some(ref auth_method) = update.auth_method {
-            sets.push("auth_method = ?");
+            sets.push(format!("auth_method = ${idx}"));
             values.push(auth_method.clone());
+            idx += 1;
         }
         if let Some(ref jump_host_id) = update.jump_host_id {
-            sets.push("jump_host_id = ?");
+            sets.push(format!("jump_host_id = ${idx}"));
             values.push(jump_host_id.map(|u| u.to_string()).unwrap_or_default());
+            idx += 1;
         }
         if let Some(ref tags) = update.tags {
-            sets.push("tags = ?");
+            sets.push(format!("tags = ${idx}"));
             values.push(tags.clone());
+            idx += 1;
         }
 
         if sets.is_empty() {
             return Ok(());
         }
 
-        let sql = format!("UPDATE sessions SET {} WHERE id = ?", sets.join(", "));
+        let sql = format!("UPDATE sessions SET {} WHERE id = ${idx}", sets.join(", "));
         let mut query = sqlx::query(&sql);
         for val in &values {
             query = query.bind(val);
         }
-        // Bind the empty string for NULL jump_host_id, or the actual value.
-        // The port field was converted to string above but SQLite will coerce it.
         query = query.bind(id.to_string());
 
         let result = query
@@ -262,7 +268,7 @@ impl DatabaseProvider for SqliteProvider {
     }
 
     async fn move_session(&self, id: Uuid, new_folder_id: Uuid) -> DbResult<()> {
-        let result = sqlx::query("UPDATE sessions SET folder_id = ? WHERE id = ?")
+        let result = sqlx::query("UPDATE sessions SET folder_id = $1 WHERE id = $2")
             .bind(new_folder_id.to_string())
             .bind(id.to_string())
             .execute(&self.pool)
@@ -276,7 +282,7 @@ impl DatabaseProvider for SqliteProvider {
     }
 
     async fn delete_session(&self, id: Uuid) -> DbResult<()> {
-        let result = sqlx::query("DELETE FROM sessions WHERE id = ?")
+        let result = sqlx::query("DELETE FROM sessions WHERE id = $1")
             .bind(id.to_string())
             .execute(&self.pool)
             .await
@@ -294,15 +300,12 @@ impl DatabaseProvider for SqliteProvider {
         let rows = sqlx::query(
             "SELECT id, folder_id, name, hostname, port, protocol, username, auth_method, jump_host_id, tags \
              FROM sessions \
-             WHERE name LIKE ? ESCAPE '\\' \
-                OR hostname LIKE ? ESCAPE '\\' \
-                OR username LIKE ? ESCAPE '\\' \
-                OR tags LIKE ? ESCAPE '\\' \
+             WHERE name LIKE $1 ESCAPE '\\' \
+                OR hostname LIKE $1 ESCAPE '\\' \
+                OR username LIKE $1 ESCAPE '\\' \
+                OR tags LIKE $1 ESCAPE '\\' \
              ORDER BY name",
         )
-        .bind(&pattern)
-        .bind(&pattern)
-        .bind(&pattern)
         .bind(&pattern)
         .fetch_all(&self.pool)
         .await
@@ -316,11 +319,11 @@ impl DatabaseProvider for SqliteProvider {
     async fn upsert_credential(&self, cred: Credential) -> DbResult<()> {
         sqlx::query(
             "INSERT INTO credentials (id, session_id, auth_type, keychain_ref, secret) \
-             VALUES (?, ?, ?, ?, ?) \
+             VALUES ($1, $2, $3, $4, $5) \
              ON CONFLICT(session_id) DO UPDATE SET \
-               auth_type = excluded.auth_type, \
-               keychain_ref = excluded.keychain_ref, \
-               secret = excluded.secret",
+               auth_type = EXCLUDED.auth_type, \
+               keychain_ref = EXCLUDED.keychain_ref, \
+               secret = EXCLUDED.secret",
         )
         .bind(cred.id.to_string())
         .bind(cred.session_id.to_string())
@@ -336,7 +339,7 @@ impl DatabaseProvider for SqliteProvider {
 
     async fn get_credential(&self, session_id: Uuid) -> DbResult<Option<Credential>> {
         let row = sqlx::query(
-            "SELECT id, session_id, auth_type, keychain_ref, secret FROM credentials WHERE session_id = ?",
+            "SELECT id, session_id, auth_type, keychain_ref, secret FROM credentials WHERE session_id = $1",
         )
         .bind(session_id.to_string())
         .fetch_optional(&self.pool)
@@ -350,7 +353,7 @@ impl DatabaseProvider for SqliteProvider {
     }
 
     async fn delete_credential(&self, session_id: Uuid) -> DbResult<()> {
-        sqlx::query("DELETE FROM credentials WHERE session_id = ?")
+        sqlx::query("DELETE FROM credentials WHERE session_id = $1")
             .bind(session_id.to_string())
             .execute(&self.pool)
             .await

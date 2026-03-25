@@ -1,19 +1,43 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import "./App.css";
 import { ConfirmDialog } from "./components/ConfirmDialog";
+import { DatabaseStatusBanner } from "./components/DatabaseStatusBanner";
 import { SessionSidebar } from "./components/SessionSidebar";
+import { SettingsDialog } from "./components/SettingsDialog";
 import { TerminalTabs } from "./components/TerminalTabs";
 import { useSettingsStore } from "./stores/settingsStore";
 import { useTerminalStore } from "./stores/terminalStore";
+
+interface DbStatus {
+  backend: string;
+  healthy: boolean;
+  error: string | null;
+}
 
 function App(): React.JSX.Element {
   const { t } = useTranslation();
   const uiScale = useSettingsStore((s) => s.uiScale);
   const [sidebarWidth, setSidebarWidth] = useState(260);
   const [showQuitConfirm, setShowQuitConfirm] = useState(false);
+  const [dbStatus, setDbStatus] = useState<DbStatus | null>(null);
+  const [showSettingsFromBanner, setShowSettingsFromBanner] = useState(false);
   const dragging = useRef(false);
+
+  // Check DB status on mount
+  useEffect(() => {
+    invoke<DbStatus>("db_get_status")
+      .then((status) => {
+        if (!status.healthy) {
+          setDbStatus(status);
+        }
+      })
+      .catch(() => {
+        // Status check failed — ignore
+      });
+  }, []);
 
   const handleMouseDown = useCallback(() => {
     dragging.current = true;
@@ -89,6 +113,14 @@ function App(): React.JSX.Element {
 
   return (
     <div className="app" style={{ "--ui-zoom": uiScale / 100 } as React.CSSProperties}>
+      {dbStatus !== null && !dbStatus.healthy && dbStatus.error !== null && (
+        <DatabaseStatusBanner
+          error={dbStatus.error}
+          onOpenSettings={() => {
+            setShowSettingsFromBanner(true);
+          }}
+        />
+      )}
       <div className="app-layout">
         <div
           className="app-sidebar"
@@ -116,6 +148,13 @@ function App(): React.JSX.Element {
           onConfirm={handleQuitConfirm}
           onCancel={() => {
             setShowQuitConfirm(false);
+          }}
+        />
+      )}
+      {showSettingsFromBanner && (
+        <SettingsDialog
+          onClose={() => {
+            setShowSettingsFromBanner(false);
           }}
         />
       )}

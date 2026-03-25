@@ -1,4 +1,5 @@
 pub mod models;
+pub mod postgres;
 pub mod sqlite;
 
 use std::sync::Arc;
@@ -10,8 +11,13 @@ use models::{Credential, Folder, NewFolder, NewSession, Session, UpdateSession};
 
 pub type DbResult<T> = Result<T, String>;
 
-/// Tauri managed state wrapping the database provider.
+/// Tauri managed state wrapping the database provider (folders + sessions).
 pub struct DbState(pub Arc<dyn DatabaseProvider>);
+
+/// Tauri managed state wrapping the local credential provider.
+/// Credentials are always stored locally (never in a shared central DB)
+/// so each user keeps their own secrets.
+pub struct CredentialDbState(pub Arc<dyn DatabaseProvider>);
 
 #[async_trait]
 pub trait DatabaseProvider: Send + Sync {
@@ -39,4 +45,5 @@ pub trait DatabaseProvider: Send + Sync {
     async fn get_credential(&self, session_id: Uuid) -> DbResult<Option<Credential>>;
     #[allow(dead_code)]
     async fn delete_credential(&self, session_id: Uuid) -> DbResult<()>;
+    async fn list_all_credentials(&self) -> DbResult<Vec<Credential>>;
 }

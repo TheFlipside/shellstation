@@ -460,6 +460,59 @@ body,
   color: #cdd6f4;
 }
 
+.settings-db-success {
+  color: #a6e3a1;
+  font-size: 12px;
+  margin-left: 8px;
+}
+
+.settings-db-error {
+  color: #f38ba8;
+  font-size: 12px;
+  margin-left: 8px;
+}
+
+.settings-db-note {
+  color: #6c7086;
+  font-size: 11px;
+  font-style: italic;
+  margin: 4px 0 8px;
+}
+
+.settings-db-restart {
+  color: #fab387;
+  font-size: 12px;
+  margin: 4px 0;
+}
+
+.db-status-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  background: #45475a;
+  border-bottom: 1px solid #f38ba8;
+  color: #f38ba8;
+  font-size: 12px;
+  flex-shrink: 0;
+}
+
+.db-status-banner button {
+  background: transparent;
+  border: 1px solid #f38ba8;
+  color: #f38ba8;
+  padding: 2px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.db-status-banner button:hover {
+  background: #f38ba8;
+  color: #1e1e2e;
+}
+
 /* ── Tree Items ────────────────────────────────────────────────── */
 
 .tree-item {

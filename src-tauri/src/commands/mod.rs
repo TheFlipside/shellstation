@@ -1,7 +1,9 @@
+mod database;
 mod pty;
 mod session;
 mod ssh;
 
+pub use database::*;
 pub use pty::*;
 pub use session::*;
 pub use ssh::*;

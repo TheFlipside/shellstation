@@ -63,3 +63,45 @@ pub struct Credential {
     #[serde(skip_serializing)]
     pub secret: String,
 }
+
+/// Credential with secret included in serialization, for export/import.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExportCredential {
+    pub id: Uuid,
+    pub session_id: Uuid,
+    pub auth_type: String,
+    pub keychain_ref: String,
+    pub secret: String,
+}
+
+impl From<Credential> for ExportCredential {
+    fn from(c: Credential) -> Self {
+        Self {
+            id: c.id,
+            session_id: c.session_id,
+            auth_type: c.auth_type,
+            keychain_ref: c.keychain_ref,
+            secret: c.secret,
+        }
+    }
+}
+
+impl From<ExportCredential> for Credential {
+    fn from(c: ExportCredential) -> Self {
+        Self {
+            id: c.id,
+            session_id: c.session_id,
+            auth_type: c.auth_type,
+            keychain_ref: c.keychain_ref,
+            secret: c.secret,
+        }
+    }
+}
+
+/// Complete database export for migration between backends.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ExportData {
+    pub folders: Vec<Folder>,
+    pub sessions: Vec<Session>,
+    pub credentials: Vec<ExportCredential>,
+}
