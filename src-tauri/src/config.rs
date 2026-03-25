@@ -7,6 +7,10 @@ use serde::{Deserialize, Serialize};
 pub struct AppConfig {
     #[serde(default)]
     pub db_backend: DbBackend,
+    /// Custom SQLite database path. When `None`, the default
+    /// `<config_dir>/sessions.db` is used.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sqlite_path: Option<String>,
     #[serde(default)]
     pub postgres: PostgresConfig,
 }

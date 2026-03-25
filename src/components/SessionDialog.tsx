@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import { useTranslation } from "react-i18next";
+import { open } from "@tauri-apps/plugin-dialog";
 import { useEscapeKey } from "../hooks/useEscapeKey";
 import type { Folder, Session } from "../stores/sessionStore";
 
@@ -225,23 +226,50 @@ export function SessionDialog({
             <label htmlFor="sd-credential">
               {authMethod === "password" ? t("session.passwordLabel") : t("session.keyPathLabel")}
             </label>
-            <input
-              id="sd-credential"
-              type={authMethod === "password" ? "password" : "text"}
-              value={authMethod === "password" ? password : keyPath}
-              onChange={(e) => {
-                if (authMethod === "password") {
+            {authMethod === "password" ? (
+              <input
+                id="sd-credential"
+                type="password"
+                value={password}
+                onChange={(e) => {
                   setPassword(e.target.value);
-                } else {
-                  setKeyPath(e.target.value);
-                }
-              }}
-              placeholder={
-                authMethod === "password"
-                  ? t("session.passwordPlaceholder")
-                  : t("session.keyPathPlaceholder")
-              }
-            />
+                }}
+                placeholder={t("session.passwordPlaceholder")}
+              />
+            ) : (
+              <div className="dialog-row">
+                <div className="dialog-field-grow">
+                  <input
+                    id="sd-credential"
+                    type="text"
+                    value={keyPath}
+                    onChange={(e) => {
+                      setKeyPath(e.target.value);
+                    }}
+                    placeholder={t("session.keyPathPlaceholder")}
+                  />
+                </div>
+                <button
+                  type="button"
+                  className="dialog-btn"
+                  onClick={() => {
+                    void (async () => {
+                      const path = await open({
+                        title: t("session.keyPathLabel"),
+                        defaultPath: keyPath || undefined,
+                        multiple: false,
+                        directory: false,
+                      });
+                      if (path) {
+                        setKeyPath(path);
+                      }
+                    })();
+                  }}
+                >
+                  {t("session.keyPathBrowse")}
+                </button>
+              </div>
+            )}
           </div>
           <div className="dialog-field">
             <label htmlFor="sd-jump">{t("session.jumpHostLabel")}</label>

@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { open } from "@tauri-apps/plugin-dialog";
 import { useEscapeKey } from "../hooks/useEscapeKey";
 import { useSettingsStore } from "../stores/settingsStore";
 
@@ -28,6 +29,7 @@ const FONT_OPTIONS = [
 
 interface AppConfig {
   db_backend: "sqlite" | "postgres";
+  sqlite_path: string | null;
   postgres: {
     host: string;
     port: number;
@@ -70,6 +72,7 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
 
   // Database config — local state, loaded from backend
   const [dbBackend, setDbBackend] = useState<"sqlite" | "postgres">("sqlite");
+  const [sqlitePath, setSqlitePath] = useState("");
   const [pgHost, setPgHost] = useState("");
   const [pgPort, setPgPort] = useState(5432);
   const [pgDatabase, setPgDatabase] = useState("");
@@ -85,6 +88,7 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
     invoke<AppConfig>("db_get_config")
       .then((config) => {
         setDbBackend(config.db_backend);
+        setSqlitePath(config.sqlite_path ?? "");
         setPgHost(config.postgres.host);
         setPgPort(config.postgres.port);
         setPgDatabase(config.postgres.database);
@@ -133,6 +137,7 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
     try {
       await invoke("db_save_config", {
         backend: dbBackend,
+        sqlitePath: sqlitePath || null,
         host: pgHost,
         port: pgPort,
         database: pgDatabase,
@@ -144,7 +149,7 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
     } catch (e) {
       setDbError(String(e));
     }
-  }, [dbBackend, pgHost, pgPort, pgDatabase, pgUsername, pgPassword]);
+  }, [dbBackend, sqlitePath, pgHost, pgPort, pgDatabase, pgUsername, pgPassword]);
 
   const handleDbExport = useCallback(async () => {
     try {
@@ -387,6 +392,51 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
             <option value="postgres">{t("settings.dbPostgres")}</option>
           </select>
         </div>
+        {dbBackend === "sqlite" && (
+          <div className="dialog-field">
+            <label htmlFor="settings-sqlite-path">{t("settings.dbSqlitePathLabel")}</label>
+            <div className="dialog-row">
+              <div className="dialog-field-grow">
+                <input
+                  id="settings-sqlite-path"
+                  type="text"
+                  value={sqlitePath}
+                  placeholder={t("settings.dbSqlitePathPlaceholder")}
+                  onChange={(e) => {
+                    setSqlitePath(e.target.value);
+                    setDbDirty(true);
+                    setDbSaved(false);
+                  }}
+                />
+              </div>
+              <button
+                type="button"
+                className="dialog-btn"
+                onClick={() => {
+                  void (async () => {
+                    const path = await open({
+                      title: t("settings.dbSqlitePathLabel"),
+                      defaultPath: sqlitePath || undefined,
+                      multiple: false,
+                      directory: false,
+                      filters: [{ name: "SQLite", extensions: ["db", "sqlite", "sqlite3"] }],
+                    });
+                    if (path) {
+                      setSqlitePath(path);
+                      setDbDirty(true);
+                      setDbSaved(false);
+                    }
+                  })();
+                }}
+              >
+                {t("settings.dbBrowse")}
+              </button>
+              <span className="settings-help" title={t("settings.dbSqlitePathHint")}>
+                ?
+              </span>
+            </div>
+          </div>
+        )}
         {dbBackend === "postgres" && (
           <>
             <div className="dialog-row">

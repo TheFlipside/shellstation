@@ -73,6 +73,7 @@ pub async fn db_test_connection(
 pub async fn db_save_config(
     state: State<'_, ConfigState>,
     backend: String,
+    sqlite_path: Option<String>,
     host: String,
     port: u16,
     database: String,
@@ -85,8 +86,35 @@ pub async fn db_save_config(
         other => return Err(format!("Unknown backend: {other}")),
     };
 
+    // Normalize empty string to None so the config file stays clean.
+    let sqlite_path = sqlite_path.filter(|p| !p.trim().is_empty());
+
+    // Validate the custom SQLite path before persisting.
+    if let Some(ref path_str) = sqlite_path {
+        let path = std::path::Path::new(path_str);
+
+        // Must not point to an existing directory (needs to be a file path).
+        if path.is_dir() {
+            return Err(
+                "Path points to a directory. Please specify a file, e.g. /path/to/sessions.db"
+                    .to_string(),
+            );
+        }
+
+        // The parent directory must exist so SQLite can create the file.
+        if let Some(parent) = path.parent() {
+            if !parent.as_os_str().is_empty() && !parent.is_dir() {
+                return Err(format!(
+                    "Parent directory does not exist: {}",
+                    parent.display()
+                ));
+            }
+        }
+    }
+
     let new_config = AppConfig {
         db_backend,
+        sqlite_path,
         postgres: PostgresConfig {
             host,
             port,

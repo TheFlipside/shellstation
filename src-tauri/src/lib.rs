@@ -32,11 +32,18 @@ use tracing_subscriber::EnvFilter;
 /// PostgreSQL hosts sessions but local SQLite stores credentials — the FK
 /// on `credentials.session_id → sessions.id` would fail because sessions
 /// live in a different database).
+///
+/// When `custom_path` is `Some`, that path is used instead of the default
+/// `<config_dir>/sessions.db`.
 fn init_local_sqlite(
     config_dir: &std::path::Path,
     enforce_fk: bool,
+    custom_path: Option<&str>,
 ) -> Result<SqlitePool, Box<dyn std::error::Error>> {
-    let db_path = config_dir.join("sessions.db");
+    let db_path = match custom_path {
+        Some(p) if !p.is_empty() => std::path::PathBuf::from(p),
+        _ => config_dir.join("sessions.db"),
+    };
     tauri::async_runtime::block_on(async {
         let mut opts = SqliteConnectOptions::new()
             .filename(&db_path)
@@ -81,6 +88,7 @@ pub fn run() {
         .manage(PtyState::default())
         .manage(SshState::default())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             // Set window icon at runtime (needed on Linux outside of bundled installs)
             if let Some(window) = app.get_webview_window("main") {
@@ -115,21 +123,48 @@ pub fn run() {
                 DbBackend::Sqlite => {
                     // In SQLite mode, the same pool serves both sessions and credentials.
                     // Foreign keys are enforced since everything is in one DB.
-                    let local_pool = init_local_sqlite(&config_dir, true)?;
+                    //
+                    // If a custom path is configured but fails to open, fall back
+                    // to the default path so the app remains launchable and the
+                    // user can fix the path in Settings.
+                    let (local_pool, db_error) = match init_local_sqlite(
+                        &config_dir,
+                        true,
+                        app_config.sqlite_path.as_deref(),
+                    ) {
+                        Ok(pool) => (pool, None),
+                        Err(e) if app_config.sqlite_path.is_some() => {
+                            tracing::error!(
+                                "Custom SQLite path failed: {e} — falling back to default"
+                            );
+                            let fallback = init_local_sqlite(&config_dir, true, None)?;
+                            (
+                                fallback,
+                                Some(format!(
+                                    "Could not open {}: {}",
+                                    app_config.sqlite_path.as_deref().unwrap_or(""),
+                                    e
+                                )),
+                            )
+                        }
+                        Err(e) => return Err(Box::new(std::io::Error::other(
+                            e.to_string(),
+                        ))),
+                    };
                     let provider = Arc::new(SqliteProvider::new(local_pool));
                     app.manage(DbState(provider.clone() as Arc<dyn db::DatabaseProvider>));
                     app.manage(CredentialDbState(provider as Arc<dyn db::DatabaseProvider>));
                     app.manage(DbStatusState(commands::DbStatus {
                         backend: "sqlite".to_string(),
-                        healthy: true,
-                        error: None,
+                        healthy: db_error.is_none(),
+                        error: db_error,
                     }));
                 }
                 DbBackend::Postgres => {
                     // Credentials always stay in local SQLite. FK enforcement is
                     // OFF because sessions live in PostgreSQL — the credentials
                     // table's FK to sessions would fail cross-database.
-                    let local_pool = init_local_sqlite(&config_dir, false)?;
+                    let local_pool = init_local_sqlite(&config_dir, false, None)?;
                     let cred_provider =
                         Arc::new(SqliteProvider::new(local_pool)) as Arc<dyn db::DatabaseProvider>;
                     app.manage(CredentialDbState(cred_provider));
