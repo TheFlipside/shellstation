@@ -147,9 +147,7 @@ pub fn run() {
                                 )),
                             )
                         }
-                        Err(e) => return Err(Box::new(std::io::Error::other(
-                            e.to_string(),
-                        ))),
+                        Err(e) => return Err(Box::new(std::io::Error::other(e.to_string()))),
                     };
                     let provider = Arc::new(SqliteProvider::new(local_pool));
                     app.manage(DbState(provider.clone() as Arc<dyn db::DatabaseProvider>));

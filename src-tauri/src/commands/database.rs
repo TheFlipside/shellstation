@@ -166,12 +166,79 @@ pub async fn db_export(
     })
 }
 
+/// Maximum number of items allowed in a single import to prevent resource exhaustion.
+const MAX_IMPORT_FOLDERS: usize = 10_000;
+const MAX_IMPORT_SESSIONS: usize = 50_000;
+const MAX_IMPORT_CREDENTIALS: usize = 50_000;
+
+/// Validate imported data for size limits and field constraints.
+fn validate_import_data(data: &ExportData) -> Result<(), String> {
+    if data.folders.len() > MAX_IMPORT_FOLDERS {
+        return Err(format!(
+            "Too many folders in import ({}, max {})",
+            data.folders.len(),
+            MAX_IMPORT_FOLDERS
+        ));
+    }
+    if data.sessions.len() > MAX_IMPORT_SESSIONS {
+        return Err(format!(
+            "Too many sessions in import ({}, max {})",
+            data.sessions.len(),
+            MAX_IMPORT_SESSIONS
+        ));
+    }
+    if data.credentials.len() > MAX_IMPORT_CREDENTIALS {
+        return Err(format!(
+            "Too many credentials in import ({}, max {})",
+            data.credentials.len(),
+            MAX_IMPORT_CREDENTIALS
+        ));
+    }
+
+    // Validate individual field lengths.
+    for folder in &data.folders {
+        if folder.name.len() > 255 {
+            return Err(format!(
+                "Folder name too long: \"{}...\" (max 255 chars)",
+                &folder.name[..50]
+            ));
+        }
+    }
+    for session in &data.sessions {
+        if session.name.len() > 255 {
+            return Err(format!(
+                "Session name too long: \"{}...\" (max 255 chars)",
+                &session.name[..50]
+            ));
+        }
+        if session.hostname.len() > 255 {
+            return Err("Session hostname too long (max 255 chars)".to_string());
+        }
+        if session.username.len() > 128 {
+            return Err("Session username too long (max 128 chars)".to_string());
+        }
+        if session.tags.len() > 1024 {
+            return Err("Session tags too long (max 1024 chars)".to_string());
+        }
+        if !(1..=65535).contains(&session.port) {
+            return Err(format!(
+                "Invalid port {} in session \"{}\"",
+                session.port, session.name
+            ));
+        }
+    }
+
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn db_import(
     state: State<'_, DbState>,
     cred_db: State<'_, CredentialDbState>,
     data: ExportData,
 ) -> Result<String, String> {
+    validate_import_data(&data)?;
+
     let mut folder_count = 0u32;
     let mut session_count = 0u32;
     let mut credential_count = 0u32;

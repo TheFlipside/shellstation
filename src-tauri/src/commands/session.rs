@@ -346,7 +346,13 @@ async fn resolve_jump_chain(
 
         let jump_credential = match cred_db.0.get_credential(jump_id).await? {
             Some(cred) => Zeroizing::new(cred.secret),
-            None => Zeroizing::new(String::new()),
+            None => {
+                return Err(format!(
+                    "No credential stored for jump host \"{}\". \
+                     Edit the session to set a password or key path.",
+                    jump_session.name
+                ));
+            }
         };
 
         hops.push(crate::ssh::JumpHop {

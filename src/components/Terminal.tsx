@@ -30,9 +30,25 @@ function base64Decode(encoded: string): Uint8Array {
 const MIN_FONT_SIZE = 6;
 const MAX_FONT_SIZE = 72;
 
+/** Allowed terminal font families — must match FONT_OPTIONS in SettingsDialog. */
+const ALLOWED_FONTS = new Set([
+  "JetBrains Mono",
+  "Fira Code",
+  "Cascadia Code",
+  "Source Code Pro",
+  "IBM Plex Mono",
+  "Ubuntu Mono",
+  "Hack",
+  "Inconsolata",
+  "DejaVu Sans Mono",
+  "Courier New",
+  "monospace",
+]);
+
 /** Build a CSS font-family string: selected font + monospace fallback. */
 function buildFontFamily(font: string): string {
-  return `"${font}", monospace`;
+  const safe = ALLOWED_FONTS.has(font) ? font : "monospace";
+  return `"${safe}", monospace`;
 }
 
 /** xterm.js color themes keyed by resolved theme name. */

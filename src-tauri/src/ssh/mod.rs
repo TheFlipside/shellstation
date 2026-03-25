@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, ToSocketAddrs};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -263,6 +264,25 @@ impl Default for SshState {
     }
 }
 
+/// Sanitize SSH error messages to avoid leaking internal network topology.
+/// The raw error is already logged server-side; user-facing messages are generic.
+fn sanitize_ssh_error(raw: &str) -> String {
+    let lower = raw.to_lowercase();
+    if lower.contains("connection refused") {
+        "SSH connection failed: connection refused".to_string()
+    } else if lower.contains("timed out") || lower.contains("timeout") {
+        "SSH connection failed: connection timed out".to_string()
+    } else if lower.contains("no route") || lower.contains("network is unreachable") {
+        "SSH connection failed: host unreachable".to_string()
+    } else if lower.contains("name or service not known") || lower.contains("resolve") {
+        "SSH connection failed: hostname could not be resolved".to_string()
+    } else if lower.contains("authentication") {
+        "SSH connection failed: authentication error".to_string()
+    } else {
+        "SSH connection failed".to_string()
+    }
+}
+
 /// Parse a public key credential string. Format: "key_path" or "key_path\npassphrase".
 /// Expands `~` to the user's home directory and validates the path is within it.
 fn parse_key_credential(credential: &str) -> Result<(String, Option<Zeroizing<String>>), String> {
@@ -300,8 +320,8 @@ fn expand_tilde(path: &str) -> String {
     path.to_string()
 }
 
-/// Validate that a key file path resolves to a location within the user's home directory.
-/// Prevents path traversal attacks (e.g. `../../etc/shadow`).
+/// Validate that a key file path resolves to a location within the user's home
+/// directory and is not a known sensitive file. Prevents path traversal attacks.
 fn validate_key_path(path: &str) -> Result<String, String> {
     let home = dirs::home_dir().ok_or("Cannot determine home directory")?;
     let canonical =
@@ -309,6 +329,28 @@ fn validate_key_path(path: &str) -> Result<String, String> {
     if !canonical.starts_with(&home) {
         return Err("Key path must be within your home directory".to_string());
     }
+
+    // Block known sensitive files that are not SSH keys.
+    let rel = canonical
+        .strip_prefix(&home)
+        .unwrap_or(&canonical)
+        .to_string_lossy();
+    let blocked = [
+        ".bash_history",
+        ".zsh_history",
+        ".bashrc",
+        ".profile",
+        ".zshrc",
+        ".netrc",
+        ".gnupg/",
+        ".config/shellstation/config.json",
+    ];
+    for pattern in &blocked {
+        if rel.starts_with(pattern) {
+            return Err(format!("Path '{path}' is not an SSH key file"));
+        }
+    }
+
     Ok(canonical.to_string_lossy().to_string())
 }
 
@@ -329,6 +371,68 @@ fn ssh_config() -> Arc<client::Config> {
     })
 }
 
+/// Check whether an IP address belongs to a restricted (non-routable) range.
+fn is_restricted_ip(addr: &IpAddr) -> bool {
+    match addr {
+        IpAddr::V4(ip) => {
+            ip.is_loopback()                                     // 127.0.0.0/8
+                || ip.is_link_local()                            // 169.254.0.0/16
+                || ip.octets()[0] == 10                          // 10.0.0.0/8
+                || (ip.octets()[0] == 172
+                    && (16..=31).contains(&ip.octets()[1]))      // 172.16.0.0/12
+                || (ip.octets()[0] == 192 && ip.octets()[1] == 168) // 192.168.0.0/16
+                || ip.is_unspecified()                           // 0.0.0.0
+                || ip.is_broadcast()                             // 255.255.255.255
+                || *ip == Ipv4Addr::new(100, 64, 0, 0)          // shared address (100.64/10 start)
+                || (ip.octets()[0] == 100
+                    && (64..=127).contains(&ip.octets()[1])) // 100.64.0.0/10 (CGNAT)
+        }
+        IpAddr::V6(ip) => {
+            ip.is_loopback()                                     // ::1
+                || ip.is_unspecified()                           // ::
+                || *ip == Ipv6Addr::new(0xfe80, 0, 0, 0, 0, 0, 0, 0) // simplified link-local check
+                || ip.segments()[0] == 0xfe80                    // fe80::/10
+                || ip.segments()[0] == 0xfc00                    // fc00::/7 (ULA)
+                || ip.segments()[0] == 0xfd00 // fd00::/8 (ULA)
+        }
+    }
+}
+
+/// Validate that a hostname does not resolve to a restricted IP range.
+/// This prevents SSRF attacks through SSH tunnels targeting internal services.
+fn validate_ssh_target(host: &str, port: u16) -> Result<(), String> {
+    // Try parsing as a literal IP first.
+    if let Ok(ip) = host.parse::<IpAddr>() {
+        if is_restricted_ip(&ip) {
+            return Err(format!(
+                "Connection to restricted address {host} is not allowed"
+            ));
+        }
+        return Ok(());
+    }
+
+    // Resolve hostname and check all resulting addresses.
+    let addrs: Vec<_> = format!("{host}:{port}")
+        .to_socket_addrs()
+        .map_err(|e| format!("Cannot resolve host '{host}': {e}"))?
+        .collect();
+
+    if addrs.is_empty() {
+        return Err(format!("Host '{host}' did not resolve to any address"));
+    }
+
+    for addr in &addrs {
+        if is_restricted_ip(&addr.ip()) {
+            return Err(format!(
+                "Host '{host}' resolves to restricted address {} — connection not allowed",
+                addr.ip()
+            ));
+        }
+    }
+
+    Ok(())
+}
+
 /// Establish an SSH connection, optionally through a chain of jump hosts.
 ///
 /// Returns the final `Handle` to the target host, plus a list of intermediate
@@ -341,6 +445,12 @@ async fn connect_with_hops(
     app_handle: &AppHandle,
     verify_senders: &mut HashMap<String, oneshot::Sender<bool>>,
 ) -> Result<(client::Handle<SshHandler>, Vec<client::Handle<SshHandler>>), String> {
+    // Validate all targets against restricted IP ranges (SSRF prevention).
+    validate_ssh_target(target_host, target_port)?;
+    for hop in jump_hops {
+        validate_ssh_target(&hop.host, hop.port)?;
+    }
+
     if jump_hops.is_empty() {
         // Direct connection — no jump hosts.
         let config = ssh_config();
@@ -359,7 +469,7 @@ async fn connect_with_hops(
             .await
             .map_err(|e| {
                 error!(host = %target_host, port = %target_port, error = %e, "SSH connection failed");
-                format!("SSH connection failed: {e}")
+                sanitize_ssh_error(&e.to_string())
             })?;
 
         return Ok((handle, Vec::new()));
@@ -383,15 +493,19 @@ async fn connect_with_hops(
         verify_rx: Arc::new(Mutex::new(Some(verify_rx))),
     };
 
-    let mut current_handle =
-        client::connect(config, (first_hop.host.as_str(), first_hop.port), handler)
-            .await
-            .map_err(|e| {
-                format!(
-                    "SSH hop to {}:{} failed: {e}",
-                    first_hop.host, first_hop.port
-                )
-            })?;
+    let mut current_handle = client::connect(
+        config,
+        (first_hop.host.as_str(), first_hop.port),
+        handler,
+    )
+    .await
+    .map_err(|e| {
+        error!(host = %first_hop.host, port = %first_hop.port, error = %e, "SSH hop failed");
+        format!(
+            "SSH jump host connection failed: {}",
+            sanitize_ssh_error(&e.to_string())
+        )
+    })?;
 
     // Authenticate the first hop.
     authenticate_handle(
@@ -429,7 +543,13 @@ async fn connect_with_hops(
 
         current_handle = client::connect_stream(config, stream, handler)
             .await
-            .map_err(|e| format!("SSH hop to {}:{} failed: {e}", hop.host, hop.port))?;
+            .map_err(|e| {
+                error!(host = %hop.host, port = %hop.port, error = %e, "SSH hop failed");
+                format!(
+                    "SSH jump host connection failed: {}",
+                    sanitize_ssh_error(&e.to_string())
+                )
+            })?;
 
         authenticate_handle(
             &mut current_handle,
@@ -465,7 +585,10 @@ async fn connect_with_hops(
 
     let target_handle = client::connect_stream(config, stream, handler)
         .await
-        .map_err(|e| format!("SSH connection to {target_host}:{target_port} failed: {e}"))?;
+        .map_err(|e| {
+            error!(host = %target_host, port = %target_port, error = %e, "SSH target connection failed");
+            sanitize_ssh_error(&e.to_string())
+        })?;
 
     Ok((target_handle, bastion_handles))
 }

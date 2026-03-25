@@ -340,7 +340,9 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
         <div
           className="settings-font-preview"
           style={{
-            fontFamily: `"${terminalFontFamily}", monospace`,
+            fontFamily: FONT_OPTIONS.includes(terminalFontFamily)
+              ? `"${terminalFontFamily}", monospace`
+              : "monospace",
             fontSize: `${String(terminalFontSize)}px`,
           }}
         >
