@@ -127,6 +127,10 @@ body,
   border-bottom: 2px solid var(--color-blue);
 }
 
+.tab-drop-target {
+  border-left: 2px solid var(--color-blue);
+}
+
 .tab-title {
   overflow: hidden;
   text-overflow: ellipsis;

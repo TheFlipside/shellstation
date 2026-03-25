@@ -21,6 +21,7 @@ interface TerminalState {
   removeTab: (id: string) => void;
   setActiveTab: (id: string) => void;
   updateTabTitle: (id: string, title: string) => void;
+  reorderTabs: (fromIndex: number, toIndex: number) => void;
 }
 
 export const useTerminalStore = create<TerminalState>((set, get) => ({
@@ -61,5 +62,15 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
     set((state) => ({
       tabs: state.tabs.map((t) => (t.id === id ? { ...t, title } : t)),
     }));
+  },
+
+  reorderTabs: (fromIndex: number, toIndex: number) => {
+    set((state) => {
+      if (fromIndex === toIndex) return state;
+      const newTabs = [...state.tabs];
+      const [moved] = newTabs.splice(fromIndex, 1);
+      newTabs.splice(toIndex, 0, moved);
+      return { tabs: newTabs };
+    });
   },
 }));

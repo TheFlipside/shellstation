@@ -17,7 +17,77 @@ interface TerminalTabsProps {
 
 export function TerminalTabs({ uiScale }: TerminalTabsProps): React.JSX.Element {
   const { t } = useTranslation();
-  const { tabs, activeTabId, addTab, removeTab, setActiveTab } = useTerminalStore();
+  const { tabs, activeTabId, addTab, removeTab, setActiveTab, reorderTabs } = useTerminalStore();
+  const dragIndexRef = useRef<number | null>(null);
+  const dragStartXRef = useRef(0);
+  const isDraggingRef = useRef(false);
+  const tabBarRef = useRef<HTMLDivElement>(null);
+  const [dropTargetIndex, setDropTargetIndex] = useState<number | null>(null);
+
+  // Stable insertion-order list of tab IDs for rendering Terminal components.
+  // Reordering tabs in the store must NOT reorder DOM nodes, because xterm.js
+  // loses its WebGL context when its container is detached/reattached.
+  const stableTabIdsRef = useRef<string[]>([]);
+  const currentIds = new Set(tabs.map((t) => t.id));
+  // Append any newly added tabs.
+  for (const tab of tabs) {
+    if (!stableTabIdsRef.current.includes(tab.id)) {
+      stableTabIdsRef.current.push(tab.id);
+    }
+  }
+  // Remove closed tabs.
+  stableTabIdsRef.current = stableTabIdsRef.current.filter((id) => currentIds.has(id));
+  const tabById = new Map(tabs.map((t) => [t.id, t]));
+
+  const getTabIndexAtX = useCallback(
+    (clientX: number): number => {
+      if (!tabBarRef.current) return 0;
+      const tabElements = tabBarRef.current.querySelectorAll<HTMLElement>(".tab:not(.tab-new)");
+      for (let i = 0; i < tabElements.length; i++) {
+        const rect = tabElements[i].getBoundingClientRect();
+        if (clientX < rect.left + rect.width / 2) return i;
+      }
+      return tabs.length - 1;
+    },
+    [tabs.length],
+  );
+
+  const DRAG_THRESHOLD = 8;
+
+  const handlePointerDown = useCallback((e: React.PointerEvent, index: number) => {
+    if (e.button !== 0) return;
+    if ((e.target as HTMLElement).closest(".tab-close")) return;
+    dragIndexRef.current = index;
+    dragStartXRef.current = e.clientX;
+    isDraggingRef.current = false;
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+  }, []);
+
+  const handlePointerMove = useCallback(
+    (e: React.PointerEvent) => {
+      if (dragIndexRef.current === null) return;
+      if (!isDraggingRef.current) {
+        if (Math.abs(e.clientX - dragStartXRef.current) < DRAG_THRESHOLD) return;
+        isDraggingRef.current = true;
+      }
+      setDropTargetIndex(getTabIndexAtX(e.clientX));
+    },
+    [getTabIndexAtX],
+  );
+
+  const handlePointerUp = useCallback(
+    (e: React.PointerEvent) => {
+      if (dragIndexRef.current === null) return;
+      if (isDraggingRef.current) {
+        const toIndex = getTabIndexAtX(e.clientX);
+        reorderTabs(dragIndexRef.current, toIndex);
+      }
+      dragIndexRef.current = null;
+      isDraggingRef.current = false;
+      setDropTargetIndex(null);
+    },
+    [getTabIndexAtX, reorderTabs],
+  );
   const { closeOnDisconnect, openLocalOnStartup } = useSettingsStore();
   const [showQuickConnect, setShowQuickConnect] = useState(false);
   const [hostVerifyRequest, setHostVerifyRequest] = useState<HostVerifyRequest | null>(null);
@@ -117,15 +187,20 @@ export function TerminalTabs({ uiScale }: TerminalTabsProps): React.JSX.Element 
 
   return (
     <div className="terminal-container">
-      <div className="tab-bar" style={{ zoom: uiScale / 100 }}>
-        {tabs.map((tab) => (
+      <div className="tab-bar" ref={tabBarRef} style={{ zoom: uiScale / 100 }}>
+        {tabs.map((tab, index) => (
           <button
             key={tab.id}
-            className={`tab ${tab.id === activeTabId ? "tab-active" : ""}`}
+            className={`tab ${tab.id === activeTabId ? "tab-active" : ""}${dropTargetIndex === index && dragIndexRef.current !== null && dragIndexRef.current !== index ? " tab-drop-target" : ""}`}
             onClick={() => {
               setActiveTab(tab.id);
             }}
             type="button"
+            onPointerDown={(e) => {
+              handlePointerDown(e, index);
+            }}
+            onPointerMove={handlePointerMove}
+            onPointerUp={handlePointerUp}
           >
             <span className="tab-title">
               {tab.type === "ssh" ? "\u{1F310} " : ""}
@@ -172,21 +247,25 @@ export function TerminalTabs({ uiScale }: TerminalTabsProps): React.JSX.Element 
         </button>
       </div>
       <div className="terminal-pane">
-        {tabs.map((tab) => (
-          <Terminal
-            key={tab.id}
-            sessionId={tab.id}
-            sessionType={tab.type}
-            visible={tab.id === activeTabId}
-            onExit={
-              closeOnDisconnect
-                ? () => {
-                    destroyTab(tab.id).catch(noop);
-                  }
-                : undefined
-            }
-          />
-        ))}
+        {stableTabIdsRef.current.map((id) => {
+          const tab = tabById.get(id);
+          if (!tab) return null;
+          return (
+            <Terminal
+              key={tab.id}
+              sessionId={tab.id}
+              sessionType={tab.type}
+              visible={tab.id === activeTabId}
+              onExit={
+                closeOnDisconnect
+                  ? () => {
+                      destroyTab(tab.id).catch(noop);
+                    }
+                  : undefined
+              }
+            />
+          );
+        })}
       </div>
       {showQuickConnect && (
         <QuickConnect
