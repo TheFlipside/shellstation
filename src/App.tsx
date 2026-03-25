@@ -8,6 +8,7 @@ import { DatabaseStatusBanner } from "./components/DatabaseStatusBanner";
 import { SessionSidebar } from "./components/SessionSidebar";
 import { SettingsDialog } from "./components/SettingsDialog";
 import { TerminalTabs } from "./components/TerminalTabs";
+import { useTheme } from "./hooks/useTheme";
 import { useSettingsStore } from "./stores/settingsStore";
 import { useTerminalStore } from "./stores/terminalStore";
 
@@ -20,6 +21,7 @@ interface DbStatus {
 function App(): React.JSX.Element {
   const { t } = useTranslation();
   const uiScale = useSettingsStore((s) => s.uiScale);
+  useTheme();
   const [sidebarWidth, setSidebarWidth] = useState(260);
   const [showQuitConfirm, setShowQuitConfirm] = useState(false);
   const [dbStatus, setDbStatus] = useState<DbStatus | null>(null);

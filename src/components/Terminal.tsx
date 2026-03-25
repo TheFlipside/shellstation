@@ -8,6 +8,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { SessionType } from "../stores/terminalStore";
 import { useSettingsStore } from "../stores/settingsStore";
+import { useTheme, type ResolvedTheme } from "../hooks/useTheme";
 
 interface TerminalProps {
   sessionId: string;
@@ -34,6 +35,54 @@ function buildFontFamily(font: string): string {
   return `"${font}", monospace`;
 }
 
+/** xterm.js color themes keyed by resolved theme name. */
+const XTERM_THEMES: Record<ResolvedTheme, Record<string, string>> = {
+  dark: {
+    background: "#1e1e2e",
+    foreground: "#cdd6f4",
+    cursor: "#f5e0dc",
+    selectionBackground: "#585b7066",
+    black: "#45475a",
+    red: "#f38ba8",
+    green: "#a6e3a1",
+    yellow: "#f9e2af",
+    blue: "#89b4fa",
+    magenta: "#f5c2e7",
+    cyan: "#94e2d5",
+    white: "#bac2de",
+    brightBlack: "#585b70",
+    brightRed: "#f38ba8",
+    brightGreen: "#a6e3a1",
+    brightYellow: "#f9e2af",
+    brightBlue: "#89b4fa",
+    brightMagenta: "#f5c2e7",
+    brightCyan: "#94e2d5",
+    brightWhite: "#a6adc8",
+  },
+  light: {
+    background: "#eff1f5",
+    foreground: "#4c4f69",
+    cursor: "#dc8a78",
+    selectionBackground: "#acb0be66",
+    black: "#5c5f77",
+    red: "#d20f39",
+    green: "#40a02b",
+    yellow: "#df8e1d",
+    blue: "#1e66f5",
+    magenta: "#ea76cb",
+    cyan: "#179299",
+    white: "#acb0be",
+    brightBlack: "#6c6f85",
+    brightRed: "#d20f39",
+    brightGreen: "#40a02b",
+    brightYellow: "#df8e1d",
+    brightBlue: "#1e66f5",
+    brightMagenta: "#ea76cb",
+    brightCyan: "#179299",
+    brightWhite: "#bcc0cc",
+  },
+};
+
 // eslint-disable-next-line @typescript-eslint/no-empty-function
 const noop = (): void => {};
 
@@ -51,6 +100,7 @@ export function Terminal({
 
   const { terminalFontFamily, terminalFontSize, copyOnSelect, pasteOnRightClick } =
     useSettingsStore();
+  const resolvedTheme = useTheme();
 
   // Per-tab zoom offset — not persisted, local to this terminal instance.
   const [localZoomOffset, setLocalZoomOffset] = useState(0);
@@ -94,28 +144,7 @@ export function Terminal({
       cursorBlink: true,
       fontSize: terminalFontSize,
       fontFamily: buildFontFamily(terminalFontFamily),
-      theme: {
-        background: "#1e1e2e",
-        foreground: "#cdd6f4",
-        cursor: "#f5e0dc",
-        selectionBackground: "#585b7066",
-        black: "#45475a",
-        red: "#f38ba8",
-        green: "#a6e3a1",
-        yellow: "#f9e2af",
-        blue: "#89b4fa",
-        magenta: "#f5c2e7",
-        cyan: "#94e2d5",
-        white: "#bac2de",
-        brightBlack: "#585b70",
-        brightRed: "#f38ba8",
-        brightGreen: "#a6e3a1",
-        brightYellow: "#f9e2af",
-        brightBlue: "#89b4fa",
-        brightMagenta: "#f5c2e7",
-        brightCyan: "#94e2d5",
-        brightWhite: "#a6adc8",
-      },
+      theme: XTERM_THEMES[resolvedTheme],
     });
 
     const fitAddon = new FitAddon();
@@ -272,14 +301,15 @@ export function Terminal({
     };
   }, [sessionId, sessionType, writeCmd, resizeCmd, handleResize]);
 
-  // Apply font family and effective font size changes to a live terminal.
+  // Apply font family, font size, and theme changes to a live terminal.
   useEffect(() => {
     const term = termRef.current;
     if (!term) return;
     term.options.fontFamily = buildFontFamily(terminalFontFamily);
     term.options.fontSize = effectiveFontSize;
+    term.options.theme = XTERM_THEMES[resolvedTheme];
     fitAddonRef.current?.fit();
-  }, [terminalFontFamily, effectiveFontSize]);
+  }, [terminalFontFamily, effectiveFontSize, resolvedTheme]);
 
   // Re-fit and focus when visibility changes.
   useEffect(() => {

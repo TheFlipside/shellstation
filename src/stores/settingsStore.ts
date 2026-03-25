@@ -2,9 +2,12 @@ import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import i18n from "../i18n";
 
+export type ThemeMode = "dark" | "light" | "system";
+
 interface SettingsState {
   language: string;
   uiScale: number;
+  themeMode: ThemeMode;
   closeOnDisconnect: boolean;
   openLocalOnStartup: boolean;
   confirmOnQuit: boolean;
@@ -14,6 +17,7 @@ interface SettingsState {
   pasteOnRightClick: boolean;
   setLanguage: (lang: string) => void;
   setUiScale: (scale: number) => void;
+  setThemeMode: (mode: ThemeMode) => void;
   setCloseOnDisconnect: (value: boolean) => void;
   setOpenLocalOnStartup: (value: boolean) => void;
   setConfirmOnQuit: (value: boolean) => void;
@@ -28,6 +32,7 @@ export const useSettingsStore = create<SettingsState>()(
     (set) => ({
       language: "",
       uiScale: 100,
+      themeMode: "dark" as ThemeMode,
       closeOnDisconnect: false,
       openLocalOnStartup: true,
       confirmOnQuit: true,
@@ -41,6 +46,9 @@ export const useSettingsStore = create<SettingsState>()(
       },
       setUiScale: (scale: number) => {
         set({ uiScale: scale });
+      },
+      setThemeMode: (mode: ThemeMode) => {
+        set({ themeMode: mode });
       },
       setCloseOnDisconnect: (value: boolean) => {
         set({ closeOnDisconnect: value });

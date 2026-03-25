@@ -48,6 +48,8 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
     setLanguage,
     uiScale,
     setUiScale,
+    themeMode,
+    setThemeMode,
     closeOnDisconnect,
     setCloseOnDisconnect,
     openLocalOnStartup,
@@ -231,6 +233,20 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
                 {String(scale)}%
               </option>
             ))}
+          </select>
+        </div>
+        <div className="dialog-field">
+          <label htmlFor="settings-theme">{t("settings.themeLabel")}</label>
+          <select
+            id="settings-theme"
+            value={themeMode}
+            onChange={(e) => {
+              setThemeMode(e.target.value as "dark" | "light" | "system");
+            }}
+          >
+            <option value="dark">{t("settings.themeDark")}</option>
+            <option value="light">{t("settings.themeLight")}</option>
+            <option value="system">{t("settings.themeSystem")}</option>
           </select>
         </div>
         <h4 className="settings-section-title">{t("settings.sessions")}</h4>
