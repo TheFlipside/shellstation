@@ -28,7 +28,16 @@ pub fn run() {
         .manage(PtyState::default())
         .manage(SshState::default())
         .plugin(tauri_plugin_opener::init())
-        .setup(|_app| {
+        .setup(|app| {
+            // Set window icon at runtime (needed on Linux outside of bundled installs)
+            if let Some(window) = app.get_webview_window("main") {
+                if let Ok(icon) = tauri::image::Image::from_bytes(
+                    include_bytes!("../icons/128x128.png"),
+                ) {
+                    let _ = window.set_icon(icon);
+                }
+            }
+
             let db_dir = dirs::config_dir()
                 .unwrap_or_else(|| std::path::PathBuf::from("."))
                 .join("shellstation");
@@ -46,7 +55,7 @@ pub fn run() {
             })?;
 
             let provider = SqliteProvider::new(pool);
-            _app.manage(DbState(Arc::new(provider)));
+            app.manage(DbState(Arc::new(provider)));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
