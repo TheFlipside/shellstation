@@ -1,24 +1,31 @@
 import { create } from "zustand";
 
-export type SessionType = "local" | "ssh";
+export type SessionType = "local" | "ssh" | "telnet";
 
 export interface SshMeta {
   host: string;
   username: string;
 }
 
+export interface TelnetMeta {
+  host: string;
+  port: number;
+}
+
+export type TabMeta = SshMeta | TelnetMeta;
+
 export interface TerminalTab {
   id: string;
   title: string;
   type: SessionType;
-  meta?: SshMeta;
+  meta?: TabMeta;
 }
 
 interface TerminalState {
   tabs: TerminalTab[];
   activeTabId: string | null;
   connectionError: string | null;
-  addTab: (id: string, title: string, type: SessionType, meta?: SshMeta) => void;
+  addTab: (id: string, title: string, type: SessionType, meta?: TabMeta) => void;
   removeTab: (id: string) => void;
   setActiveTab: (id: string) => void;
   updateTabTitle: (id: string, title: string) => void;
@@ -31,7 +38,7 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
   activeTabId: null,
   connectionError: null,
 
-  addTab: (id: string, title: string, type_: SessionType, meta?: SshMeta) => {
+  addTab: (id: string, title: string, type_: SessionType, meta?: TabMeta) => {
     set((state) => ({
       tabs: [...state.tabs, { id, title, type: type_, meta }],
       activeTabId: id,

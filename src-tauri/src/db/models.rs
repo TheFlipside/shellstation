@@ -48,6 +48,7 @@ pub struct UpdateSession {
     pub name: Option<String>,
     pub hostname: Option<String>,
     pub port: Option<i32>,
+    pub protocol: Option<String>,
     pub username: Option<String>,
     pub auth_method: Option<String>,
     pub jump_host_id: Option<Option<Uuid>>,

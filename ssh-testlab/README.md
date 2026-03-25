@@ -1,8 +1,8 @@
 # ssh-testlab
 
-Lightweight Docker-based SSH test environment with a jumphost and a target node.
-Designed for developing and testing SSH terminal managers, ProxyJump workflows,
-and authentication methods.
+Lightweight Docker-based SSH and Telnet test environment with a jumphost, an SSH
+target, and a Telnet target. Designed for developing and testing terminal
+managers, ProxyJump workflows, and authentication methods.
 
 ## Architecture
 
@@ -11,13 +11,17 @@ and authentication methods.
 │  Host/       │ :2222 │  jumphost        │  :22  │  target          │
 │  Workstation │──────►│  (TCP fwd: yes)  │──────►│  (TCP fwd: no)   │
 │              │       │  Alpine + sshd   │       │  Alpine + sshd   │
-└─────────────┘       └─────────────────┘       └─────────────────┘
-                              │         sshlab bridge         │
-                              └───────────────────────────────┘
+│              │       └─────────────────┘       └─────────────────┘
+│              │                │       sshlab bridge        │
+│              │       ┌────────┴────────────────────────────┘
+│              │ :2323 │  telnet-target    │
+│              │──────►│  Alpine + telnetd │
+└─────────────┘       └─────────────────┘
 ```
 
 - **jumphost** — exposed on `127.0.0.1:2222`, TCP forwarding enabled.
 - **target** — no published ports, reachable only through the jumphost.
+- **telnet-target** — exposed on `127.0.0.1:2323`, busybox telnetd with login.
 
 ## Quick Start
 
@@ -60,6 +64,17 @@ ssh -p 2222 -o PreferredAuthentications=password testuser@127.0.0.1
 # Force key only (no password fallback)
 ssh -p 2222 -o PreferredAuthentications=publickey -i keys/id_ed25519 testuser@127.0.0.1
 ```
+
+## Testing Telnet
+
+```bash
+# Direct to telnet-target (login prompt appears interactively)
+telnet 127.0.0.1 2323
+# Username: testuser
+# Password: testpass
+```
+
+The Telnet container uses the same credentials as the SSH containers.
 
 ## SSH Config Snippet
 

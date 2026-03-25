@@ -235,6 +235,11 @@ impl DatabaseProvider for PostgresProvider {
             values.push(BindVal::Int(port));
             idx += 1;
         }
+        if let Some(ref protocol) = update.protocol {
+            sets.push(format!("protocol = ${idx}"));
+            values.push(BindVal::Text(protocol.clone()));
+            idx += 1;
+        }
         if let Some(ref username) = update.username {
             sets.push(format!("username = ${idx}"));
             values.push(BindVal::Text(username.clone()));

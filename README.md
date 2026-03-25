@@ -1,6 +1,6 @@
 # ShellStation
 
-## Cross-Platform Terminal Manager & SSH Client
+## Cross-Platform Terminal Manager & SSH/Telnet Client
 
 **Project Design Document**
 **Version 1.0 — March 2026**
@@ -26,9 +26,9 @@
 
 ## 1. Executive Summary
 
-ShellStation is a cross-platform, open-source terminal manager and SSH client designed to replace tools like mRemoteNG and SecureCRT. It addresses the critical shortcomings of both: mRemoteNG is Windows-only and relies on XML storage that degrades with large session datasets; SecureCRT is proprietary, expensive, and shares the same XML scaling limitation.
+ShellStation is a cross-platform, open-source terminal manager and SSH/Telnet client designed to replace tools like mRemoteNG and SecureCRT. It addresses the critical shortcomings of both: mRemoteNG is Windows-only and relies on XML storage that degrades with large session datasets; SecureCRT is proprietary, expensive, and shares the same XML scaling limitation.
 
-ShellStation provides a native terminal emulator with built-in SSH support (no external PuTTY dependency), a scalable database backend supporting both local SQLite and centralized PostgreSQL deployments, full SSH jump host (ProxyJump) chaining, and a command broadcast system for multi-session automation.
+ShellStation provides a native terminal emulator with built-in SSH and Telnet support (no external PuTTY dependency), a scalable database backend supporting both local SQLite and centralized PostgreSQL deployments, full SSH jump host (ProxyJump) chaining, and a command broadcast system for multi-session automation.
 
 ---
 
@@ -54,7 +54,7 @@ ShellStation provides a native terminal emulator with built-in SSH support (no e
 |---|---|
 | Cross-platform | Eliminates Windows lock-in; supports Linux, macOS, Windows equally. |
 | Scalable storage | SQLite for single-user, PostgreSQL for teams; replaces XML entirely. |
-| Built-in terminal/SSH | No external PuTTY or OpenSSH process dependency. |
+| Built-in terminal/SSH/Telnet | No external PuTTY or OpenSSH process dependency. |
 | SSH jump host chaining | First-class support for ProxyJump with arbitrary hop depth. |
 | Command broadcast | Send predefined command sets to one or multiple active sessions. |
 | Multi-user shared DB | Central PostgreSQL instance allows team-wide session sharing. |
@@ -161,7 +161,7 @@ Passwords and private key passphrases are never stored in the database. Instead,
 
 ### 5.2 SSH Connection Management
 
-- **Protocols:** SSH2 (via russh). Future consideration for Telnet and serial as separate protocol handlers.
+- **Protocols:** SSH2 (via russh) and Telnet (RFC 854, with NAWS window size negotiation). Future consideration for serial as a separate protocol handler.
 - **Authentication methods:** Password, public key (RSA, Ed25519, ECDSA), keyboard-interactive, and agent forwarding.
 - **Jump host chaining:** Any saved session can be designated as a jump host for another session. Chains of arbitrary depth are supported (A → B → C → target).
 - **Connection pooling:** Optionally keep bastion connections alive for reuse when opening multiple sessions through the same jump host.
@@ -312,7 +312,7 @@ ShellStation enforces a zero-warning, zero-lint-error policy across the entire c
 
 The following features are explicitly out of scope for the initial release but are architecturally accounted for in the design:
 
-- Telnet and serial port protocol support (additional protocol handlers behind the same trait interface).
+- Serial port protocol support (additional protocol handler behind the same trait interface).
 - SFTP/SCP file transfer panel integrated into session tabs.
 - Plugin system for custom protocol handlers and UI extensions.
 - Session recording and playback (asciinema-compatible format).

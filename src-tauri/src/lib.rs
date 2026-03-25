@@ -7,6 +7,7 @@ mod credentials;
 mod db;
 mod pty;
 mod ssh;
+mod telnet;
 
 use std::sync::Arc;
 
@@ -21,6 +22,7 @@ use sqlx::sqlite::SqliteConnectOptions;
 use sqlx::SqlitePool;
 use ssh::SshState;
 use tauri::Manager;
+use telnet::TelnetState;
 use tracing_subscriber::EnvFilter;
 
 /// Initialize the local SQLite pool.
@@ -87,6 +89,7 @@ pub fn run() {
     tauri::Builder::default()
         .manage(PtyState::default())
         .manage(SshState::default())
+        .manage(TelnetState::default())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
@@ -230,6 +233,11 @@ pub fn run() {
             commands::ssh_resize,
             commands::ssh_disconnect,
             commands::ssh_host_verify_response,
+            // Telnet
+            commands::telnet_connect,
+            commands::telnet_write,
+            commands::telnet_resize,
+            commands::telnet_disconnect,
             // Folders
             commands::folder_create,
             commands::folder_list,

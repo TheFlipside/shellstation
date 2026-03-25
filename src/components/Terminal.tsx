@@ -136,8 +136,14 @@ export function Terminal({
   const baseFontSizeRef = useRef(terminalFontSize);
   baseFontSizeRef.current = terminalFontSize;
 
-  const writeCmd = sessionType === "ssh" ? "ssh_write" : "pty_write";
-  const resizeCmd = sessionType === "ssh" ? "ssh_resize" : "pty_resize";
+  const writeCmd =
+    sessionType === "ssh" ? "ssh_write" : sessionType === "telnet" ? "telnet_write" : "pty_write";
+  const resizeCmd =
+    sessionType === "ssh"
+      ? "ssh_resize"
+      : sessionType === "telnet"
+        ? "telnet_resize"
+        : "pty_resize";
 
   const handleResize = useCallback(() => {
     const fit = fitAddonRef.current;

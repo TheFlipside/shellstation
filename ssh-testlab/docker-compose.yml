@@ -48,6 +48,22 @@ services:
     networks:
       - sshlab
 
+  telnet-target:
+    build:
+      context: .
+      dockerfile: Dockerfile.telnet
+      args:
+        TEST_USER: testuser
+        TEST_PASSWORD: testpass
+    container_name: telnet-target
+    hostname: telnet-target
+    ports:
+      - "2323:23"
+    environment:
+      TEST_USER: testuser
+    networks:
+      - sshlab
+
 networks:
   sshlab:
     driver: bridge

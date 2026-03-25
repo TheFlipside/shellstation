@@ -62,6 +62,7 @@ export interface CreateSessionParams {
   name: string;
   hostname: string;
   port: number;
+  protocol?: string;
   username: string;
   authMethod: string;
   tags: string;
@@ -75,6 +76,7 @@ export interface UpdateSessionParams {
   name?: string;
   hostname?: string;
   port?: number;
+  protocol?: string;
   username?: string;
   authMethod?: string;
   tags?: string;
@@ -155,6 +157,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       name: params.name,
       hostname: params.hostname,
       port: params.port,
+      protocol: params.protocol ?? "ssh",
       username: params.username,
       authMethod: params.authMethod,
       tags: params.tags,
@@ -172,6 +175,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       name: params.name ?? null,
       hostname: params.hostname ?? null,
       port: params.port ?? null,
+      protocol: params.protocol ?? null,
       username: params.username ?? null,
       authMethod: params.authMethod ?? null,
       tags: params.tags ?? null,
@@ -244,9 +248,15 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       restrictPrivateIps,
     });
 
-    useTerminalStore.getState().addTab(connId, `${session.username}@${session.hostname}`, "ssh", {
-      host: session.hostname,
-      username: session.username,
-    });
+    const isTelnet = session.protocol === "telnet";
+    const tabType = isTelnet ? "telnet" : "ssh";
+    const tabTitle = isTelnet
+      ? `${session.hostname}:${String(session.port)}`
+      : `${session.username}@${session.hostname}`;
+    const meta = isTelnet
+      ? { host: session.hostname, port: session.port }
+      : { host: session.hostname, username: session.username };
+
+    useTerminalStore.getState().addTab(connId, tabTitle, tabType, meta);
   },
 }));

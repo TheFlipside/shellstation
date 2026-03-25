@@ -2,7 +2,7 @@
 
 ## What This Project Does
 
-ShellStation is a cross-platform, open-source terminal manager and SSH client designed to replace tools like mRemoteNG and SecureCRT.
+ShellStation is a cross-platform, open-source terminal manager and SSH/Telnet client designed to replace tools like mRemoteNG and SecureCRT.
 
 ## Stack
 
@@ -15,6 +15,7 @@ ShellStation is a cross-platform, open-source terminal manager and SSH client de
 ```
 src-tauri/src/main.rs        → Tauri application entry point and command registration.
 src-tauri/src/ssh/      → SSH connection manager, jump host logic, channel handling (russh).
+src-tauri/src/telnet/   → Telnet connection manager (RFC 854, NAWS).
 src-tauri/src/db/       → Database abstraction trait, SQLite and PostgreSQL implementations, migrations.
 src-tauri/src/commands/       → Tauri IPC command handlers (session CRUD, connect, broadcast, etc.).
 dsrc-tauri/src/credentials/       → Keychain integration via keyring-rs.

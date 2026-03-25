@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { useEscapeKey } from "../hooks/useEscapeKey";
 
 export interface QuickConnectParams {
+  protocol: "ssh" | "telnet";
   host: string;
   port: number;
   username: string;
@@ -18,6 +19,7 @@ interface QuickConnectProps {
 export function QuickConnect({ onConnect, onCancel }: QuickConnectProps): React.JSX.Element {
   const { t } = useTranslation();
   useEscapeKey(onCancel);
+  const [protocol, setProtocol] = useState<"ssh" | "telnet">("ssh");
   const [host, setHost] = useState("");
   const [port, setPort] = useState("22");
   const [username, setUsername] = useState("");
@@ -26,12 +28,13 @@ export function QuickConnect({ onConnect, onCancel }: QuickConnectProps): React.
 
   const handleSubmit = (e: React.SyntheticEvent): void => {
     e.preventDefault();
-    if (!host.trim() || !username.trim()) {
-      return;
-    }
+    if (!host.trim()) return;
+    if (protocol === "ssh" && !username.trim()) return;
+    const defaultPort = protocol === "telnet" ? 23 : 22;
     onConnect({
+      protocol,
       host: host.trim(),
-      port: Number(port) || 22,
+      port: Number(port) || defaultPort,
       username: username.trim(),
       authMethod,
       authCredential: credential,
@@ -53,6 +56,27 @@ export function QuickConnect({ onConnect, onCancel }: QuickConnectProps): React.
           {t("quickConnect.title")}
         </h3>
         <form onSubmit={handleSubmit}>
+          <div className="dialog-field">
+            <label htmlFor="qc-protocol">{t("session.protocolLabel")}</label>
+            <select
+              id="qc-protocol"
+              value={protocol}
+              onChange={(e) => {
+                const p = e.target.value as "ssh" | "telnet";
+                setProtocol(p);
+                setPort((prev) =>
+                  (prev === "22" && p === "telnet") || (prev === "23" && p === "ssh")
+                    ? p === "telnet"
+                      ? "23"
+                      : "22"
+                    : prev,
+                );
+              }}
+            >
+              <option value="ssh">SSH</option>
+              <option value="telnet">Telnet</option>
+            </select>
+          </div>
           <div className="dialog-field">
             <label htmlFor="qc-host">{t("quickConnect.hostLabel")}</label>
             <input
@@ -79,49 +103,55 @@ export function QuickConnect({ onConnect, onCancel }: QuickConnectProps): React.
               max={65535}
             />
           </div>
-          <div className="dialog-field">
-            <label htmlFor="qc-username">{t("session.usernameLabel")}</label>
-            <input
-              id="qc-username"
-              type="text"
-              value={username}
-              onChange={(e) => {
-                setUsername(e.target.value);
-              }}
-              placeholder={t("session.usernamePlaceholder")}
-            />
-          </div>
-          <div className="dialog-field">
-            <label htmlFor="qc-auth">{t("session.authMethodLabel")}</label>
-            <select
-              id="qc-auth"
-              value={authMethod}
-              onChange={(e) => {
-                setAuthMethod(e.target.value as "password" | "publickey");
-              }}
-            >
-              <option value="password">{t("session.authPassword")}</option>
-              <option value="publickey">{t("session.authPublicKey")}</option>
-            </select>
-          </div>
-          <div className="dialog-field">
-            <label htmlFor="qc-credential">
-              {authMethod === "password" ? t("session.passwordLabel") : t("session.keyPathLabel")}
-            </label>
-            <input
-              id="qc-credential"
-              type={authMethod === "password" ? "password" : "text"}
-              value={credential}
-              onChange={(e) => {
-                setCredential(e.target.value);
-              }}
-              placeholder={
-                authMethod === "password"
-                  ? t("session.passwordPlaceholder")
-                  : t("session.keyPathPlaceholder")
-              }
-            />
-          </div>
+          {protocol === "ssh" && (
+            <>
+              <div className="dialog-field">
+                <label htmlFor="qc-username">{t("session.usernameLabel")}</label>
+                <input
+                  id="qc-username"
+                  type="text"
+                  value={username}
+                  onChange={(e) => {
+                    setUsername(e.target.value);
+                  }}
+                  placeholder={t("session.usernamePlaceholder")}
+                />
+              </div>
+              <div className="dialog-field">
+                <label htmlFor="qc-auth">{t("session.authMethodLabel")}</label>
+                <select
+                  id="qc-auth"
+                  value={authMethod}
+                  onChange={(e) => {
+                    setAuthMethod(e.target.value as "password" | "publickey");
+                  }}
+                >
+                  <option value="password">{t("session.authPassword")}</option>
+                  <option value="publickey">{t("session.authPublicKey")}</option>
+                </select>
+              </div>
+              <div className="dialog-field">
+                <label htmlFor="qc-credential">
+                  {authMethod === "password"
+                    ? t("session.passwordLabel")
+                    : t("session.keyPathLabel")}
+                </label>
+                <input
+                  id="qc-credential"
+                  type={authMethod === "password" ? "password" : "text"}
+                  value={credential}
+                  onChange={(e) => {
+                    setCredential(e.target.value);
+                  }}
+                  placeholder={
+                    authMethod === "password"
+                      ? t("session.passwordPlaceholder")
+                      : t("session.keyPathPlaceholder")
+                  }
+                />
+              </div>
+            </>
+          )}
           <div className="dialog-actions">
             <button type="button" className="dialog-btn dialog-btn-cancel" onClick={onCancel}>
               {t("dialog.cancel")}

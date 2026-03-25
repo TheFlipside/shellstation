@@ -1,0 +1,28 @@
+FROM debian:bookworm-slim
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        inetutils-telnetd \
+        inetutils-inetd \
+    && rm -rf /var/lib/apt/lists/*
+
+ARG TEST_USER=testuser
+ARG TEST_PASSWORD=testpass
+
+RUN useradd \
+        --create-home \
+        --shell /bin/bash \
+        "${TEST_USER}" \
+    && echo "${TEST_USER}:${TEST_PASSWORD}" | chpasswd
+
+# Shell wrapper for telnetd -- inetutils-inetd has a known issue where
+# exec'ing telnetd directly causes immediate exit. A shell wrapper resolves it.
+RUN printf '#!/bin/sh\nexec /usr/sbin/telnetd "$@"\n' > /usr/local/bin/telnetd-wrap \
+    && chmod 755 /usr/local/bin/telnetd-wrap
+
+COPY scripts/entrypoint-telnet.sh /entrypoint.sh
+RUN chmod 755 /entrypoint.sh
+
+EXPOSE 23
+
+ENTRYPOINT ["/entrypoint.sh"]

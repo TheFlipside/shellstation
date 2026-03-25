@@ -42,6 +42,7 @@ export interface SessionFormData {
   name: string;
   hostname: string;
   port: number;
+  protocol: string;
   username: string;
   authMethod: string;
   tags: string;
@@ -75,7 +76,10 @@ export function SessionDialog({
   const [folderId, setFolderId] = useState(initial?.folderId ?? defaultFolderId);
   const [name, setName] = useState(initial?.name ?? "");
   const [hostname, setHostname] = useState(initial?.hostname ?? "");
-  const [port, setPort] = useState(String(initial?.port ?? 22));
+  const [protocol, setProtocol] = useState(initial?.protocol ?? "ssh");
+  const [port, setPort] = useState(
+    String(initial?.port ?? (initial?.protocol === "telnet" ? 23 : 22)),
+  );
   const [username, setUsername] = useState(initial?.username ?? "");
   const [authMethod, setAuthMethod] = useState(initial?.authMethod ?? "password");
   const [password, setPassword] = useState(initial?.password ?? "");
@@ -88,7 +92,8 @@ export function SessionDialog({
   const handleSubmit = (e: React.SyntheticEvent): void => {
     e.preventDefault();
     setError("");
-    if (!name.trim() || !hostname.trim() || !username.trim()) return;
+    if (!name.trim() || !hostname.trim()) return;
+    if (protocol === "ssh" && !username.trim()) return;
     const portNum = Number(port);
     if (!Number.isInteger(portNum) || portNum < 1 || portNum > 65535) {
       setError(t("session.portRange"));
@@ -99,11 +104,12 @@ export function SessionDialog({
       name: name.trim(),
       hostname: hostname.trim(),
       port: portNum,
+      protocol,
       username: username.trim(),
-      authMethod,
+      authMethod: protocol === "telnet" ? "none" : authMethod,
       tags,
       icon,
-      jumpHostId: jumpHostId || null,
+      jumpHostId: protocol === "telnet" ? null : jumpHostId || null,
       password,
       keyPath,
     });
@@ -171,6 +177,26 @@ export function SessionDialog({
               ))}
             </div>
           </div>
+          <div className="dialog-field">
+            <label htmlFor="sd-protocol">{t("session.protocolLabel")}</label>
+            <select
+              id="sd-protocol"
+              value={protocol}
+              onChange={(e) => {
+                setProtocol(e.target.value);
+                if (e.target.value === "telnet") {
+                  setPort((prev) => (prev === "22" ? "23" : prev));
+                  setAuthMethod("none");
+                } else {
+                  setPort((prev) => (prev === "23" ? "22" : prev));
+                  if (authMethod === "none") setAuthMethod("password");
+                }
+              }}
+            >
+              <option value="ssh">SSH</option>
+              <option value="telnet">Telnet</option>
+            </select>
+          </div>
           <div className="dialog-row">
             <div className="dialog-field dialog-field-grow">
               <label htmlFor="sd-host">{t("session.hostnameLabel")}</label>
@@ -209,85 +235,91 @@ export function SessionDialog({
               placeholder={t("session.usernamePlaceholder")}
             />
           </div>
-          <div className="dialog-field">
-            <label htmlFor="sd-auth">{t("session.authMethodLabel")}</label>
-            <select
-              id="sd-auth"
-              value={authMethod}
-              onChange={(e) => {
-                setAuthMethod(e.target.value);
-              }}
-            >
-              <option value="password">{t("session.authPassword")}</option>
-              <option value="publickey">{t("session.authPublicKey")}</option>
-            </select>
-          </div>
-          <div className="dialog-field">
-            <label htmlFor="sd-credential">
-              {authMethod === "password" ? t("session.passwordLabel") : t("session.keyPathLabel")}
-            </label>
-            {authMethod === "password" ? (
-              <input
-                id="sd-credential"
-                type="password"
-                value={password}
-                onChange={(e) => {
-                  setPassword(e.target.value);
-                }}
-                placeholder={t("session.passwordPlaceholder")}
-              />
-            ) : (
-              <div className="dialog-row">
-                <div className="dialog-field-grow">
-                  <input
-                    id="sd-credential"
-                    type="text"
-                    value={keyPath}
-                    onChange={(e) => {
-                      setKeyPath(e.target.value);
-                    }}
-                    placeholder={t("session.keyPathPlaceholder")}
-                  />
-                </div>
-                <button
-                  type="button"
-                  className="dialog-btn"
-                  onClick={() => {
-                    void (async () => {
-                      const path = await open({
-                        title: t("session.keyPathLabel"),
-                        defaultPath: keyPath || undefined,
-                        multiple: false,
-                        directory: false,
-                      });
-                      if (path) {
-                        setKeyPath(path);
-                      }
-                    })();
+          {protocol === "ssh" && (
+            <>
+              <div className="dialog-field">
+                <label htmlFor="sd-auth">{t("session.authMethodLabel")}</label>
+                <select
+                  id="sd-auth"
+                  value={authMethod}
+                  onChange={(e) => {
+                    setAuthMethod(e.target.value);
                   }}
                 >
-                  {t("session.keyPathBrowse")}
-                </button>
+                  <option value="password">{t("session.authPassword")}</option>
+                  <option value="publickey">{t("session.authPublicKey")}</option>
+                </select>
               </div>
-            )}
-          </div>
-          <div className="dialog-field">
-            <label htmlFor="sd-jump">{t("session.jumpHostLabel")}</label>
-            <select
-              id="sd-jump"
-              value={jumpHostId}
-              onChange={(e) => {
-                setJumpHostId(e.target.value);
-              }}
-            >
-              <option value="">{t("session.jumpHostNone")}</option>
-              {sessions.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.name} ({s.hostname})
-                </option>
-              ))}
-            </select>
-          </div>
+              <div className="dialog-field">
+                <label htmlFor="sd-credential">
+                  {authMethod === "password"
+                    ? t("session.passwordLabel")
+                    : t("session.keyPathLabel")}
+                </label>
+                {authMethod === "password" ? (
+                  <input
+                    id="sd-credential"
+                    type="password"
+                    value={password}
+                    onChange={(e) => {
+                      setPassword(e.target.value);
+                    }}
+                    placeholder={t("session.passwordPlaceholder")}
+                  />
+                ) : (
+                  <div className="dialog-row">
+                    <div className="dialog-field-grow">
+                      <input
+                        id="sd-credential"
+                        type="text"
+                        value={keyPath}
+                        onChange={(e) => {
+                          setKeyPath(e.target.value);
+                        }}
+                        placeholder={t("session.keyPathPlaceholder")}
+                      />
+                    </div>
+                    <button
+                      type="button"
+                      className="dialog-btn"
+                      onClick={() => {
+                        void (async () => {
+                          const path = await open({
+                            title: t("session.keyPathLabel"),
+                            defaultPath: keyPath || undefined,
+                            multiple: false,
+                            directory: false,
+                          });
+                          if (path) {
+                            setKeyPath(path);
+                          }
+                        })();
+                      }}
+                    >
+                      {t("session.keyPathBrowse")}
+                    </button>
+                  </div>
+                )}
+              </div>
+              <div className="dialog-field">
+                <label htmlFor="sd-jump">{t("session.jumpHostLabel")}</label>
+                <select
+                  id="sd-jump"
+                  value={jumpHostId}
+                  onChange={(e) => {
+                    setJumpHostId(e.target.value);
+                  }}
+                >
+                  <option value="">{t("session.jumpHostNone")}</option>
+                  {sessions.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.name} ({s.hostname})
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </>
+          )}
           <div className="dialog-field">
             <label htmlFor="sd-tags">{t("session.tagsLabel")}</label>
             <input

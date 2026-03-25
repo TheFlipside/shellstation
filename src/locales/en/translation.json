@@ -34,6 +34,7 @@
     "hostnameLabel": "Hostname",
     "hostnamePlaceholder": "hostname or IP",
     "portLabel": "Port",
+    "protocolLabel": "Protocol",
     "portRange": "Enter a port between 1 and 65535",
     "usernameLabel": "Username",
     "usernamePlaceholder": "user",
@@ -76,6 +77,8 @@
     "newLocalTerminal": "New local terminal",
     "sshConnection": "SSH connection",
     "ssh": "SSH",
+    "quickConnect": "Quick Connect",
+    "connect": "Connect",
     "processExited": "[Process exited]",
     "connectionFailed": "Connection failed: {{message}}",
     "sshConnectionFailed": "SSH connection failed: {{message}}"

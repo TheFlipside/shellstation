@@ -107,30 +107,44 @@ export function TerminalTabs({ uiScale }: TerminalTabsProps): React.JSX.Element 
     addTab(id, t("terminal.newTab", { count: String(tabs.length + 1) }), "local");
   }, [addTab, tabs.length, t]);
 
-  const handleSshConnect = useCallback(
+  const handleQuickConnect = useCallback(
     async (params: QuickConnectParams) => {
       setShowQuickConnect(false);
       try {
-        const id = await invoke<string>("ssh_connect", {
-          host: params.host,
-          port: params.port,
-          username: params.username,
-          authMethod: params.authMethod,
-          authCredential: params.authCredential,
-          cols: 80,
-          rows: 24,
-          restrictPrivateIps: restrictPrivateIps,
-        });
-        addTab(id, `${params.username}@${params.host}`, "ssh", {
-          host: params.host,
-          username: params.username,
-        });
+        if (params.protocol === "telnet") {
+          const id = await invoke<string>("telnet_connect", {
+            host: params.host,
+            port: params.port,
+            cols: 80,
+            rows: 24,
+            restrictPrivateIps: restrictPrivateIps,
+          });
+          addTab(id, `${params.host}:${String(params.port)}`, "telnet", {
+            host: params.host,
+            port: params.port,
+          });
+        } else {
+          const id = await invoke<string>("ssh_connect", {
+            host: params.host,
+            port: params.port,
+            username: params.username,
+            authMethod: params.authMethod,
+            authCredential: params.authCredential,
+            cols: 80,
+            rows: 24,
+            restrictPrivateIps: restrictPrivateIps,
+          });
+          addTab(id, `${params.username}@${params.host}`, "ssh", {
+            host: params.host,
+            username: params.username,
+          });
+        }
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : String(err);
-        setConnectionError(t("terminal.sshConnectionFailed", { message }));
+        setConnectionError(t("terminal.connectionFailed", { message }));
       }
     },
-    [addTab, t, restrictPrivateIps],
+    [addTab, t, restrictPrivateIps, setConnectionError],
   );
 
   const showNextVerifyRequest = useCallback(() => {
@@ -151,6 +165,8 @@ export function TerminalTabs({ uiScale }: TerminalTabsProps): React.JSX.Element 
       const tab = tabs.find((tb) => tb.id === id);
       if (tab?.type === "ssh") {
         await invoke("ssh_disconnect", { id }).catch(noop);
+      } else if (tab?.type === "telnet") {
+        await invoke("telnet_disconnect", { id }).catch(noop);
       } else {
         await invoke("pty_kill", { id }).catch(noop);
       }
@@ -214,7 +230,7 @@ export function TerminalTabs({ uiScale }: TerminalTabsProps): React.JSX.Element 
             onPointerUp={handlePointerUp}
           >
             <span className="tab-title">
-              {tab.type === "ssh" ? "\u{1F310} " : ""}
+              {tab.type === "ssh" ? "\u{1F310} " : tab.type === "telnet" ? "\u{1F4E1} " : ""}
               {tab.title}
             </span>
             <span
@@ -252,9 +268,9 @@ export function TerminalTabs({ uiScale }: TerminalTabsProps): React.JSX.Element 
             setShowQuickConnect(true);
           }}
           type="button"
-          title={t("terminal.sshConnection")}
+          title={t("terminal.quickConnect")}
         >
-          {t("terminal.ssh")}
+          {t("terminal.connect")}
         </button>
       </div>
       {connectionError !== null && (
@@ -294,7 +310,7 @@ export function TerminalTabs({ uiScale }: TerminalTabsProps): React.JSX.Element 
       {showQuickConnect && (
         <QuickConnect
           onConnect={(params) => {
-            handleSshConnect(params).catch(noop);
+            handleQuickConnect(params).catch(noop);
           }}
           onCancel={() => {
             setShowQuickConnect(false);

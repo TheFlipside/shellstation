@@ -231,6 +231,10 @@ impl DatabaseProvider for SqliteProvider {
             sets.push("port = ?");
             values.push(BindVal::Int(port));
         }
+        if let Some(ref protocol) = update.protocol {
+            sets.push("protocol = ?");
+            values.push(BindVal::Text(protocol.clone()));
+        }
         if let Some(ref username) = update.username {
             sets.push("username = ?");
             values.push(BindVal::Text(username.clone()));

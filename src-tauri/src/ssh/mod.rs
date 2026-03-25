@@ -402,6 +402,14 @@ fn is_restricted_ip(addr: &IpAddr) -> bool {
 }
 
 /// Validate that a hostname does not resolve to a restricted IP range.
+/// This prevents SSRF attacks through tunnels targeting internal services.
+///
+/// Public alias used by other connection modules (e.g. Telnet).
+pub fn validate_ssh_target_public(host: &str, port: u16) -> Result<(), String> {
+    validate_ssh_target(host, port)
+}
+
+/// Validate that a hostname does not resolve to a restricted IP range.
 /// This prevents SSRF attacks through SSH tunnels targeting internal services.
 fn validate_ssh_target(host: &str, port: u16) -> Result<(), String> {
     // Try parsing as a literal IP first.

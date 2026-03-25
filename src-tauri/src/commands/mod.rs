@@ -2,11 +2,13 @@ mod database;
 mod pty;
 mod session;
 mod ssh;
+mod telnet;
 
 pub use database::*;
 pub use pty::*;
 pub use session::*;
 pub use ssh::*;
+pub use telnet::*;
 
 /// Maximum terminal dimensions to prevent resource exhaustion.
 const MAX_COLS: u16 = 500;

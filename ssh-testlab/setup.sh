@@ -62,6 +62,9 @@ lab_up() {
     echo "  ProxyJump to target (key):"
     echo "    ssh -i ${KEY_FILE} -o ProxyJump=testuser@127.0.0.1:2222 testuser@target"
     echo ""
+    echo "  Telnet (login: testuser / testpass):"
+    echo "    telnet 127.0.0.1 2323"
+    echo ""
     echo "  Or add the snippet from ssh_config.example to ~/.ssh/config"
     echo "============================================"
 }

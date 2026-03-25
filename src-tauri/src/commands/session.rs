@@ -8,6 +8,7 @@ use zeroize::Zeroizing;
 use crate::db::models::{Credential, Folder, NewFolder, NewSession, Session, UpdateSession};
 use crate::db::{CredentialDbState, DbState};
 use crate::ssh::{SshConnectParams, SshState};
+use crate::telnet::{TelnetConnectParams, TelnetState};
 
 use super::{validate_dimensions, validate_port, validate_session_fields, MAX_JUMP_HOPS};
 
@@ -70,6 +71,7 @@ pub async fn session_create(
     hostname: String,
     port: i32,
     username: String,
+    protocol: Option<String>,
     auth_method: String,
     tags: String,
     icon: String,
@@ -82,6 +84,11 @@ pub async fn session_create(
     let folder = parse_uuid(&folder_id)?;
     let jump = jump_host_id.map(|s| parse_uuid(&s)).transpose()?;
 
+    let effective_protocol = protocol.unwrap_or_else(|| "ssh".to_string());
+    if effective_protocol != "ssh" && effective_protocol != "telnet" {
+        return Err(format!("Unsupported protocol: {effective_protocol}"));
+    }
+
     let session = state
         .0
         .create_session(NewSession {
@@ -89,7 +96,7 @@ pub async fn session_create(
             name,
             hostname,
             port,
-            protocol: "ssh".to_string(),
+            protocol: effective_protocol,
             username,
             auth_method: auth_method.clone(),
             jump_host_id: jump,
@@ -146,6 +153,7 @@ pub async fn session_update(
     name: Option<String>,
     hostname: Option<String>,
     port: Option<i32>,
+    protocol: Option<String>,
     username: Option<String>,
     auth_method: Option<String>,
     tags: Option<String>,
@@ -156,6 +164,11 @@ pub async fn session_update(
 ) -> Result<(), String> {
     if let Some(p) = port {
         validate_port(p)?;
+    }
+    if let Some(ref proto) = protocol {
+        if proto != "ssh" && proto != "telnet" {
+            return Err(format!("Unsupported protocol: {proto}"));
+        }
     }
     validate_session_fields(
         name.as_deref(),
@@ -176,6 +189,7 @@ pub async fn session_update(
                 name,
                 hostname,
                 port,
+                protocol,
                 username,
                 auth_method: auth_method.clone(),
                 jump_host_id: jump,
@@ -260,6 +274,7 @@ pub async fn session_connect(
     db: State<'_, DbState>,
     cred_db: State<'_, CredentialDbState>,
     ssh: State<'_, SshState>,
+    telnet: State<'_, TelnetState>,
     id: String,
     cols: u16,
     rows: u16,
@@ -273,6 +288,27 @@ pub async fn session_connect(
             .await?
             .ok_or_else(|| format!("Session {id} not found"))?;
 
+    let restrict = restrict_private_ips.unwrap_or(false);
+
+    // Dispatch by protocol.
+    if session.protocol == "telnet" {
+        let conn_id = Uuid::new_v4().to_string();
+        let mut manager = telnet.0.lock().await;
+        manager
+            .connect(TelnetConnectParams {
+                id: conn_id.clone(),
+                host: session.hostname,
+                port: session.port as u16,
+                cols,
+                rows,
+                app_handle,
+                restrict_private_ips: restrict,
+            })
+            .await?;
+        return Ok(conn_id);
+    }
+
+    // SSH path (default).
     // Retrieve credential from local store — wrapped in Zeroizing so it is
     // scrubbed from memory as soon as it is no longer needed.
     let auth_credential: Zeroizing<String> = match cred_db.0.get_credential(session_id).await? {
@@ -307,7 +343,7 @@ pub async fn session_connect(
             rows,
             app_handle,
             jump_hops,
-            restrict_private_ips: restrict_private_ips.unwrap_or(false),
+            restrict_private_ips: restrict,
         })
         .await?;
 
