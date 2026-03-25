@@ -196,6 +196,7 @@ export function TerminalTabs({ uiScale }: TerminalTabsProps): React.JSX.Element 
               setActiveTab(tab.id);
             }}
             type="button"
+            title={tab.title}
             onPointerDown={(e) => {
               handlePointerDown(e, index);
             }}
