@@ -33,3 +33,42 @@ fn validate_port(port: i32) -> Result<(), String> {
     }
     Ok(())
 }
+
+/// Maximum length for session string fields to prevent resource exhaustion.
+const MAX_NAME_LEN: usize = 255;
+const MAX_HOSTNAME_LEN: usize = 255;
+const MAX_USERNAME_LEN: usize = 128;
+const MAX_TAGS_LEN: usize = 1024;
+
+fn validate_session_fields(
+    name: Option<&str>,
+    hostname: Option<&str>,
+    username: Option<&str>,
+    tags: Option<&str>,
+) -> Result<(), String> {
+    if let Some(v) = name {
+        if v.len() > MAX_NAME_LEN {
+            return Err(format!("Name too long (max {MAX_NAME_LEN} characters)"));
+        }
+    }
+    if let Some(v) = hostname {
+        if v.len() > MAX_HOSTNAME_LEN {
+            return Err(format!(
+                "Hostname too long (max {MAX_HOSTNAME_LEN} characters)"
+            ));
+        }
+    }
+    if let Some(v) = username {
+        if v.len() > MAX_USERNAME_LEN {
+            return Err(format!(
+                "Username too long (max {MAX_USERNAME_LEN} characters)"
+            ));
+        }
+    }
+    if let Some(v) = tags {
+        if v.len() > MAX_TAGS_LEN {
+            return Err(format!("Tags too long (max {MAX_TAGS_LEN} characters)"));
+        }
+    }
+    Ok(())
+}

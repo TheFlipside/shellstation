@@ -52,6 +52,25 @@ fn init_local_sqlite(
     })
 }
 
+/// Strip connection URLs and credentials from PostgreSQL error messages
+/// so they are safe to display in the frontend.
+fn sanitize_pg_error(raw: &str) -> String {
+    if raw.contains("password authentication failed") {
+        return "Authentication failed — check username and password.".to_string();
+    }
+    if raw.contains("Connection refused") || raw.contains("connection refused") {
+        return "Connection refused — check host and port.".to_string();
+    }
+    if raw.contains("timeout") || raw.contains("Timed out") {
+        return "Connection timed out — check host, port, and firewall rules.".to_string();
+    }
+    if raw.contains("does not exist") {
+        return "Database does not exist — check the database name.".to_string();
+    }
+    // Fallback: generic message without leaking internals.
+    "Failed to connect to PostgreSQL. Check your settings and try again.".to_string()
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tracing_subscriber::fmt()
@@ -115,12 +134,12 @@ pub fn run() {
                         Arc::new(SqliteProvider::new(local_pool)) as Arc<dyn db::DatabaseProvider>;
                     app.manage(CredentialDbState(cred_provider));
 
-                    let url = app_config.postgres.connection_url();
+                    let pg_opts = app_config.postgres.connect_options();
                     match tauri::async_runtime::block_on(async {
                         let pool = PgPoolOptions::new()
                             .max_connections(10)
                             .acquire_timeout(std::time::Duration::from_secs(5))
-                            .connect(&url)
+                            .connect_with(pg_opts)
                             .await?;
                         sqlx::migrate!().run(&pool).await?;
                         Ok::<sqlx::PgPool, Box<dyn std::error::Error>>(pool)
@@ -135,7 +154,10 @@ pub fn run() {
                             }));
                         }
                         Err(e) => {
+                            // Log full error server-side only; never expose raw
+                            // database errors to the frontend (may contain credentials).
                             tracing::error!("PostgreSQL connection failed: {e}");
+                            let safe_msg = sanitize_pg_error(&e.to_string());
 
                             // Provide a stub DbState so the app can still start
                             // and the user can fix settings. Use a fresh in-memory
@@ -154,7 +176,7 @@ pub fn run() {
                             app.manage(DbStatusState(commands::DbStatus {
                                 backend: "postgres".to_string(),
                                 healthy: false,
-                                error: Some(e.to_string()),
+                                error: Some(safe_msg),
                             }));
                         }
                     }

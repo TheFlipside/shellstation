@@ -50,12 +50,18 @@ impl Default for PostgresConfig {
 }
 
 impl PostgresConfig {
-    /// Build a PostgreSQL connection URL from the individual fields.
-    pub fn connection_url(&self) -> String {
-        format!(
-            "postgres://{}:{}@{}:{}/{}",
-            self.username, self.password, self.host, self.port, self.database
-        )
+    /// Build type-safe PostgreSQL connection options.
+    ///
+    /// Uses `PgConnectOptions` instead of string interpolation to avoid
+    /// parameter injection when the password contains special characters
+    /// (`@`, `:`, `/`, etc.) and to prevent credentials leaking into logs.
+    pub fn connect_options(&self) -> sqlx::postgres::PgConnectOptions {
+        sqlx::postgres::PgConnectOptions::new()
+            .host(&self.host)
+            .port(self.port)
+            .database(&self.database)
+            .username(&self.username)
+            .password(&self.password)
     }
 }
 

@@ -43,26 +43,26 @@ pub async fn db_test_connection(
     username: String,
     password: String,
 ) -> Result<String, String> {
-    let pg = PostgresConfig {
+    let pg_opts = PostgresConfig {
         host,
         port,
         database,
         username,
         password,
-    };
-    let url = pg.connection_url();
+    }
+    .connect_options();
 
     let pool = PgPoolOptions::new()
         .max_connections(1)
         .acquire_timeout(Duration::from_secs(5))
-        .connect(&url)
+        .connect_with(pg_opts)
         .await
-        .map_err(|e| format!("Connection failed: {e}"))?;
+        .map_err(|_| "Connection failed: unable to connect to PostgreSQL server".to_string())?;
 
     sqlx::query("SELECT 1")
         .execute(&pool)
         .await
-        .map_err(|e| format!("Query failed: {e}"))?;
+        .map_err(|_| "Connection succeeded but test query failed".to_string())?;
 
     pool.close().await;
     Ok("ok".to_string())
@@ -118,13 +118,23 @@ pub async fn db_export(
     let sessions = state.0.list_all_sessions().await?;
     let credentials = cred_db.0.list_all_credentials().await?;
 
+    // Strip secrets from exported credentials — export only metadata.
+    // Secrets are local-only and must not leave the device.
+    let safe_creds: Vec<ExportCredential> = credentials
+        .into_iter()
+        .map(|c| ExportCredential {
+            id: c.id,
+            session_id: c.session_id,
+            auth_type: c.auth_type,
+            keychain_ref: c.keychain_ref,
+            secret: String::new(),
+        })
+        .collect();
+
     Ok(ExportData {
         folders,
         sessions,
-        credentials: credentials
-            .into_iter()
-            .map(ExportCredential::from)
-            .collect(),
+        credentials: safe_creds,
     })
 }
 
@@ -173,8 +183,12 @@ pub async fn db_import(
         session_count += 1;
     }
 
-    // Import credentials into local store
+    // Import credentials into local store (skip entries with empty secrets
+    // since exported data has secrets redacted for safety).
     for cred in &data.credentials {
+        if cred.secret.is_empty() {
+            continue;
+        }
         cred_db
             .0
             .upsert_credential(Credential::from(cred.clone()))

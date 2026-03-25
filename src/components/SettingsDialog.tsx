@@ -145,6 +145,11 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
     input.onchange = async () => {
       const file = input.files?.[0];
       if (!file) return;
+      const MAX_IMPORT_SIZE = 10 * 1024 * 1024; // 10 MB
+      if (file.size > MAX_IMPORT_SIZE) {
+        setDbError("Import file is too large (max 10 MB).");
+        return;
+      }
       try {
         const text = await file.text();
         const data: unknown = JSON.parse(text);

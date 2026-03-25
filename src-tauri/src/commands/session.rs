@@ -7,7 +7,7 @@ use crate::db::models::{Credential, Folder, NewFolder, NewSession, Session, Upda
 use crate::db::{CredentialDbState, DbState};
 use crate::ssh::{SshConnectParams, SshState};
 
-use super::{validate_dimensions, validate_port, MAX_JUMP_HOPS};
+use super::{validate_dimensions, validate_port, validate_session_fields, MAX_JUMP_HOPS};
 
 // ── Folder commands ──────────────────────────────────────────────────
 
@@ -75,6 +75,7 @@ pub async fn session_create(
     key_path: Option<String>,
 ) -> Result<Session, String> {
     validate_port(port)?;
+    validate_session_fields(Some(&name), Some(&hostname), Some(&username), Some(&tags))?;
     let folder = parse_uuid(&folder_id)?;
     let jump = jump_host_id.map(|s| parse_uuid(&s)).transpose()?;
 
@@ -151,6 +152,12 @@ pub async fn session_update(
     if let Some(p) = port {
         validate_port(p)?;
     }
+    validate_session_fields(
+        name.as_deref(),
+        hostname.as_deref(),
+        username.as_deref(),
+        tags.as_deref(),
+    )?;
     let session_id = parse_uuid(&id)?;
     let jump = jump_host_id
         .map(|opt| opt.map(|s| parse_uuid(&s)).transpose())
@@ -212,11 +219,19 @@ pub async fn session_move(
 }
 
 #[tauri::command]
-pub async fn session_delete(state: State<'_, DbState>, id: String) -> Result<(), String> {
-    // Credential row is cascade-deleted in the central DB.
-    // Local credentials are orphaned but harmless — they'll be ignored
-    // since the session no longer exists.
-    state.0.delete_session(parse_uuid(&id)?).await
+pub async fn session_delete(
+    state: State<'_, DbState>,
+    cred_db: State<'_, CredentialDbState>,
+    id: String,
+) -> Result<(), String> {
+    let session_id = parse_uuid(&id)?;
+    state.0.delete_session(session_id).await?;
+    // Clean up local credential so it doesn't become orphaned
+    // (especially important when sessions live in PostgreSQL).
+    if let Err(e) = cred_db.0.delete_credential(session_id).await {
+        tracing::warn!(session_id = %session_id, "credential cleanup on delete failed: {e}");
+    }
+    Ok(())
 }
 
 #[tauri::command]
