@@ -47,6 +47,7 @@ fn row_to_session(row: &SqliteRow) -> DbResult<Session> {
         auth_method: row.get("auth_method"),
         jump_host_id: parse_optional_uuid(row.get("jump_host_id"))?,
         tags: row.get("tags"),
+        icon: row.get("icon"),
     })
 }
 
@@ -145,8 +146,8 @@ impl DatabaseProvider for SqliteProvider {
         let jump_str = session.jump_host_id.map(|u| u.to_string());
 
         sqlx::query(
-            "INSERT INTO sessions (id, folder_id, name, hostname, port, protocol, username, auth_method, jump_host_id, tags) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO sessions (id, folder_id, name, hostname, port, protocol, username, auth_method, jump_host_id, tags, icon) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&id_str)
         .bind(&folder_str)
@@ -158,6 +159,7 @@ impl DatabaseProvider for SqliteProvider {
         .bind(&session.auth_method)
         .bind(&jump_str)
         .bind(&session.tags)
+        .bind(&session.icon)
         .execute(&self.pool)
         .await
         .map_err(|e| format!("Failed to create session: {e}"))?;
@@ -173,12 +175,13 @@ impl DatabaseProvider for SqliteProvider {
             auth_method: session.auth_method,
             jump_host_id: session.jump_host_id,
             tags: session.tags,
+            icon: session.icon,
         })
     }
 
     async fn get_session(&self, id: Uuid) -> DbResult<Option<Session>> {
         let row = sqlx::query(
-            "SELECT id, folder_id, name, hostname, port, protocol, username, auth_method, jump_host_id, tags \
+            "SELECT id, folder_id, name, hostname, port, protocol, username, auth_method, jump_host_id, tags, icon \
              FROM sessions WHERE id = ?",
         )
         .bind(id.to_string())
@@ -194,7 +197,7 @@ impl DatabaseProvider for SqliteProvider {
 
     async fn list_all_sessions(&self) -> DbResult<Vec<Session>> {
         let rows = sqlx::query(
-            "SELECT id, folder_id, name, hostname, port, protocol, username, auth_method, jump_host_id, tags \
+            "SELECT id, folder_id, name, hostname, port, protocol, username, auth_method, jump_host_id, tags, icon \
              FROM sessions ORDER BY name",
         )
         .fetch_all(&self.pool)
@@ -246,6 +249,10 @@ impl DatabaseProvider for SqliteProvider {
         if let Some(ref tags) = update.tags {
             sets.push("tags = ?");
             values.push(BindVal::Text(tags.clone()));
+        }
+        if let Some(ref icon) = update.icon {
+            sets.push("icon = ?");
+            values.push(BindVal::Text(icon.clone()));
         }
 
         if sets.is_empty() {
@@ -305,7 +312,7 @@ impl DatabaseProvider for SqliteProvider {
         let escaped = query.replace('%', "\\%").replace('_', "\\_");
         let pattern = format!("%{escaped}%");
         let rows = sqlx::query(
-            "SELECT id, folder_id, name, hostname, port, protocol, username, auth_method, jump_host_id, tags \
+            "SELECT id, folder_id, name, hostname, port, protocol, username, auth_method, jump_host_id, tags, icon \
              FROM sessions \
              WHERE name LIKE ? ESCAPE '\\' \
                 OR hostname LIKE ? ESCAPE '\\' \

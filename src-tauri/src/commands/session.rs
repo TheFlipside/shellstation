@@ -72,6 +72,7 @@ pub async fn session_create(
     username: String,
     auth_method: String,
     tags: String,
+    icon: String,
     jump_host_id: Option<String>,
     password: Option<String>,
     key_path: Option<String>,
@@ -93,6 +94,7 @@ pub async fn session_create(
             auth_method: auth_method.clone(),
             jump_host_id: jump,
             tags,
+            icon,
         })
         .await?;
 
@@ -147,6 +149,7 @@ pub async fn session_update(
     username: Option<String>,
     auth_method: Option<String>,
     tags: Option<String>,
+    icon: Option<String>,
     jump_host_id: Option<Option<String>>,
     password: Option<String>,
     key_path: Option<String>,
@@ -177,6 +180,7 @@ pub async fn session_update(
                 auth_method: auth_method.clone(),
                 jump_host_id: jump,
                 tags,
+                icon,
             },
         )
         .await?;

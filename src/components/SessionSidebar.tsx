@@ -180,6 +180,7 @@ export function SessionSidebar(): React.JSX.Element {
                 username: session.username,
                 authMethod: session.auth_method,
                 tags: tagsToDisplay(session.tags),
+                icon: session.icon,
                 jumpHostId: session.jump_host_id,
               },
             });
@@ -239,6 +240,7 @@ export function SessionSidebar(): React.JSX.Element {
         username: data.username,
         authMethod: data.authMethod,
         tags: tagsJson,
+        icon: data.icon,
         jumpHostId: data.jumpHostId ?? undefined,
         password: data.password || undefined,
         keyPath: data.keyPath || undefined,
@@ -254,6 +256,7 @@ export function SessionSidebar(): React.JSX.Element {
           username: data.username,
           authMethod: data.authMethod,
           tags: tagsJson,
+          icon: data.icon,
           jumpHostId: data.jumpHostId,
           password: data.password || undefined,
           keyPath: data.keyPath || undefined,

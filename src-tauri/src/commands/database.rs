@@ -177,6 +177,7 @@ pub async fn db_import(
                 auth_method: session.auth_method.clone(),
                 jump_host_id: session.jump_host_id,
                 tags: session.tags.clone(),
+                icon: session.icon.clone(),
             })
             .await
             .map_err(|e| format!("Failed to import session '{}': {e}", session.name))?;

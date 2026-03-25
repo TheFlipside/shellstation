@@ -1,6 +1,7 @@
 import React from "react";
 import type { Folder, Session } from "../stores/sessionStore";
 import { useSessionStore } from "../stores/sessionStore";
+import { iconEmoji } from "./SessionDialog";
 
 interface SessionTreeProps {
   parentId: string | null;
@@ -96,7 +97,7 @@ export function SessionTree({
               if (e.key === "Enter") onSessionDoubleClick(session.id);
             }}
           >
-            <span className="tree-icon">{"\uD83D\uDDA5\uFE0F"}</span>
+            <span className="tree-icon">{iconEmoji(session.icon)}</span>
             <span className="tree-label">{session.name}</span>
             <span className="tree-meta">{session.hostname}</span>
           </div>

@@ -3,6 +3,39 @@ import { useTranslation } from "react-i18next";
 import { useEscapeKey } from "../hooks/useEscapeKey";
 import type { Folder, Session } from "../stores/sessionStore";
 
+export type SessionIcon =
+  | "desktop"
+  | "linux"
+  | "windows"
+  | "apple"
+  | "network"
+  | "firewall"
+  | "database"
+  | "web"
+  | "cloud"
+  | "container"
+  | "printer"
+  | "lock";
+
+export const SESSION_ICONS: { key: SessionIcon; emoji: string }[] = [
+  { key: "desktop", emoji: "\uD83D\uDDA5\uFE0F" },
+  { key: "linux", emoji: "\uD83D\uDC27" },
+  { key: "windows", emoji: "\uD83E\uDE9F" },
+  { key: "apple", emoji: "\uD83C\uDF4E" },
+  { key: "network", emoji: "\uD83D\uDD00" },
+  { key: "firewall", emoji: "\uD83D\uDEE1\uFE0F" },
+  { key: "database", emoji: "\uD83D\uDDC4\uFE0F" },
+  { key: "web", emoji: "\uD83C\uDF10" },
+  { key: "cloud", emoji: "\u2601\uFE0F" },
+  { key: "container", emoji: "\uD83D\uDC33" },
+  { key: "printer", emoji: "\uD83D\uDDA8\uFE0F" },
+  { key: "lock", emoji: "\uD83D\uDD12" },
+];
+
+export function iconEmoji(key: string): string {
+  return SESSION_ICONS.find((i) => i.key === key)?.emoji ?? "\uD83D\uDDA5\uFE0F";
+}
+
 export interface SessionFormData {
   folderId: string;
   name: string;
@@ -11,6 +44,7 @@ export interface SessionFormData {
   username: string;
   authMethod: string;
   tags: string;
+  icon: string;
   jumpHostId: string | null;
   password: string;
   keyPath: string;
@@ -46,6 +80,7 @@ export function SessionDialog({
   const [password, setPassword] = useState(initial?.password ?? "");
   const [keyPath, setKeyPath] = useState(initial?.keyPath ?? "");
   const [tags, setTags] = useState(initial?.tags ?? "");
+  const [icon, setIcon] = useState(initial?.icon ?? "desktop");
   const [jumpHostId, setJumpHostId] = useState(initial?.jumpHostId ?? "");
   const [error, setError] = useState("");
 
@@ -66,6 +101,7 @@ export function SessionDialog({
       username: username.trim(),
       authMethod,
       tags,
+      icon,
       jumpHostId: jumpHostId || null,
       password,
       keyPath,
@@ -115,6 +151,24 @@ export function SessionDialog({
               placeholder={t("session.namePlaceholder")}
               autoFocus
             />
+          </div>
+          <div className="dialog-field">
+            <label>{t("session.iconLabel")}</label>
+            <div className="icon-picker">
+              {SESSION_ICONS.map((ic) => (
+                <button
+                  key={ic.key}
+                  type="button"
+                  className={`icon-picker-btn${icon === ic.key ? " icon-picker-btn-active" : ""}`}
+                  onClick={() => {
+                    setIcon(ic.key);
+                  }}
+                  title={t(`session.icon_${ic.key}`)}
+                >
+                  {ic.emoji}
+                </button>
+              ))}
+            </div>
           </div>
           <div className="dialog-row">
             <div className="dialog-field dialog-field-grow">

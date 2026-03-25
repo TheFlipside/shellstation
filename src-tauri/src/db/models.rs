@@ -26,6 +26,7 @@ pub struct Session {
     pub auth_method: String,
     pub jump_host_id: Option<Uuid>,
     pub tags: String,
+    pub icon: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -39,6 +40,7 @@ pub struct NewSession {
     pub auth_method: String,
     pub jump_host_id: Option<Uuid>,
     pub tags: String,
+    pub icon: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -50,6 +52,7 @@ pub struct UpdateSession {
     pub auth_method: Option<String>,
     pub jump_host_id: Option<Option<Uuid>>,
     pub tags: Option<String>,
+    pub icon: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

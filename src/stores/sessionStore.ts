@@ -19,6 +19,7 @@ export interface Session {
   auth_method: string;
   jump_host_id: string | null;
   tags: string;
+  icon: string;
 }
 
 interface SessionState {
@@ -63,6 +64,7 @@ export interface CreateSessionParams {
   username: string;
   authMethod: string;
   tags: string;
+  icon: string;
   jumpHostId?: string;
   password?: string;
   keyPath?: string;
@@ -75,6 +77,7 @@ export interface UpdateSessionParams {
   username?: string;
   authMethod?: string;
   tags?: string;
+  icon?: string;
   jumpHostId?: string | null;
   password?: string;
   keyPath?: string;
@@ -154,6 +157,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       username: params.username,
       authMethod: params.authMethod,
       tags: params.tags,
+      icon: params.icon,
       jumpHostId: params.jumpHostId ?? null,
       password: params.password ?? null,
       keyPath: params.keyPath ?? null,
@@ -170,6 +174,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       username: params.username ?? null,
       authMethod: params.authMethod ?? null,
       tags: params.tags ?? null,
+      icon: params.icon ?? null,
       jumpHostId: params.jumpHostId !== undefined ? params.jumpHostId : null,
       password: params.password ?? null,
       keyPath: params.keyPath ?? null,

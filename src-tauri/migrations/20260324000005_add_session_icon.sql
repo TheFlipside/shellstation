@@ -1,0 +1,1 @@
+ALTER TABLE sessions ADD COLUMN icon TEXT NOT NULL DEFAULT 'desktop';
