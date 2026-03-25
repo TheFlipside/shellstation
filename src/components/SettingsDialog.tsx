@@ -12,6 +12,20 @@ const AVAILABLE_LANGUAGES = [
 
 const UI_SCALE_OPTIONS = [75, 80, 90, 100, 110, 120, 125, 150];
 
+const FONT_OPTIONS = [
+  "JetBrains Mono",
+  "Fira Code",
+  "Cascadia Code",
+  "Source Code Pro",
+  "IBM Plex Mono",
+  "Ubuntu Mono",
+  "Hack",
+  "Inconsolata",
+  "DejaVu Sans Mono",
+  "Courier New",
+  "monospace",
+];
+
 interface AppConfig {
   db_backend: "sqlite" | "postgres";
   postgres: {
@@ -40,6 +54,14 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
     setOpenLocalOnStartup,
     confirmOnQuit,
     setConfirmOnQuit,
+    terminalFontFamily,
+    setTerminalFontFamily,
+    terminalFontSize,
+    setTerminalFontSize,
+    copyOnSelect,
+    setCopyOnSelect,
+    pasteOnRightClick,
+    setPasteOnRightClick,
   } = useSettingsStore();
 
   const currentLang = language !== "" ? language : (i18n.resolvedLanguage ?? "en");
@@ -255,6 +277,81 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
           />
           <label htmlFor="settings-confirm-on-quit">{t("settings.confirmOnQuitLabel")}</label>
           <span className="settings-help" title={t("settings.confirmOnQuitHint")}>
+            ?
+          </span>
+        </div>
+
+        {/* ── Terminal Section ──────────────────────────────────────── */}
+        <h4 className="settings-section-title">{t("settings.terminal")}</h4>
+        <div className="dialog-field">
+          <label htmlFor="settings-font-family">{t("settings.fontFamilyLabel")}</label>
+          <select
+            id="settings-font-family"
+            value={terminalFontFamily}
+            onChange={(e) => {
+              setTerminalFontFamily(e.target.value);
+            }}
+          >
+            {FONT_OPTIONS.map((font) => (
+              <option key={font} value={font}>
+                {font}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="dialog-field">
+          <label htmlFor="settings-font-size">{t("settings.fontSizeLabel")}</label>
+          <input
+            id="settings-font-size"
+            type="number"
+            value={terminalFontSize}
+            min={6}
+            max={72}
+            onChange={(e) => {
+              const val = Math.max(6, Math.min(72, Number(e.target.value) || 6));
+              setTerminalFontSize(val);
+            }}
+          />
+          <span className="settings-help" title={t("settings.fontSizeHint")}>
+            ?
+          </span>
+        </div>
+        <div
+          className="settings-font-preview"
+          style={{
+            fontFamily: `"${terminalFontFamily}", monospace`,
+            fontSize: `${String(terminalFontSize)}px`,
+          }}
+        >
+          {t("settings.fontPreview")}
+        </div>
+        <div className="dialog-field dialog-field-row">
+          <input
+            type="checkbox"
+            id="settings-copy-on-select"
+            checked={copyOnSelect}
+            onChange={(e) => {
+              setCopyOnSelect(e.target.checked);
+            }}
+          />
+          <label htmlFor="settings-copy-on-select">{t("settings.copyOnSelectLabel")}</label>
+          <span className="settings-help" title={t("settings.copyOnSelectHint")}>
+            ?
+          </span>
+        </div>
+        <div className="dialog-field dialog-field-row">
+          <input
+            type="checkbox"
+            id="settings-paste-on-right-click"
+            checked={pasteOnRightClick}
+            onChange={(e) => {
+              setPasteOnRightClick(e.target.checked);
+            }}
+          />
+          <label htmlFor="settings-paste-on-right-click">
+            {t("settings.pasteOnRightClickLabel")}
+          </label>
+          <span className="settings-help" title={t("settings.pasteOnRightClickHint")}>
             ?
           </span>
         </div>

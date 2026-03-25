@@ -8,11 +8,19 @@ interface SettingsState {
   closeOnDisconnect: boolean;
   openLocalOnStartup: boolean;
   confirmOnQuit: boolean;
+  terminalFontFamily: string;
+  terminalFontSize: number;
+  copyOnSelect: boolean;
+  pasteOnRightClick: boolean;
   setLanguage: (lang: string) => void;
   setUiScale: (scale: number) => void;
   setCloseOnDisconnect: (value: boolean) => void;
   setOpenLocalOnStartup: (value: boolean) => void;
   setConfirmOnQuit: (value: boolean) => void;
+  setTerminalFontFamily: (family: string) => void;
+  setTerminalFontSize: (size: number) => void;
+  setCopyOnSelect: (value: boolean) => void;
+  setPasteOnRightClick: (value: boolean) => void;
 }
 
 export const useSettingsStore = create<SettingsState>()(
@@ -23,6 +31,10 @@ export const useSettingsStore = create<SettingsState>()(
       closeOnDisconnect: false,
       openLocalOnStartup: true,
       confirmOnQuit: true,
+      terminalFontFamily: "JetBrains Mono",
+      terminalFontSize: 14,
+      copyOnSelect: false,
+      pasteOnRightClick: false,
       setLanguage: (lang: string) => {
         void i18n.changeLanguage(lang);
         set({ language: lang });
@@ -38,6 +50,18 @@ export const useSettingsStore = create<SettingsState>()(
       },
       setConfirmOnQuit: (value: boolean) => {
         set({ confirmOnQuit: value });
+      },
+      setTerminalFontFamily: (family: string) => {
+        set({ terminalFontFamily: family });
+      },
+      setTerminalFontSize: (size: number) => {
+        set({ terminalFontSize: size });
+      },
+      setCopyOnSelect: (value: boolean) => {
+        set({ copyOnSelect: value });
+      },
+      setPasteOnRightClick: (value: boolean) => {
+        set({ pasteOnRightClick: value });
       },
     }),
     {

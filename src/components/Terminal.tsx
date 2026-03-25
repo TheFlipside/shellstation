@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useCallback } from "react";
+import React, { useEffect, useRef, useState, useCallback } from "react";
 import i18n from "../i18n";
 import { Terminal as XTerm } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
@@ -7,6 +7,7 @@ import { SearchAddon } from "@xterm/addon-search";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { SessionType } from "../stores/terminalStore";
+import { useSettingsStore } from "../stores/settingsStore";
 
 interface TerminalProps {
   sessionId: string;
@@ -25,6 +26,14 @@ function base64Decode(encoded: string): Uint8Array {
   return bytes;
 }
 
+const MIN_FONT_SIZE = 6;
+const MAX_FONT_SIZE = 72;
+
+/** Build a CSS font-family string: selected font + monospace fallback. */
+function buildFontFamily(font: string): string {
+  return `"${font}", monospace`;
+}
+
 // eslint-disable-next-line @typescript-eslint/no-empty-function
 const noop = (): void => {};
 
@@ -39,6 +48,27 @@ export function Terminal({
   const fitAddonRef = useRef<FitAddon | null>(null);
   const onExitRef = useRef(onExit);
   onExitRef.current = onExit;
+
+  const { terminalFontFamily, terminalFontSize, copyOnSelect, pasteOnRightClick } =
+    useSettingsStore();
+
+  // Per-tab zoom offset — not persisted, local to this terminal instance.
+  const [localZoomOffset, setLocalZoomOffset] = useState(0);
+  const effectiveFontSize = Math.max(
+    MIN_FONT_SIZE,
+    Math.min(MAX_FONT_SIZE, terminalFontSize + localZoomOffset),
+  );
+
+  // Keep mutable refs for values accessed inside event handlers that
+  // are registered once (not re-created on every settings change).
+  const copyOnSelectRef = useRef(copyOnSelect);
+  copyOnSelectRef.current = copyOnSelect;
+  const pasteOnRightClickRef = useRef(pasteOnRightClick);
+  pasteOnRightClickRef.current = pasteOnRightClick;
+  const localZoomOffsetRef = useRef(localZoomOffset);
+  localZoomOffsetRef.current = localZoomOffset;
+  const baseFontSizeRef = useRef(terminalFontSize);
+  baseFontSizeRef.current = terminalFontSize;
 
   const writeCmd = sessionType === "ssh" ? "ssh_write" : "pty_write";
   const resizeCmd = sessionType === "ssh" ? "ssh_resize" : "pty_resize";
@@ -62,8 +92,8 @@ export function Terminal({
 
     const term = new XTerm({
       cursorBlink: true,
-      fontSize: 14,
-      fontFamily: '"JetBrains Mono", "Fira Code", "Cascadia Code", monospace',
+      fontSize: terminalFontSize,
+      fontFamily: buildFontFamily(terminalFontFamily),
       theme: {
         background: "#1e1e2e",
         foreground: "#cdd6f4",
@@ -115,6 +145,87 @@ export function Terminal({
       invoke(writeCmd, { id: sessionId, data }).catch(noop);
     });
 
+    // Copy-on-select: when user finishes a selection, copy to clipboard.
+    const onSelectionDisposable = term.onSelectionChange(() => {
+      if (copyOnSelectRef.current) {
+        const selection = term.getSelection();
+        if (selection) {
+          void navigator.clipboard.writeText(selection);
+        }
+      }
+    });
+
+    // Keyboard handler for Ctrl+Shift+C/V (copy/paste) and Ctrl+Plus/Minus (zoom).
+    // Return true to let xterm handle the key normally, false to suppress it.
+    term.attachCustomKeyEventHandler((event: KeyboardEvent): boolean => {
+      // Only act on keydown events.
+      if (event.type !== "keydown") return true;
+
+      // Ctrl+Shift+C — copy selection
+      if (event.ctrlKey && event.shiftKey && event.key === "C") {
+        event.preventDefault();
+        const selection = term.getSelection();
+        if (selection) {
+          void navigator.clipboard.writeText(selection);
+        }
+        return false;
+      }
+
+      // Ctrl+Shift+V — paste from clipboard
+      if (event.ctrlKey && event.shiftKey && event.key === "V") {
+        event.preventDefault();
+        void navigator.clipboard.readText().then((text) => {
+          invoke(writeCmd, { id: sessionId, data: text }).catch(noop);
+        });
+        return false;
+      }
+
+      // Ctrl+= or Ctrl++ — zoom in (per-tab only)
+      if (event.ctrlKey && !event.shiftKey && (event.key === "=" || event.key === "+")) {
+        event.preventDefault();
+        const current = baseFontSizeRef.current + localZoomOffsetRef.current;
+        if (current < MAX_FONT_SIZE) {
+          setLocalZoomOffset((prev) => prev + 1);
+        }
+        return false;
+      }
+
+      // Ctrl+- — zoom out (per-tab only)
+      if (event.ctrlKey && !event.shiftKey && event.key === "-") {
+        event.preventDefault();
+        const current = baseFontSizeRef.current + localZoomOffsetRef.current;
+        if (current > MIN_FONT_SIZE) {
+          setLocalZoomOffset((prev) => prev - 1);
+        }
+        return false;
+      }
+
+      // Ctrl+0 — reset zoom to global default (clear per-tab offset)
+      if (event.ctrlKey && !event.shiftKey && event.key === "0") {
+        event.preventDefault();
+        setLocalZoomOffset(0);
+        return false;
+      }
+
+      return true;
+    });
+
+    // Right-click paste: listen on mousedown (button 2) instead of
+    // contextmenu — the contextmenu event is globally suppressed and
+    // may not provide sufficient user activation for clipboard access.
+    const handleRightClick = (event: MouseEvent): void => {
+      if (event.button === 2 && pasteOnRightClickRef.current) {
+        event.preventDefault();
+        event.stopPropagation();
+        void navigator.clipboard.readText().then((text) => {
+          if (text) {
+            invoke(writeCmd, { id: sessionId, data: text }).catch(noop);
+          }
+        });
+      }
+    };
+    container.addEventListener("mousedown", handleRightClick, true);
+
     // Listen for terminal output.
     let outputUnlisten: UnlistenFn | null = null;
     let exitUnlisten: UnlistenFn | null = null;
@@ -151,6 +262,8 @@ export function Terminal({
     return () => {
       resizeObserver.disconnect();
       onDataDisposable.dispose();
+      onSelectionDisposable.dispose();
+      container.removeEventListener("mousedown", handleRightClick, true);
       if (outputUnlisten) outputUnlisten();
       if (exitUnlisten) exitUnlisten();
       term.dispose();
@@ -158,6 +271,15 @@ export function Terminal({
       fitAddonRef.current = null;
     };
   }, [sessionId, sessionType, writeCmd, resizeCmd, handleResize]);
+
+  // Apply font family and effective font size changes to a live terminal.
+  useEffect(() => {
+    const term = termRef.current;
+    if (!term) return;
+    term.options.fontFamily = buildFontFamily(terminalFontFamily);
+    term.options.fontSize = effectiveFontSize;
+    fitAddonRef.current?.fit();
+  }, [terminalFontFamily, effectiveFontSize]);
 
   // Re-fit and focus when visibility changes.
   useEffect(() => {

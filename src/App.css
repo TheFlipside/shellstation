@@ -479,6 +479,18 @@ body,
   margin: 4px 0 8px;
 }
 
+.settings-font-preview {
+  background: #1e1e2e;
+  color: #cdd6f4;
+  border: 1px solid #313244;
+  border-radius: 4px;
+  padding: 10px 12px;
+  margin: 4px 0 10px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .settings-db-restart {
   color: #fab387;
   font-size: 12px;
