@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
+import { useSettingsStore } from "./settingsStore";
 import { useTerminalStore } from "./terminalStore";
 
 export interface Folder {
@@ -235,10 +236,12 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     const session = get().sessions.find((s) => s.id === id);
     if (!session) return;
 
+    const { restrictPrivateIps } = useSettingsStore.getState();
     const connId = await invoke<string>("session_connect", {
       id,
       cols: 80,
       rows: 24,
+      restrictPrivateIps,
     });
 
     useTerminalStore.getState().addTab(connId, `${session.username}@${session.hostname}`, "ssh", {

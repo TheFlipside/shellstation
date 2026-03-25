@@ -150,6 +150,9 @@
     "dbImport": "Daten importieren",
     "dbImportSuccess": "{{message}}",
     "dbFallbackBanner": "Verbindung zu PostgreSQL fehlgeschlagen: {{message}}. Offline-Modus aktiv.",
-    "dbOpenSettings": "Einstellungen \u00f6ffnen"
+    "dbOpenSettings": "Einstellungen \u00f6ffnen",
+    "security": "Sicherheit",
+    "restrictPrivateIpsLabel": "Verbindungen zu privaten/Loopback-Adressen blockieren",
+    "restrictPrivateIpsHint": "Wenn aktiviert, werden SSH-Verbindungen zu Loopback- (127.x), Link-Local- und privaten RFC-1918-Adressen (10.x, 172.16-31.x, 192.168.x) blockiert. Deaktivieren Sie dies, wenn Sie sich mit Hosts in Ihrem lokalen Netzwerk oder Homelab verbinden."
   }
 }

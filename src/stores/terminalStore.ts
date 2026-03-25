@@ -17,16 +17,19 @@ export interface TerminalTab {
 interface TerminalState {
   tabs: TerminalTab[];
   activeTabId: string | null;
+  connectionError: string | null;
   addTab: (id: string, title: string, type: SessionType, meta?: SshMeta) => void;
   removeTab: (id: string) => void;
   setActiveTab: (id: string) => void;
   updateTabTitle: (id: string, title: string) => void;
   reorderTabs: (fromIndex: number, toIndex: number) => void;
+  setConnectionError: (error: string | null) => void;
 }
 
 export const useTerminalStore = create<TerminalState>((set, get) => ({
   tabs: [],
   activeTabId: null,
+  connectionError: null,
 
   addTab: (id: string, title: string, type_: SessionType, meta?: SshMeta) => {
     set((state) => ({
@@ -62,6 +65,10 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
     set((state) => ({
       tabs: state.tabs.map((t) => (t.id === id ? { ...t, title } : t)),
     }));
+  },
+
+  setConnectionError: (error: string | null) => {
+    set({ connectionError: error });
   },
 
   reorderTabs: (fromIndex: number, toIndex: number) => {

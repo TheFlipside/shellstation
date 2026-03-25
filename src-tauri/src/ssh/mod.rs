@@ -58,6 +58,7 @@ pub struct SshConnectParams {
     pub port: u16,
     pub username: String,
     pub auth_method: String,
+    pub restrict_private_ips: bool,
     pub auth_credential: Zeroizing<String>,
     pub cols: u16,
     pub rows: u16,
@@ -98,6 +99,7 @@ impl SshManager {
             rows,
             app_handle,
             jump_hops,
+            restrict_private_ips,
         } = params;
 
         info!(session_id = %id, host = %host, port = %port, hops = jump_hops.len(), "Connecting via SSH");
@@ -107,6 +109,7 @@ impl SshManager {
             &host,
             port,
             &jump_hops,
+            restrict_private_ips,
             &app_handle,
             &mut self.host_verify_senders,
         )
@@ -442,13 +445,16 @@ async fn connect_with_hops(
     target_host: &str,
     target_port: u16,
     jump_hops: &[JumpHop],
+    restrict_private_ips: bool,
     app_handle: &AppHandle,
     verify_senders: &mut HashMap<String, oneshot::Sender<bool>>,
 ) -> Result<(client::Handle<SshHandler>, Vec<client::Handle<SshHandler>>), String> {
     // Validate all targets against restricted IP ranges (SSRF prevention).
-    validate_ssh_target(target_host, target_port)?;
-    for hop in jump_hops {
-        validate_ssh_target(&hop.host, hop.port)?;
+    if restrict_private_ips {
+        validate_ssh_target(target_host, target_port)?;
+        for hop in jump_hops {
+            validate_ssh_target(&hop.host, hop.port)?;
+        }
     }
 
     if jump_hops.is_empty() {

@@ -263,6 +263,7 @@ pub async fn session_connect(
     id: String,
     cols: u16,
     rows: u16,
+    restrict_private_ips: Option<bool>,
 ) -> Result<String, String> {
     validate_dimensions(cols, rows)?;
 
@@ -306,6 +307,7 @@ pub async fn session_connect(
             rows,
             app_handle,
             jump_hops,
+            restrict_private_ips: restrict_private_ips.unwrap_or(false),
         })
         .await?;
 

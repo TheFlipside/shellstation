@@ -15,6 +15,7 @@ interface SettingsState {
   terminalFontSize: number;
   copyOnSelect: boolean;
   pasteOnRightClick: boolean;
+  restrictPrivateIps: boolean;
   setLanguage: (lang: string) => void;
   setUiScale: (scale: number) => void;
   setThemeMode: (mode: ThemeMode) => void;
@@ -25,6 +26,7 @@ interface SettingsState {
   setTerminalFontSize: (size: number) => void;
   setCopyOnSelect: (value: boolean) => void;
   setPasteOnRightClick: (value: boolean) => void;
+  setRestrictPrivateIps: (value: boolean) => void;
 }
 
 export const useSettingsStore = create<SettingsState>()(
@@ -40,6 +42,7 @@ export const useSettingsStore = create<SettingsState>()(
       terminalFontSize: 14,
       copyOnSelect: false,
       pasteOnRightClick: false,
+      restrictPrivateIps: false,
       setLanguage: (lang: string) => {
         void i18n.changeLanguage(lang);
         set({ language: lang });
@@ -70,6 +73,9 @@ export const useSettingsStore = create<SettingsState>()(
       },
       setPasteOnRightClick: (value: boolean) => {
         set({ pasteOnRightClick: value });
+      },
+      setRestrictPrivateIps: (value: boolean) => {
+        set({ restrictPrivateIps: value });
       },
     }),
     {

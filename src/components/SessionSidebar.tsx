@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useSessionStore } from "../stores/sessionStore";
+import { useTerminalStore } from "../stores/terminalStore";
 import { SessionTree } from "./SessionTree";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
@@ -92,7 +93,9 @@ export function SessionSidebar(): React.JSX.Element {
     (id: string) => {
       connectSession(id).catch((err: unknown) => {
         const msg = err instanceof Error ? err.message : String(err);
-        alert(t("terminal.connectionFailed", { message: msg }));
+        useTerminalStore
+          .getState()
+          .setConnectionError(t("terminal.connectionFailed", { message: msg }));
       });
     },
     [connectSession, t],

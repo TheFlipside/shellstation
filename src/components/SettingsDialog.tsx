@@ -66,6 +66,8 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
     setCopyOnSelect,
     pasteOnRightClick,
     setPasteOnRightClick,
+    restrictPrivateIps,
+    setRestrictPrivateIps,
   } = useSettingsStore();
 
   const currentLang = language !== "" ? language : (i18n.resolvedLanguage ?? "en");
@@ -375,6 +377,25 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
             {t("settings.pasteOnRightClickLabel")}
           </label>
           <span className="settings-help" title={t("settings.pasteOnRightClickHint")}>
+            ?
+          </span>
+        </div>
+
+        {/* ── Security Section ────────────────────────────────────── */}
+        <h4 className="settings-section-title">{t("settings.security")}</h4>
+        <div className="dialog-field dialog-field-row">
+          <input
+            type="checkbox"
+            id="settings-restrict-private-ips"
+            checked={restrictPrivateIps}
+            onChange={(e) => {
+              setRestrictPrivateIps(e.target.checked);
+            }}
+          />
+          <label htmlFor="settings-restrict-private-ips">
+            {t("settings.restrictPrivateIpsLabel")}
+          </label>
+          <span className="settings-help" title={t("settings.restrictPrivateIpsHint")}>
             ?
           </span>
         </div>

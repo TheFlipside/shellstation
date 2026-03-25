@@ -17,7 +17,16 @@ interface TerminalTabsProps {
 
 export function TerminalTabs({ uiScale }: TerminalTabsProps): React.JSX.Element {
   const { t } = useTranslation();
-  const { tabs, activeTabId, addTab, removeTab, setActiveTab, reorderTabs } = useTerminalStore();
+  const {
+    tabs,
+    activeTabId,
+    addTab,
+    removeTab,
+    setActiveTab,
+    reorderTabs,
+    connectionError,
+    setConnectionError,
+  } = useTerminalStore();
   const dragIndexRef = useRef<number | null>(null);
   const dragStartXRef = useRef(0);
   const isDraggingRef = useRef(false);
@@ -88,7 +97,7 @@ export function TerminalTabs({ uiScale }: TerminalTabsProps): React.JSX.Element 
     },
     [getTabIndexAtX, reorderTabs],
   );
-  const { closeOnDisconnect, openLocalOnStartup } = useSettingsStore();
+  const { closeOnDisconnect, openLocalOnStartup, restrictPrivateIps } = useSettingsStore();
   const [showQuickConnect, setShowQuickConnect] = useState(false);
   const [hostVerifyRequest, setHostVerifyRequest] = useState<HostVerifyRequest | null>(null);
   const verifyQueueRef = useRef<HostVerifyRequest[]>([]);
@@ -110,6 +119,7 @@ export function TerminalTabs({ uiScale }: TerminalTabsProps): React.JSX.Element 
           authCredential: params.authCredential,
           cols: 80,
           rows: 24,
+          restrictPrivateIps: restrictPrivateIps,
         });
         addTab(id, `${params.username}@${params.host}`, "ssh", {
           host: params.host,
@@ -117,10 +127,10 @@ export function TerminalTabs({ uiScale }: TerminalTabsProps): React.JSX.Element 
         });
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : String(err);
-        alert(t("terminal.sshConnectionFailed", { message }));
+        setConnectionError(t("terminal.sshConnectionFailed", { message }));
       }
     },
-    [addTab, t],
+    [addTab, t, restrictPrivateIps],
   );
 
   const showNextVerifyRequest = useCallback(() => {
@@ -247,6 +257,19 @@ export function TerminalTabs({ uiScale }: TerminalTabsProps): React.JSX.Element 
           {t("terminal.ssh")}
         </button>
       </div>
+      {connectionError !== null && (
+        <div className="connection-error-banner">
+          <span>{connectionError}</span>
+          <button
+            type="button"
+            onClick={() => {
+              setConnectionError(null);
+            }}
+          >
+            &times;
+          </button>
+        </div>
+      )}
       <div className="terminal-pane">
         {stableTabIdsRef.current.map((id) => {
           const tab = tabById.get(id);

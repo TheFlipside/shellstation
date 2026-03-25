@@ -150,6 +150,9 @@
     "dbImport": "Import Data",
     "dbImportSuccess": "{{message}}",
     "dbFallbackBanner": "Could not connect to PostgreSQL: {{message}}. Using offline mode.",
-    "dbOpenSettings": "Open Settings"
+    "dbOpenSettings": "Open Settings",
+    "security": "Security",
+    "restrictPrivateIpsLabel": "Block connections to private/loopback addresses",
+    "restrictPrivateIpsHint": "When enabled, SSH connections to loopback (127.x), link-local, and private RFC 1918 addresses (10.x, 172.16-31.x, 192.168.x) are blocked. Disable this if you connect to hosts on your local network or homelab."
   }
 }
