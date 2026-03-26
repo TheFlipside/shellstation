@@ -3,9 +3,12 @@ import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { useTerminalStore } from "../stores/terminalStore";
+import { useSessionStore } from "../stores/sessionStore";
 import { Terminal } from "./Terminal";
 import { QuickConnect, type QuickConnectParams } from "./QuickConnect";
 import { HostVerifyDialog, type HostVerifyRequest } from "./HostVerifyDialog";
+import { ConfirmDialog } from "./ConfirmDialog";
+import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { useSettingsStore } from "../stores/settingsStore";
 
 // eslint-disable-next-line @typescript-eslint/no-empty-function
@@ -97,8 +100,15 @@ export function TerminalTabs({ uiScale }: TerminalTabsProps): React.JSX.Element 
     },
     [getTabIndexAtX, reorderTabs],
   );
-  const { closeOnDisconnect, openLocalOnStartup, restrictPrivateIps } = useSettingsStore();
+  const { closeOnDisconnect, openLocalOnStartup, restrictPrivateIps, confirmOnCloseTab } =
+    useSettingsStore();
   const [showQuickConnect, setShowQuickConnect] = useState(false);
+  const [tabCtx, setTabCtx] = useState<{ x: number; y: number; tabId: string } | null>(null);
+  const [confirmClose, setConfirmClose] = useState<{
+    message: string;
+    confirmLabel: string;
+    onConfirm: () => void;
+  } | null>(null);
   const [hostVerifyRequest, setHostVerifyRequest] = useState<HostVerifyRequest | null>(null);
   const verifyQueueRef = useRef<HostVerifyRequest[]>([]);
 
@@ -175,6 +185,115 @@ export function TerminalTabs({ uiScale }: TerminalTabsProps): React.JSX.Element 
     [removeTab, tabs],
   );
 
+  const requestCloseTab = useCallback(
+    (id: string) => {
+      if (confirmOnCloseTab) {
+        setConfirmClose({
+          message: t("terminal.closeTabConfirm"),
+          confirmLabel: t("terminal.tabContextClose"),
+          onConfirm: () => {
+            destroyTab(id).catch(noop);
+            setConfirmClose(null);
+          },
+        });
+      } else {
+        destroyTab(id).catch(noop);
+      }
+    },
+    [confirmOnCloseTab, destroyTab, t],
+  );
+
+  const destroyMultipleTabs = useCallback(
+    async (ids: string[]) => {
+      for (const id of ids) {
+        await destroyTab(id);
+      }
+    },
+    [destroyTab],
+  );
+
+  const requestCloseMultipleTabs = useCallback(
+    (ids: string[]) => {
+      if (ids.length === 0) return;
+      if (confirmOnCloseTab) {
+        setConfirmClose({
+          message: t("terminal.closeAllTabsConfirm", { count: String(ids.length) }),
+          confirmLabel: t("terminal.tabContextClose"),
+          onConfirm: () => {
+            destroyMultipleTabs(ids).catch(noop);
+            setConfirmClose(null);
+          },
+        });
+      } else {
+        destroyMultipleTabs(ids).catch(noop);
+      }
+    },
+    [confirmOnCloseTab, destroyMultipleTabs, t],
+  );
+
+  const cloneTab = useCallback(
+    (id: string) => {
+      const tab = tabs.find((tb) => tb.id === id);
+      if (!tab) return;
+      if (tab.sessionDbId) {
+        useSessionStore
+          .getState()
+          .connectSession(tab.sessionDbId)
+          .catch((err: unknown) => {
+            const msg = err instanceof Error ? err.message : String(err);
+            setConnectionError(t("terminal.connectionFailed", { message: msg }));
+          });
+      } else if (tab.type === "local") {
+        createLocalTab().catch(noop);
+      }
+    },
+    [tabs, createLocalTab, setConnectionError, t],
+  );
+
+  const getTabContextItems = useCallback(
+    (tabId: string): ContextMenuItem[] => {
+      const index = tabs.findIndex((tb) => tb.id === tabId);
+      const tab = tabs[index];
+      const items: ContextMenuItem[] = [
+        {
+          label: t("terminal.tabContextClose"),
+          onClick: () => {
+            requestCloseTab(tabId);
+          },
+        },
+        {
+          label: t("terminal.tabContextCloseOthers"),
+          onClick: () => {
+            requestCloseMultipleTabs(tabs.filter((tb) => tb.id !== tabId).map((tb) => tb.id));
+          },
+        },
+        {
+          label: t("terminal.tabContextCloseRight"),
+          onClick: () => {
+            requestCloseMultipleTabs(tabs.slice(index + 1).map((tb) => tb.id));
+          },
+        },
+        {
+          label: t("terminal.tabContextCloseAll"),
+          danger: true,
+          onClick: () => {
+            requestCloseMultipleTabs(tabs.map((tb) => tb.id));
+          },
+        },
+      ];
+      if (tab.sessionDbId || tab.type === "local") {
+        items.push({
+          label: t("terminal.tabContextClone"),
+          onClick: () => {
+            cloneTab(tabId);
+          },
+        });
+      }
+      return items;
+    },
+    [tabs, t, requestCloseTab, requestCloseMultipleTabs, cloneTab],
+  );
+
   // Listen for host key verification events from any SSH session.
   useEffect(() => {
     const unlisteners: UnlistenFn[] = [];
@@ -228,6 +347,10 @@ export function TerminalTabs({ uiScale }: TerminalTabsProps): React.JSX.Element 
             }}
             onPointerMove={handlePointerMove}
             onPointerUp={handlePointerUp}
+            onContextMenu={(e) => {
+              e.preventDefault();
+              setTabCtx({ x: e.clientX, y: e.clientY, tabId: tab.id });
+            }}
           >
             <span className="tab-title">
               {tab.type === "ssh" ? "\u{1F310} " : tab.type === "telnet" ? "\u{1F4E1} " : ""}
@@ -237,14 +360,14 @@ export function TerminalTabs({ uiScale }: TerminalTabsProps): React.JSX.Element 
               className="tab-close"
               onClick={(e) => {
                 e.stopPropagation();
-                destroyTab(tab.id).catch(noop);
+                requestCloseTab(tab.id);
               }}
               role="button"
               tabIndex={0}
               onKeyDown={(e) => {
                 if (e.key === "Enter") {
                   e.stopPropagation();
-                  destroyTab(tab.id).catch(noop);
+                  requestCloseTab(tab.id);
                 }
               }}
             >
@@ -322,6 +445,26 @@ export function TerminalTabs({ uiScale }: TerminalTabsProps): React.JSX.Element 
           request={hostVerifyRequest}
           onRespond={(sessionId, accept) => {
             handleHostVerifyResponse(sessionId, accept).catch(noop);
+          }}
+        />
+      )}
+      {tabCtx && (
+        <ContextMenu
+          x={tabCtx.x}
+          y={tabCtx.y}
+          items={getTabContextItems(tabCtx.tabId)}
+          onClose={() => {
+            setTabCtx(null);
+          }}
+        />
+      )}
+      {confirmClose && (
+        <ConfirmDialog
+          message={confirmClose.message}
+          confirmLabel={confirmClose.confirmLabel}
+          onConfirm={confirmClose.onConfirm}
+          onCancel={() => {
+            setConfirmClose(null);
           }}
         />
       )}

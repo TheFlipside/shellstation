@@ -58,6 +58,8 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
     setOpenLocalOnStartup,
     confirmOnQuit,
     setConfirmOnQuit,
+    confirmOnCloseTab,
+    setConfirmOnCloseTab,
     terminalFontFamily,
     setTerminalFontFamily,
     terminalFontSize,
@@ -286,6 +288,22 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
             {t("settings.openLocalOnStartupLabel")}
           </label>
           <span className="settings-help" title={t("settings.openLocalOnStartupHint")}>
+            ?
+          </span>
+        </div>
+        <div className="dialog-field dialog-field-row">
+          <input
+            type="checkbox"
+            id="settings-confirm-on-close-tab"
+            checked={confirmOnCloseTab}
+            onChange={(e) => {
+              setConfirmOnCloseTab(e.target.checked);
+            }}
+          />
+          <label htmlFor="settings-confirm-on-close-tab">
+            {t("settings.confirmOnCloseTabLabel")}
+          </label>
+          <span className="settings-help" title={t("settings.confirmOnCloseTabHint")}>
             ?
           </span>
         </div>

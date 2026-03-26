@@ -250,13 +250,11 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
     const isTelnet = session.protocol === "telnet";
     const tabType = isTelnet ? "telnet" : "ssh";
-    const tabTitle = isTelnet
-      ? `${session.hostname}:${String(session.port)}`
-      : `${session.username}@${session.hostname}`;
+    const tabTitle = session.name;
     const meta = isTelnet
       ? { host: session.hostname, port: session.port }
       : { host: session.hostname, username: session.username };
 
-    useTerminalStore.getState().addTab(connId, tabTitle, tabType, meta);
+    useTerminalStore.getState().addTab(connId, tabTitle, tabType, meta, session.id);
   },
 }));

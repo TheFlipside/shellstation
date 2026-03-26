@@ -11,6 +11,7 @@ interface SettingsState {
   closeOnDisconnect: boolean;
   openLocalOnStartup: boolean;
   confirmOnQuit: boolean;
+  confirmOnCloseTab: boolean;
   terminalFontFamily: string;
   terminalFontSize: number;
   copyOnSelect: boolean;
@@ -22,6 +23,7 @@ interface SettingsState {
   setCloseOnDisconnect: (value: boolean) => void;
   setOpenLocalOnStartup: (value: boolean) => void;
   setConfirmOnQuit: (value: boolean) => void;
+  setConfirmOnCloseTab: (value: boolean) => void;
   setTerminalFontFamily: (family: string) => void;
   setTerminalFontSize: (size: number) => void;
   setCopyOnSelect: (value: boolean) => void;
@@ -38,6 +40,7 @@ export const useSettingsStore = create<SettingsState>()(
       closeOnDisconnect: false,
       openLocalOnStartup: true,
       confirmOnQuit: true,
+      confirmOnCloseTab: true,
       terminalFontFamily: "JetBrains Mono",
       terminalFontSize: 14,
       copyOnSelect: false,
@@ -61,6 +64,9 @@ export const useSettingsStore = create<SettingsState>()(
       },
       setConfirmOnQuit: (value: boolean) => {
         set({ confirmOnQuit: value });
+      },
+      setConfirmOnCloseTab: (value: boolean) => {
+        set({ confirmOnCloseTab: value });
       },
       setTerminalFontFamily: (family: string) => {
         set({ terminalFontFamily: family });

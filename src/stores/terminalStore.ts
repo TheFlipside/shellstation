@@ -19,13 +19,20 @@ export interface TerminalTab {
   title: string;
   type: SessionType;
   meta?: TabMeta;
+  sessionDbId?: string;
 }
 
 interface TerminalState {
   tabs: TerminalTab[];
   activeTabId: string | null;
   connectionError: string | null;
-  addTab: (id: string, title: string, type: SessionType, meta?: TabMeta) => void;
+  addTab: (
+    id: string,
+    title: string,
+    type: SessionType,
+    meta?: TabMeta,
+    sessionDbId?: string,
+  ) => void;
   removeTab: (id: string) => void;
   setActiveTab: (id: string) => void;
   updateTabTitle: (id: string, title: string) => void;
@@ -38,9 +45,9 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
   activeTabId: null,
   connectionError: null,
 
-  addTab: (id: string, title: string, type_: SessionType, meta?: TabMeta) => {
+  addTab: (id: string, title: string, type_: SessionType, meta?: TabMeta, sessionDbId?: string) => {
     set((state) => ({
-      tabs: [...state.tabs, { id, title, type: type_, meta }],
+      tabs: [...state.tabs, { id, title, type: type_, meta, sessionDbId }],
       activeTabId: id,
     }));
   },
