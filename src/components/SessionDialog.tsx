@@ -3,39 +3,7 @@ import { useTranslation } from "react-i18next";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useEscapeKey } from "../hooks/useEscapeKey";
 import type { Folder, Session } from "../stores/sessionStore";
-
-export type SessionIcon =
-  | "desktop"
-  | "linux"
-  | "windows"
-  | "apple"
-  | "network"
-  | "firewall"
-  | "database"
-  | "web"
-  | "cloud"
-  | "container"
-  | "printer"
-  | "lock";
-
-export const SESSION_ICONS: { key: SessionIcon; emoji: string }[] = [
-  { key: "desktop", emoji: "\uD83D\uDDA5\uFE0F" },
-  { key: "linux", emoji: "\uD83D\uDC27" },
-  { key: "windows", emoji: "\uD83E\uDE9F" },
-  { key: "apple", emoji: "\uD83C\uDF4E" },
-  { key: "network", emoji: "\uD83D\uDD00" },
-  { key: "firewall", emoji: "\uD83D\uDEE1\uFE0F" },
-  { key: "database", emoji: "\uD83D\uDDC4\uFE0F" },
-  { key: "web", emoji: "\uD83C\uDF10" },
-  { key: "cloud", emoji: "\u2601\uFE0F" },
-  { key: "container", emoji: "\uD83D\uDC33" },
-  { key: "printer", emoji: "\uD83D\uDDA8\uFE0F" },
-  { key: "lock", emoji: "\uD83D\uDD12" },
-];
-
-export function iconEmoji(key: string): string {
-  return SESSION_ICONS.find((i) => i.key === key)?.emoji ?? "\uD83D\uDDA5\uFE0F";
-}
+import { SESSION_ICON_KEYS, SessionIconComponent } from "./SessionIcons";
 
 export interface SessionFormData {
   folderId: string;
@@ -162,17 +130,17 @@ export function SessionDialog({
           <div className="dialog-field">
             <label>{t("session.iconLabel")}</label>
             <div className="icon-picker">
-              {SESSION_ICONS.map((ic) => (
+              {SESSION_ICON_KEYS.map((key) => (
                 <button
-                  key={ic.key}
+                  key={key}
                   type="button"
-                  className={`icon-picker-btn${icon === ic.key ? " icon-picker-btn-active" : ""}`}
+                  className={`icon-picker-btn${icon === key ? " icon-picker-btn-active" : ""}`}
                   onClick={() => {
-                    setIcon(ic.key);
+                    setIcon(key);
                   }}
-                  title={t(`session.icon_${ic.key}`)}
+                  title={t(`session.icon_${key}`)}
                 >
-                  {ic.emoji}
+                  <SessionIconComponent iconKey={key} />
                 </button>
               ))}
             </div>

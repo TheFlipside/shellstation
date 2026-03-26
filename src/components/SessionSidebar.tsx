@@ -8,6 +8,7 @@ import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { FolderDialog } from "./FolderDialog";
 import { MoveDialog } from "./MoveDialog";
 import { SessionDialog, type SessionFormData } from "./SessionDialog";
+import { SessionIconComponent } from "./SessionIcons";
 import { SettingsDialog } from "./SettingsDialog";
 
 // eslint-disable-next-line @typescript-eslint/no-empty-function
@@ -354,7 +355,9 @@ export function SessionSidebar(): React.JSX.Element {
                 if (e.key === "Enter") handleSessionDoubleClick(s.id);
               }}
             >
-              <span className="tree-icon">{"\uD83D\uDDA5\uFE0F"}</span>
+              <span className="tree-icon">
+                <SessionIconComponent iconKey={s.icon} />
+              </span>
               <span className="tree-label">{s.name}</span>
               <span className="tree-meta">{s.hostname}</span>
             </div>

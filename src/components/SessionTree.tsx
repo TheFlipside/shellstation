@@ -1,7 +1,7 @@
 import React from "react";
 import type { Folder, Session } from "../stores/sessionStore";
 import { useSessionStore } from "../stores/sessionStore";
-import { iconEmoji } from "./SessionDialog";
+import { FolderIcon, SessionIconComponent } from "./SessionIcons";
 
 interface SessionTreeProps {
   parentId: string | null;
@@ -53,7 +53,9 @@ export function SessionTree({
               }}
             >
               <span className="tree-chevron">{isExpanded ? "\u25BE" : "\u25B8"}</span>
-              <span className="tree-icon">{"\uD83D\uDCC1"}</span>
+              <span className="tree-icon">
+                <FolderIcon />
+              </span>
               <span className="tree-label">{folder.name}</span>
             </div>
             {isExpanded && (
@@ -97,7 +99,9 @@ export function SessionTree({
               if (e.key === "Enter") onSessionDoubleClick(session.id);
             }}
           >
-            <span className="tree-icon">{iconEmoji(session.icon)}</span>
+            <span className="tree-icon">
+              <SessionIconComponent iconKey={session.icon} />
+            </span>
             <span className="tree-label">{session.name}</span>
             <span className="tree-meta">{session.hostname}</span>
           </div>
