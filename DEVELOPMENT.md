@@ -1,8 +1,8 @@
 # ShellStation — Development Environment Setup
 
-This guide walks through every step needed to set up a development workstation for ShellStation, from system dependencies to a fully working build. It covers Linux and Windows 11, plus instructions for producing release-ready production builds.
+This guide walks through every step needed to set up a development workstation for ShellStation, from system dependencies to a fully working build. It covers Linux, macOS, and Windows 11, plus instructions for producing release-ready production builds.
 
-> **Tested on:** Ubuntu 22.04+, Debian 12+, Windows 11 23H2+. Fedora/Arch equivalents are noted where applicable for Linux.
+> **Tested on:** Ubuntu 22.04+, Debian 12+, Fedora 37+, Arch Linux, macOS 13 Ventura+, Windows 11 23H2+.
 
 ---
 
@@ -20,24 +20,33 @@ This guide walks through every step needed to set up a development workstation f
 - [Verify the Environment](#8-verify-the-environment)
 - [Common Issues (Linux)](#9-common-issues-linux)
 
+### macOS
+
+- [Prerequisites (macOS)](#10-macos-prerequisites)
+- [Rust Toolchain (macOS)](#11-macos-rust-toolchain)
+- [Node.js and npm (macOS)](#12-macos-nodejs-and-npm)
+- [Tauri CLI and Database Tooling (macOS)](#13-macos-tauri-cli-and-database-tooling)
+- [Project Bootstrap and Verify (macOS)](#14-macos-project-bootstrap-and-verify)
+- [Common Issues (macOS)](#15-macos-common-issues)
+
 ### Windows 11
 
-- [Prerequisites](#10-windows-11-prerequisites)
-- [Rust Toolchain (Windows)](#11-windows-11-rust-toolchain)
-- [Node.js and npm (Windows)](#12-windows-11-nodejs-and-npm)
-- [Tauri CLI and Database Tooling (Windows)](#13-windows-11-tauri-cli-and-database-tooling)
-- [Project Bootstrap and Verify (Windows)](#14-windows-11-project-bootstrap-and-verify)
-- [Common Issues (Windows)](#15-windows-11-common-issues)
+- [Prerequisites (Windows)](#16-windows-11-prerequisites)
+- [Rust Toolchain (Windows)](#17-windows-11-rust-toolchain)
+- [Node.js and npm (Windows)](#18-windows-11-nodejs-and-npm)
+- [Tauri CLI and Database Tooling (Windows)](#19-windows-11-tauri-cli-and-database-tooling)
+- [Project Bootstrap and Verify (Windows)](#20-windows-11-project-bootstrap-and-verify)
+- [Common Issues (Windows)](#21-windows-11-common-issues)
 
 ### Production Builds
 
-- [Building for Release](#16-building-for-release)
-- [Code Signing](#17-code-signing)
-- [CI/CD Release Pipeline](#18-cicd-release-pipeline)
+- [Building for Release](#22-building-for-release)
+- [Code Signing](#23-code-signing)
+- [CI/CD Release Pipeline](#24-cicd-release-pipeline)
 
 ### Testlab
 
-- [Docker SSH/Telnet Testlab](#19-docker-sshtelnet-testlab)
+- [Docker SSH/Telnet Testlab](#25-docker-sshtelnet-testlab)
 
 ---
 
@@ -558,7 +567,323 @@ Some Linux environments (particularly VMs or Wayland sessions) may not expose We
 
 ---
 
-## 10. Windows 11 Prerequisites
+## 10. macOS Prerequisites
+
+Tauri 2.x on macOS uses the system WebKit framework (WKWebView) — no additional webview runtime is needed. The primary build dependency is the Xcode Command Line Tools.
+
+### Install Xcode Command Line Tools
+
+Open Terminal and run:
+
+```bash
+xcode-select --install
+```
+
+This installs `clang`, `make`, `git`, and the macOS SDK headers. You do **not** need the full Xcode IDE unless you plan to do code signing or work with Xcode projects directly.
+
+Verify the installation:
+
+```bash
+xcode-select -p
+# Should print: /Library/Developer/CommandLineTools or /Applications/Xcode.app/Contents/Developer
+```
+
+### Install Homebrew
+
+Homebrew is the standard package manager for macOS development dependencies:
+
+```bash
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+```
+
+Follow the post-install instructions to add Homebrew to your `PATH`. Then verify:
+
+```bash
+brew --version
+```
+
+---
+
+## 11. macOS Rust Toolchain
+
+### Install Rust via rustup (macOS)
+
+```bash
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+```
+
+Follow the prompts and select the default installation. Then reload your shell:
+
+```bash
+source "$HOME/.cargo/env"
+```
+
+### Verify Rust installation (macOS)
+
+```bash
+rustc --version
+cargo --version
+rustup --version
+```
+
+### Install required Rust components (macOS)
+
+```bash
+rustup component add clippy rustfmt
+```
+
+### Install cargo utilities (macOS)
+
+```bash
+cargo install cargo-watch
+cargo install sqlx-cli --no-default-features --features native-tls,sqlite,postgres
+```
+
+### Keep Rust up to date (macOS)
+
+```bash
+rustup update
+```
+
+---
+
+## 12. macOS Node.js and npm
+
+### Install Node.js 20 LTS via Homebrew (recommended)
+
+```bash
+brew install node@20
+```
+
+Homebrew installs Node into a keg-only path. Follow the post-install output to add it to your `PATH`, or link it:
+
+```bash
+brew link --overwrite node@20
+```
+
+### Alternative: Install via nvm (macOS)
+
+```bash
+curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash
+source ~/.zshrc
+nvm install 20
+nvm use 20
+```
+
+### Verify installed versions (macOS)
+
+```bash
+node --version    # should be v20.x or later
+npm --version     # should be 10.x or later
+```
+
+### Install global npm tools (macOS)
+
+```bash
+npm install -g typescript
+```
+
+---
+
+## 13. macOS Tauri CLI and Database Tooling
+
+### Tauri CLI (macOS)
+
+```bash
+cargo install tauri-cli --version "^2"
+```
+
+Verify:
+
+```bash
+cargo tauri --version
+```
+
+Run the environment diagnostic:
+
+```bash
+cargo tauri info
+```
+
+Review the output. Every line should show a checkmark. If anything is marked with a cross, install the missing dependency before continuing.
+
+### SQLite (macOS)
+
+macOS ships with SQLite pre-installed. Verify:
+
+```bash
+sqlite3 --version
+```
+
+If you need a newer version:
+
+```bash
+brew install sqlite
+```
+
+### PostgreSQL (optional, macOS)
+
+For local PostgreSQL development:
+
+```bash
+brew install postgresql@16
+brew services start postgresql@16
+```
+
+Create the development database:
+
+```bash
+createuser --interactive --pwprompt shellstation
+createdb --owner=shellstation shellstation_dev
+```
+
+Set the database URL (add to your `~/.zshrc`):
+
+```bash
+export DATABASE_URL="postgres://shellstation:<your-password>@localhost/shellstation_dev"
+```
+
+### Alternative: PostgreSQL via Docker (macOS)
+
+```bash
+docker run -d \
+    --name shellstation-postgres \
+    -e POSTGRES_USER=shellstation \
+    -e POSTGRES_PASSWORD=devpassword \
+    -e POSTGRES_DB=shellstation_dev \
+    -p 5432:5432 \
+    postgres:16-alpine
+```
+
+Then set:
+
+```bash
+export DATABASE_URL="postgres://shellstation:devpassword@localhost/shellstation_dev"
+```
+
+### SQLite for development (default, macOS)
+
+```bash
+export DATABASE_URL="sqlite://$HOME/Library/Application Support/shellstation/dev.db"
+mkdir -p "$HOME/Library/Application Support/shellstation"
+```
+
+---
+
+## 14. macOS Project Bootstrap and Verify
+
+### Clone and install (macOS)
+
+```bash
+git clone https://git.fiedler.live/tux/shellstation.git
+cd shellstation
+npm install
+```
+
+### Run database migrations (macOS)
+
+```bash
+sqlx database create
+sqlx migrate run
+```
+
+### First build and run (macOS)
+
+```bash
+cargo tauri dev
+```
+
+The first build compiles all Rust dependencies and takes several minutes. Subsequent builds are incremental.
+
+### Run the full quality check suite (macOS)
+
+Rust checks:
+
+```bash
+cd src-tauri
+cargo clippy -- -D warnings
+cargo fmt -- --check
+cargo test
+cd ..
+```
+
+Frontend checks:
+
+```bash
+npx eslint src/ --ext .ts,.tsx
+npx prettier --check "src/**/*.{ts,tsx,css,json}"
+npx tsc --noEmit
+npx vitest run
+```
+
+Tauri environment check:
+
+```bash
+cargo tauri info
+```
+
+If all commands pass without errors, your macOS development environment is ready.
+
+---
+
+## 15. macOS Common Issues
+
+### `xcrun: error: invalid active developer path`
+
+This means Xcode Command Line Tools are not installed or need updating:
+
+```bash
+xcode-select --install
+```
+
+If already installed but still failing after a macOS upgrade, reset the path:
+
+```bash
+sudo xcode-select --reset
+```
+
+### `pkg-config` not found (macOS)
+
+Some Rust crates use `pkg-config` to locate system libraries. Install it via Homebrew:
+
+```bash
+brew install pkg-config
+```
+
+### `sqlx` compile-time errors (macOS)
+
+Same as Linux — sqlx verifies queries at compile time. Use offline mode if no database is available:
+
+```bash
+cargo sqlx prepare
+```
+
+### Slow first build (macOS)
+
+Normal on macOS as well. The initial `cargo build` can take 5-10 minutes. Subsequent builds are incremental. Using `cargo-watch` avoids full rebuilds during development.
+
+### Permission denied on keychain (macOS)
+
+The `keyring` crate uses macOS Keychain by default. If running in a CI environment or headless context, Keychain access may be restricted. For local development, Keychain access should work without additional configuration. If prompted, allow the `shellstation` binary to access the keychain.
+
+### Apple Silicon (M1/M2/M3) considerations
+
+Rust natively supports `aarch64-apple-darwin`. The default rustup installation on Apple Silicon installs the ARM toolchain. No Rosetta or special configuration is needed. All dependencies (including Homebrew, Node.js, and SQLite) run natively on ARM.
+
+If you need to cross-compile for Intel Macs:
+
+```bash
+rustup target add x86_64-apple-darwin
+cargo tauri build --target x86_64-apple-darwin
+```
+
+### WebGL not available in development
+
+Some macOS configurations (particularly in VMs) may not expose WebGL to the webview. xterm.js falls back to the canvas renderer automatically. This is not a bug.
+
+---
+
+## 16. Windows 11 Prerequisites
 
 Tauri 2.x on Windows uses Microsoft Edge WebView2 (pre-installed on Windows 11) for its webview. The primary build dependency is the Microsoft C++ Build Tools.
 
@@ -612,9 +937,9 @@ winget install Microsoft.WindowsTerminal
 
 ---
 
-## 11. Windows 11 Rust Toolchain
+## 17. Windows 11 Rust Toolchain
 
-### Install Rust via rustup
+### Install Rust via rustup (Windows)
 
 Open PowerShell and run:
 
@@ -626,7 +951,7 @@ Or download the installer from <https://rustup.rs/>.
 
 Follow the prompts and select the default installation (which uses the `stable-x86_64-pc-windows-msvc` toolchain). Close and reopen your terminal after installation.
 
-### Verify Rust installation
+### Verify Rust installation (Windows)
 
 ```powershell
 rustc --version
@@ -634,7 +959,7 @@ cargo --version
 rustup --version
 ```
 
-### Install required Rust components
+### Install required Rust components (Windows)
 
 ```powershell
 rustup component add clippy rustfmt
@@ -655,7 +980,7 @@ rustup update
 
 ---
 
-## 12. Windows 11 Node.js and npm
+## 18. Windows 11 Node.js and npm
 
 ### Install Node.js 20 LTS
 
@@ -678,9 +1003,9 @@ npm install -g typescript
 
 ---
 
-## 13. Windows 11 Tauri CLI and Database Tooling
+## 19. Windows 11 Tauri CLI and Database Tooling
 
-### Tauri CLI
+### Tauri CLI (Windows)
 
 ```powershell
 cargo install tauri-cli --version "^2"
@@ -740,9 +1065,9 @@ New-Item -ItemType Directory -Force -Path "$env:APPDATA\shellstation"
 
 ---
 
-## 14. Windows 11 Project Bootstrap and Verify
+## 20. Windows 11 Project Bootstrap and Verify
 
-### Clone and install
+### Clone and install (Windows)
 
 ```powershell
 git clone https://git.fiedler.live/tux/shellstation.git
@@ -750,7 +1075,7 @@ cd shellstation
 npm install
 ```
 
-### Run database migrations
+### Run database migrations (Windows)
 
 ```powershell
 sqlx database create
@@ -765,7 +1090,7 @@ cargo tauri dev
 
 The first build compiles all Rust dependencies and takes several minutes. Subsequent builds are incremental.
 
-### Run the full quality check suite
+### Run the full quality check suite (Windows)
 
 Rust checks:
 
@@ -796,13 +1121,13 @@ If all commands pass without errors, your Windows development environment is rea
 
 ---
 
-## 15. Windows 11 Common Issues
+## 21. Windows 11 Common Issues
 
 ### `link.exe` not found or MSVC errors
 
 The Rust MSVC toolchain requires the Visual Studio Build Tools. If you see linker errors, ensure you installed the "Desktop development with C++" workload and are using a terminal that has the MSVC environment loaded. Opening **Developer PowerShell for VS 2022** from the Start menu guarantees the correct paths are set.
 
-### `pkg-config` not found
+### `pkg-config` not found (Windows)
 
 Some crates probe for system libraries using `pkg-config`, which is not natively available on Windows. Most ShellStation dependencies use vendored/bundled C libraries (e.g., SQLite via `sqlx`), so this should not be an issue. If a crate does require it, install via:
 
@@ -841,7 +1166,7 @@ If the application window opens but shows a blank white screen, WebView2 may nee
 
 ---
 
-## 16. Building for Release
+## 22. Building for Release
 
 This section covers producing optimized, distributable binaries for all platforms.
 
@@ -920,7 +1245,7 @@ Trade-off: `lto = true` with `codegen-units = 1` increases release build time si
 
 ---
 
-## 17. Code Signing
+## 23. Code Signing
 
 Unsigned binaries trigger OS warnings (Windows SmartScreen, macOS Gatekeeper). Code signing is required for a professional release.
 
@@ -974,7 +1299,7 @@ Linux packages (`.deb`, `.AppImage`) do not require code signing for distributio
 
 ---
 
-## 18. CI/CD Release Pipeline
+## 24. CI/CD Release Pipeline
 
 A GitHub Actions workflow that builds, signs, and publishes releases for all three platforms.
 
@@ -1105,7 +1430,7 @@ ls src-tauri/target/release/bundle/
 
 Cross-compilation is not supported by Tauri — each platform must be built on its native OS. For a multi-platform release without CI, build on each target machine and collect the artifacts manually.
 
-## 19. Docker SSH/Telnet Testlab
+## 25. Docker SSH/Telnet Testlab
 
 To test the functionality of connecting to a remote system via SSH or Telnet,
 including with the use of a jumphost, see the Readme in the directory **ssh-testlab**.
