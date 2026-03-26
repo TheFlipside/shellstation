@@ -420,18 +420,18 @@ impl DatabaseProvider for PostgresProvider {
         let mut hasher = DefaultHasher::new();
         folder_rows.len().hash(&mut hasher);
         for row in &folder_rows {
-            let id: Uuid = row.get("id");
+            let id: String = row.get("id");
             let name: String = row.get("name");
             id.hash(&mut hasher);
             name.hash(&mut hasher);
         }
         session_rows.len().hash(&mut hasher);
         for row in &session_rows {
-            let id: Uuid = row.get("id");
+            let id: String = row.get("id");
             let name: String = row.get("name");
             let hostname: String = row.get("hostname");
             let port: i32 = row.get("port");
-            let folder_id: Uuid = row.get("folder_id");
+            let folder_id: String = row.get("folder_id");
             id.hash(&mut hasher);
             name.hash(&mut hasher);
             hostname.hash(&mut hasher);
