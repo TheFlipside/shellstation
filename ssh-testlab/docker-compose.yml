@@ -64,6 +64,22 @@ services:
     networks:
       - sshlab
 
+  postgres:
+    image: postgres:18
+    container_name: lab-postgres
+    volumes:
+      - pgdata_lab:/var/lib/postgresql
+    environment:
+      POSTGRES_USER: shellstation
+      POSTGRES_PASSWORD: shellstation
+      POSTGRES_DB: shellstation
+    ports:
+      - "2345:5432"
+    command: ["postgres", "-c", "listen_addresses=*"]
+
+volumes:
+  pgdata_lab:
+
 networks:
   sshlab:
     driver: bridge
