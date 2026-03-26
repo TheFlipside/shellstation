@@ -723,7 +723,6 @@ body,
   min-width: 160px;
   box-shadow: 0 4px 16px var(--color-shadow);
   z-index: 200;
-  zoom: var(--ui-zoom, 1);
 }
 
 .context-menu-item {

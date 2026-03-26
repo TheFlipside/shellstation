@@ -1,4 +1,6 @@
 import React, { useEffect, useRef } from "react";
+import ReactDOM from "react-dom";
+import { useSettingsStore } from "../stores/settingsStore";
 
 export interface ContextMenuItem {
   label: string;
@@ -15,6 +17,7 @@ interface ContextMenuProps {
 
 export function ContextMenu({ x, y, items, onClose }: ContextMenuProps): React.JSX.Element {
   const ref = useRef<HTMLDivElement>(null);
+  const uiScale = useSettingsStore((s) => s.uiScale);
 
   useEffect(() => {
     const handleClick = (e: MouseEvent): void => {
@@ -33,8 +36,13 @@ export function ContextMenu({ x, y, items, onClose }: ContextMenuProps): React.J
     };
   }, [onClose]);
 
-  return (
-    <div ref={ref} className="context-menu" style={{ left: x, top: y }}>
+  const zoom = uiScale / 100;
+
+  // Render via portal at document.body so the menu is outside any zoomed
+  // ancestor containers.  position:fixed then works relative to the true
+  // viewport and coordinates only need compensating for the menu's own zoom.
+  return ReactDOM.createPortal(
+    <div ref={ref} className="context-menu" style={{ left: x / zoom, top: y / zoom, zoom }}>
       {items.map((item) => (
         <button
           key={item.label}
@@ -48,6 +56,7 @@ export function ContextMenu({ x, y, items, onClose }: ContextMenuProps): React.J
           {item.label}
         </button>
       ))}
-    </div>
+    </div>,
+    document.body,
   );
 }
