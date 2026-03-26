@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { open } from "@tauri-apps/plugin-dialog";
+import { open, save } from "@tauri-apps/plugin-dialog";
 import { useEscapeKey } from "../hooks/useEscapeKey";
 import { useSettingsStore } from "../stores/settingsStore";
 
@@ -471,6 +471,26 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
                 }}
               >
                 {t("settings.dbBrowse")}
+              </button>
+              <button
+                type="button"
+                className="dialog-btn"
+                onClick={() => {
+                  void (async () => {
+                    const path = await save({
+                      title: t("settings.dbCreateNew"),
+                      defaultPath: "sessions.db",
+                      filters: [{ name: "SQLite", extensions: ["db", "sqlite", "sqlite3"] }],
+                    });
+                    if (path) {
+                      setSqlitePath(path);
+                      setDbDirty(true);
+                      setDbSaved(false);
+                    }
+                  })();
+                }}
+              >
+                {t("settings.dbCreateNew")}
               </button>
               <span className="settings-help" title={t("settings.dbSqlitePathHint")}>
                 ?

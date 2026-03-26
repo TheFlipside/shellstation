@@ -143,6 +143,7 @@
     "dbSqlitePathHint": "Path to the SQLite database file. Leave empty to use the default location. Changing this requires a restart.",
     "dbSqlitePathError": "Invalid path: {{message}}",
     "dbBrowse": "Browse\u2026",
+    "dbCreateNew": "Create New\u2026",
     "dbPostgres": "PostgreSQL Server",
     "dbHostLabel": "Host",
     "dbHostPlaceholder": "db.example.com",

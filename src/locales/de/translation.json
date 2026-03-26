@@ -143,6 +143,7 @@
     "dbSqlitePathHint": "Pfad zur SQLite-Datenbankdatei. Leer lassen f\u00fcr den Standardspeicherort. Eine \u00c4nderung erfordert einen Neustart.",
     "dbSqlitePathError": "Ung\u00fcltiger Pfad: {{message}}",
     "dbBrowse": "Durchsuchen\u2026",
+    "dbCreateNew": "Neu erstellen\u2026",
     "dbPostgres": "PostgreSQL-Server",
     "dbHostLabel": "Host",
     "dbHostPlaceholder": "db.beispiel.de",
