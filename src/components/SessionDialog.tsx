@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useEscapeKey } from "../hooks/useEscapeKey";
@@ -56,6 +56,14 @@ export function SessionDialog({
   const [icon, setIcon] = useState(initial?.icon ?? "desktop");
   const [jumpHostId, setJumpHostId] = useState(initial?.jumpHostId ?? "");
   const [error, setError] = useState("");
+
+  // Clear credentials from state when the dialog unmounts.
+  useEffect(() => {
+    return () => {
+      setPassword("");
+      setKeyPath("");
+    };
+  }, []);
 
   const handleSubmit = (e: React.SyntheticEvent): void => {
     e.preventDefault();

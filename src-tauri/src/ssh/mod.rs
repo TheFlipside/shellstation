@@ -347,6 +347,15 @@ fn expand_tilde(path: &str) -> String {
 /// directory and is not a known sensitive file. Prevents path traversal attacks.
 fn validate_key_path(path: &str) -> Result<String, String> {
     let home = dirs::home_dir().ok_or("Cannot determine home directory")?;
+
+    // Reject symlinks before canonicalization to prevent symlink-based
+    // attacks that could redirect reads to arbitrary files.
+    let metadata = std::fs::symlink_metadata(path)
+        .map_err(|e| format!("Key file not accessible: {e}"))?;
+    if metadata.file_type().is_symlink() {
+        return Err("Symbolic links are not allowed for key files".to_string());
+    }
+
     let canonical =
         std::fs::canonicalize(path).map_err(|e| format!("Key file not accessible: {e}"))?;
     if !canonical.starts_with(&home) {
@@ -395,24 +404,63 @@ fn ensure_known_hosts_file(path: &std::path::Path) {
                 warn!(path = %parent.display(), error = %e, "Failed to create .ssh directory");
                 return;
             }
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                let _ = std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700));
-            }
         }
+        // Always enforce correct permissions on the .ssh directory.
+        set_restricted_dir_permissions(parent);
     }
     if !path.exists() {
         if let Err(e) = std::fs::File::create(path) {
             warn!(path = %path.display(), error = %e, "Failed to create known_hosts file");
             return;
         }
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
-        }
     }
+    // Always enforce correct permissions on the known_hosts file.
+    set_restricted_file_permissions(path);
+}
+
+/// Set directory permissions to 0700 (Unix) or restricted ACL (Windows).
+fn set_restricted_dir_permissions(path: &std::path::Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700));
+    }
+    #[cfg(windows)]
+    {
+        restrict_windows_acl(path, true);
+    }
+}
+
+/// Set file permissions to 0600 (Unix) or restricted ACL (Windows).
+fn set_restricted_file_permissions(path: &std::path::Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+    }
+    #[cfg(windows)]
+    {
+        restrict_windows_acl(path, false);
+    }
+}
+
+/// On Windows, use icacls to remove inherited permissions and grant full
+/// control only to the current user.
+#[cfg(windows)]
+fn restrict_windows_acl(path: &std::path::Path, is_dir: bool) {
+    let path_str = path.to_string_lossy().to_string();
+    let username = std::env::var("USERNAME").unwrap_or_default();
+    if username.is_empty() {
+        return;
+    }
+    let grant = if is_dir {
+        format!("{username}:(OI)(CI)F")
+    } else {
+        format!("{username}:F")
+    };
+    let _ = std::process::Command::new("icacls")
+        .args([&path_str, "/inheritance:r", "/grant:r", &grant])
+        .output();
 }
 
 /// Remove blank lines from a known_hosts file so entries are contiguous,

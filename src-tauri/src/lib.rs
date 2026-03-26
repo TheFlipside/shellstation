@@ -190,10 +190,10 @@ pub fn run() {
                             }));
                         }
                         Err(e) => {
-                            // Log full error server-side only; never expose raw
-                            // database errors to the frontend (may contain credentials).
-                            tracing::error!("PostgreSQL connection failed: {e}");
+                            // Sanitize before logging — raw errors may contain
+                            // connection strings or credentials.
                             let safe_msg = sanitize_pg_error(&e.to_string());
+                            tracing::error!("PostgreSQL connection failed: {safe_msg}");
 
                             // Provide a stub DbState so the app can still start
                             // and the user can fix settings. Use a fresh in-memory

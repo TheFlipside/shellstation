@@ -188,6 +188,18 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
       try {
         const text = await file.text();
         const data: unknown = JSON.parse(text);
+        if (
+          typeof data !== "object" ||
+          data === null ||
+          Array.isArray(data) ||
+          !("folders" in data) ||
+          !("sessions" in data) ||
+          !Array.isArray((data as Record<string, unknown>).folders) ||
+          !Array.isArray((data as Record<string, unknown>).sessions)
+        ) {
+          setDbError("Invalid export format: expected an object with folders and sessions arrays.");
+          return;
+        }
         const result = await invoke<string>("db_import", { data });
         setDbTestResult(result);
       } catch (e) {
@@ -195,6 +207,13 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
       }
     };
     input.click();
+  }, []);
+
+  // Clear sensitive fields from state when the dialog unmounts.
+  useEffect(() => {
+    return () => {
+      setPgPassword("");
+    };
   }, []);
 
   useEscapeKey(onClose);

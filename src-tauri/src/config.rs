@@ -86,8 +86,16 @@ pub fn load_config(config_dir: &Path) -> AppConfig {
 }
 
 /// Save the application config to the given path.
+/// Sets restrictive file permissions (0600 on Unix) since the config may
+/// contain database credentials.
 pub fn save_config(config_path: &Path, config: &AppConfig) -> Result<(), String> {
     let json = serde_json::to_string_pretty(config)
         .map_err(|e| format!("Failed to serialize config: {e}"))?;
-    std::fs::write(config_path, json).map_err(|e| format!("Failed to write config: {e}"))
+    std::fs::write(config_path, &json).map_err(|e| format!("Failed to write config: {e}"))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(config_path, std::fs::Permissions::from_mode(0o600));
+    }
+    Ok(())
 }

@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useEscapeKey } from "../hooks/useEscapeKey";
@@ -26,6 +26,13 @@ export function QuickConnect({ onConnect, onCancel }: QuickConnectProps): React.
   const [username, setUsername] = useState("");
   const [authMethod, setAuthMethod] = useState<"password" | "publickey">("password");
   const [credential, setCredential] = useState("");
+
+  // Clear credential from state when the dialog unmounts.
+  useEffect(() => {
+    return () => {
+      setCredential("");
+    };
+  }, []);
 
   const handleSubmit = (e: React.SyntheticEvent): void => {
     e.preventDefault();
