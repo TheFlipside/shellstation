@@ -339,7 +339,7 @@ pub async fn session_connect(
     }
 
     let conn_id = Uuid::new_v4().to_string();
-    let mut manager = ssh.0.lock().await;
+    let mut manager = ssh.manager.lock().await;
     manager
         .connect(SshConnectParams {
             id: conn_id.clone(),

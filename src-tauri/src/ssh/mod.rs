@@ -14,8 +14,15 @@ use tokio::task::JoinHandle;
 use tracing::{error, info, warn};
 use zeroize::Zeroizing;
 
+/// Pending TOFU verification senders, stored separately from `SshManager`
+/// so that `ssh_host_verify_response` can resolve a pending verification
+/// without acquiring the main `SshManager` lock (which is held by the
+/// `connect()` call that is waiting for the verification).
+type HostVerifySenders = Arc<std::sync::Mutex<HashMap<String, oneshot::Sender<bool>>>>;
+
 /// Payload emitted to the frontend when the server key needs user verification.
 #[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct HostVerifyPayload {
     pub session_id: String,
     pub host: String,
@@ -67,11 +74,20 @@ pub struct SshConnectParams {
 }
 
 /// Manages all active SSH sessions.
-#[derive(Default)]
 pub struct SshManager {
     sessions: HashMap<String, SshSession>,
-    /// Pending TOFU verification senders, keyed by session ID.
-    host_verify_senders: HashMap<String, oneshot::Sender<bool>>,
+    /// Pending TOFU verification senders — behind a separate std::sync::Mutex
+    /// so the verify response command can resolve without the main manager lock.
+    host_verify_senders: HostVerifySenders,
+}
+
+impl Default for SshManager {
+    fn default() -> Self {
+        Self {
+            sessions: HashMap::new(),
+            host_verify_senders: Arc::new(std::sync::Mutex::new(HashMap::new())),
+        }
+    }
 }
 
 impl SshManager {
@@ -104,6 +120,7 @@ impl SshManager {
 
         info!(session_id = %id, host = %host, port = %port, hops = jump_hops.len(), "Connecting via SSH");
 
+        let verify_senders = Arc::clone(&self.host_verify_senders);
         let (mut handle, bastion_handles) = connect_with_hops(
             &id,
             &host,
@@ -111,7 +128,7 @@ impl SshManager {
             &jump_hops,
             restrict_private_ips,
             &app_handle,
-            &mut self.host_verify_senders,
+            &verify_senders,
         )
         .await?;
 
@@ -246,24 +263,27 @@ impl SshManager {
         Ok(())
     }
 
-    /// Resolve a pending host key verification request from the frontend.
-    pub fn host_verify_response(&mut self, id: &str, accept: bool) -> Result<(), String> {
-        let sender = self
-            .host_verify_senders
-            .remove(id)
-            .ok_or_else(|| format!("No pending verification for session {id}"))?;
-        sender
-            .send(accept)
-            .map_err(|_| "Verification channel closed".to_string())
-    }
 }
 
 /// Thread-safe wrapper around `SshManager` for use as Tauri managed state.
-pub struct SshState(pub Arc<Mutex<SshManager>>);
+pub struct SshState {
+    pub manager: Arc<Mutex<SshManager>>,
+    /// Exposed separately so `ssh_host_verify_response` can resolve a pending
+    /// verification without acquiring the main manager tokio::Mutex (which is
+    /// held by the `connect()` call waiting for the verification result).
+    pub host_verify_senders: HostVerifySenders,
+}
 
 impl Default for SshState {
     fn default() -> Self {
-        Self(Arc::new(Mutex::new(SshManager::default())))
+        let senders: HostVerifySenders = Arc::new(std::sync::Mutex::new(HashMap::new()));
+        Self {
+            manager: Arc::new(Mutex::new(SshManager {
+                sessions: HashMap::new(),
+                host_verify_senders: Arc::clone(&senders),
+            })),
+            host_verify_senders: senders,
+        }
     }
 }
 
@@ -365,6 +385,51 @@ fn known_hosts_path() -> PathBuf {
         .join("known_hosts")
 }
 
+/// Ensure the `~/.ssh` directory (mode 700) and `known_hosts` file (mode 600)
+/// exist before russh tries to write, so the file is created with the
+/// permissions that OpenSSH expects.
+fn ensure_known_hosts_file(path: &std::path::Path) {
+    if let Some(parent) = path.parent() {
+        if !parent.exists() {
+            if let Err(e) = std::fs::create_dir_all(parent) {
+                warn!(path = %parent.display(), error = %e, "Failed to create .ssh directory");
+                return;
+            }
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700));
+            }
+        }
+    }
+    if !path.exists() {
+        if let Err(e) = std::fs::File::create(path) {
+            warn!(path = %path.display(), error = %e, "Failed to create known_hosts file");
+            return;
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+        }
+    }
+}
+
+/// Remove blank lines from a known_hosts file so entries are contiguous,
+/// matching the format OpenSSH produces.
+fn strip_blank_lines(path: &std::path::Path) {
+    let content = match std::fs::read_to_string(path) {
+        Ok(c) => c,
+        Err(_) => return,
+    };
+    let cleaned: Vec<&str> = content.lines().filter(|l| !l.trim().is_empty()).collect();
+    let mut out = cleaned.join("\n");
+    if !out.is_empty() {
+        out.push('\n');
+    }
+    let _ = std::fs::write(path, out);
+}
+
 /// Build a default SSH client config.
 fn ssh_config() -> Arc<client::Config> {
     Arc::new(client::Config {
@@ -455,7 +520,7 @@ async fn connect_with_hops(
     jump_hops: &[JumpHop],
     restrict_private_ips: bool,
     app_handle: &AppHandle,
-    verify_senders: &mut HashMap<String, oneshot::Sender<bool>>,
+    verify_senders: &HostVerifySenders,
 ) -> Result<(client::Handle<SshHandler>, Vec<client::Handle<SshHandler>>), String> {
     // Validate all targets against restricted IP ranges (SSRF prevention).
     if restrict_private_ips {
@@ -469,7 +534,7 @@ async fn connect_with_hops(
         // Direct connection — no jump hosts.
         let config = ssh_config();
         let (verify_tx, verify_rx) = oneshot::channel::<bool>();
-        verify_senders.insert(session_id.to_string(), verify_tx);
+        verify_senders.lock().unwrap().insert(session_id.to_string(), verify_tx);
 
         let handler = SshHandler {
             session_id: session_id.to_string(),
@@ -497,7 +562,7 @@ async fn connect_with_hops(
     let config = ssh_config();
     let hop_id = format!("{session_id}-hop0");
     let (verify_tx, verify_rx) = oneshot::channel::<bool>();
-    verify_senders.insert(hop_id.clone(), verify_tx);
+    verify_senders.lock().unwrap().insert(hop_id.clone(), verify_tx);
 
     let handler = SshHandler {
         session_id: hop_id,
@@ -543,7 +608,7 @@ async fn connect_with_hops(
         let config = ssh_config();
         let hop_id = format!("{session_id}-hop{i}");
         let (verify_tx, verify_rx) = oneshot::channel::<bool>();
-        verify_senders.insert(hop_id.clone(), verify_tx);
+        verify_senders.lock().unwrap().insert(hop_id.clone(), verify_tx);
 
         let handler = SshHandler {
             session_id: hop_id,
@@ -585,7 +650,7 @@ async fn connect_with_hops(
     let stream = tunnel.into_stream();
     let config = ssh_config();
     let (verify_tx, verify_rx) = oneshot::channel::<bool>();
-    verify_senders.insert(session_id.to_string(), verify_tx);
+    verify_senders.lock().unwrap().insert(session_id.to_string(), verify_tx);
 
     let handler = SshHandler {
         session_id: session_id.to_string(),
@@ -720,6 +785,10 @@ impl client::Handler for SshHandler {
         };
 
         if accepted {
+            // Ensure ~/.ssh dir and known_hosts file exist with correct
+            // permissions (0o700 / 0o600) before russh writes to them.
+            ensure_known_hosts_file(&kh_path);
+
             if let Err(e) = russh::keys::learn_known_hosts_path(
                 &self.host,
                 self.port,
@@ -728,6 +797,10 @@ impl client::Handler for SshHandler {
             ) {
                 warn!(session_id = %self.session_id, error = %e, "Failed to save known host");
             }
+
+            // russh inserts blank lines between entries; strip them to match
+            // the format OpenSSH produces.
+            strip_blank_lines(&kh_path);
         }
 
         Ok(accepted)

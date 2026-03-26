@@ -28,7 +28,7 @@ pub async fn ssh_connect(
         return Err(format!("Too many jump hops (max {MAX_JUMP_HOPS})"));
     }
     let id = Uuid::new_v4().to_string();
-    let mut manager = state.0.lock().await;
+    let mut manager = state.manager.lock().await;
     manager
         .connect(SshConnectParams {
             id: id.clone(),
@@ -54,7 +54,7 @@ pub async fn ssh_write(state: State<'_, SshState>, id: String, data: String) -> 
         return Err("Write data exceeds maximum size".to_string());
     }
     let (handle, channel_id) = {
-        let manager = state.0.lock().await;
+        let manager = state.manager.lock().await;
         manager.get_write_handle(&id)?
     };
     tokio::spawn(async move {
@@ -75,7 +75,7 @@ pub async fn ssh_resize(
 ) -> Result<(), String> {
     validate_dimensions(cols, rows)?;
     let resize_tx = {
-        let manager = state.0.lock().await;
+        let manager = state.manager.lock().await;
         manager.get_resize_sender(&id)?
     };
     resize_tx
@@ -90,17 +90,29 @@ pub async fn ssh_resize(
 /// Disconnect an SSH session.
 #[tauri::command]
 pub async fn ssh_disconnect(state: State<'_, SshState>, id: String) -> Result<(), String> {
-    let mut manager = state.0.lock().await;
+    let mut manager = state.manager.lock().await;
     manager.disconnect(&id).await
 }
 
 /// Respond to a pending host key verification request.
+///
+/// This intentionally does NOT acquire the main `SshManager` tokio::Mutex.
+/// The `connect()` call holds that lock while awaiting the verification
+/// response — if we also locked it here we would deadlock.
 #[tauri::command]
 pub async fn ssh_host_verify_response(
     state: State<'_, SshState>,
     id: String,
     accept: bool,
 ) -> Result<(), String> {
-    let mut manager = state.0.lock().await;
-    manager.host_verify_response(&id, accept)
+    let mut senders = state
+        .host_verify_senders
+        .lock()
+        .map_err(|e| format!("Verify sender lock poisoned: {e}"))?;
+    let sender = senders
+        .remove(&id)
+        .ok_or_else(|| format!("No pending verification for session {id}"))?;
+    sender
+        .send(accept)
+        .map_err(|_| "Verification channel closed".to_string())
 }

@@ -163,9 +163,10 @@ export function TerminalTabs({ uiScale }: TerminalTabsProps): React.JSX.Element 
   }, []);
 
   const handleHostVerifyResponse = useCallback(
-    async (sessionId: string, accept: boolean) => {
-      await invoke("ssh_host_verify_response", { id: sessionId, accept }).catch(noop);
+    (sessionId: string, accept: boolean) => {
+      // Close the dialog immediately — don't wait for the backend round-trip.
       showNextVerifyRequest();
+      invoke("ssh_host_verify_response", { id: sessionId, accept }).catch(noop);
     },
     [showNextVerifyRequest],
   );
@@ -295,29 +296,36 @@ export function TerminalTabs({ uiScale }: TerminalTabsProps): React.JSX.Element 
   );
 
   // Listen for host key verification events from any SSH session.
+  // The `cancelled` flag ensures that if React strict-mode unmounts before the
+  // async `listen()` resolves, the stale listener is cleaned up immediately
+  // instead of leaking (which would cause duplicate events and multi-click bugs).
   useEffect(() => {
-    const unlisteners: UnlistenFn[] = [];
+    let cancelled = false;
+    let unlisten: UnlistenFn | null = null;
 
-    const setupVerifyListener = async (): Promise<void> => {
-      const unlisten = await listen<HostVerifyRequest>("ssh-host-verify", (event) => {
-        setHostVerifyRequest((current) => {
-          if (current !== null) {
-            // A dialog is already showing — queue this request.
-            verifyQueueRef.current.push(event.payload);
-            return current;
-          }
-          return event.payload;
-        });
+    listen<HostVerifyRequest>("ssh-host-verify", (event) => {
+      if (cancelled) return;
+      setHostVerifyRequest((current) => {
+        if (current !== null) {
+          // A dialog is already showing — queue this request.
+          verifyQueueRef.current.push(event.payload);
+          return current;
+        }
+        return event.payload;
       });
-      unlisteners.push(unlisten);
-    };
-
-    setupVerifyListener().catch(noop);
+    })
+      .then((fn) => {
+        if (cancelled) {
+          fn(); // Cleanup already ran — unlisten immediately.
+        } else {
+          unlisten = fn;
+        }
+      })
+      .catch(noop);
 
     return () => {
-      for (const unlisten of unlisteners) {
-        unlisten();
-      }
+      cancelled = true;
+      unlisten?.();
     };
   }, []);
 
@@ -443,9 +451,7 @@ export function TerminalTabs({ uiScale }: TerminalTabsProps): React.JSX.Element 
       {hostVerifyRequest && (
         <HostVerifyDialog
           request={hostVerifyRequest}
-          onRespond={(sessionId, accept) => {
-            handleHostVerifyResponse(sessionId, accept).catch(noop);
-          }}
+          onRespond={handleHostVerifyResponse}
         />
       )}
       {tabCtx && (
