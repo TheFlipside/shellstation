@@ -31,8 +31,10 @@ interface SessionState {
   selectedItemType: "folder" | "session" | null;
   searchQuery: string;
   searchResults: Session[] | null;
+  lastFingerprint: string;
 
   loadAll: () => Promise<void>;
+  checkForUpdates: () => Promise<void>;
 
   // Folders
   createFolder: (name: string, parentId: string | null) => Promise<void>;
@@ -96,6 +98,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   selectedItemType: null,
   searchQuery: "",
   searchResults: null,
+  lastFingerprint: "",
 
   loadAll: async () => {
     const [folders, sessions] = await Promise.all([
@@ -118,6 +121,15 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       localStorage.setItem("shellstation:expandedFolders", JSON.stringify([...next]));
     }
     set({ folders, sessions, expandedFolderIds: pruned ? next : expanded });
+  },
+
+  checkForUpdates: async () => {
+    const fp = await invoke<{ hash: string }>("session_data_fingerprint");
+    const prev = get().lastFingerprint;
+    if (fp.hash !== prev) {
+      set({ lastFingerprint: fp.hash });
+      await get().loadAll();
+    }
   },
 
   // ── Folders ──────────────────────────────────────────────────────────

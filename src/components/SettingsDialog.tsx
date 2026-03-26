@@ -70,6 +70,8 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
     setPasteOnRightClick,
     restrictPrivateIps,
     setRestrictPrivateIps,
+    autoRefreshInterval,
+    setAutoRefreshInterval,
   } = useSettingsStore();
 
   const currentLang = language !== "" ? language : (i18n.resolvedLanguage ?? "en");
@@ -318,6 +320,27 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
           />
           <label htmlFor="settings-confirm-on-quit">{t("settings.confirmOnQuitLabel")}</label>
           <span className="settings-help" title={t("settings.confirmOnQuitHint")}>
+            ?
+          </span>
+        </div>
+
+        <div className="dialog-field">
+          <label htmlFor="settings-auto-refresh">{t("settings.autoRefreshLabel")}</label>
+          <select
+            id="settings-auto-refresh"
+            value={String(autoRefreshInterval)}
+            onChange={(e) => {
+              setAutoRefreshInterval(Number(e.target.value));
+            }}
+          >
+            <option value="0">{t("settings.autoRefreshOff")}</option>
+            <option value="10">10s</option>
+            <option value="30">30s</option>
+            <option value="60">60s</option>
+            <option value="120">120s</option>
+            <option value="300">300s</option>
+          </select>
+          <span className="settings-help" title={t("settings.autoRefreshHint")}>
             ?
           </span>
         </div>

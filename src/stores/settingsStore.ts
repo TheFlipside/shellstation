@@ -17,6 +17,7 @@ interface SettingsState {
   copyOnSelect: boolean;
   pasteOnRightClick: boolean;
   restrictPrivateIps: boolean;
+  autoRefreshInterval: number;
   setLanguage: (lang: string) => void;
   setUiScale: (scale: number) => void;
   setThemeMode: (mode: ThemeMode) => void;
@@ -29,6 +30,7 @@ interface SettingsState {
   setCopyOnSelect: (value: boolean) => void;
   setPasteOnRightClick: (value: boolean) => void;
   setRestrictPrivateIps: (value: boolean) => void;
+  setAutoRefreshInterval: (seconds: number) => void;
 }
 
 export const useSettingsStore = create<SettingsState>()(
@@ -46,6 +48,7 @@ export const useSettingsStore = create<SettingsState>()(
       copyOnSelect: false,
       pasteOnRightClick: false,
       restrictPrivateIps: false,
+      autoRefreshInterval: 0,
       setLanguage: (lang: string) => {
         void i18n.changeLanguage(lang);
         set({ language: lang });
@@ -82,6 +85,9 @@ export const useSettingsStore = create<SettingsState>()(
       },
       setRestrictPrivateIps: (value: boolean) => {
         set({ restrictPrivateIps: value });
+      },
+      setAutoRefreshInterval: (seconds: number) => {
+        set({ autoRefreshInterval: seconds });
       },
     }),
     {

@@ -7,7 +7,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use uuid::Uuid;
 
-use models::{Credential, Folder, NewFolder, NewSession, Session, UpdateSession};
+use models::{Credential, DataFingerprint, Folder, NewFolder, NewSession, Session, UpdateSession};
 
 pub type DbResult<T> = Result<T, String>;
 
@@ -46,4 +46,10 @@ pub trait DatabaseProvider: Send + Sync {
     #[allow(dead_code)]
     async fn delete_credential(&self, session_id: Uuid) -> DbResult<()>;
     async fn list_all_credentials(&self) -> DbResult<Vec<Credential>>;
+
+    /// Return a lightweight fingerprint derived from row counts and a hash of
+    /// all folder/session IDs and names.  The frontend polls this to decide
+    /// whether a full `loadAll()` is needed, avoiding the cost of serialising
+    /// and transferring thousands of rows every few seconds.
+    async fn data_fingerprint(&self) -> DbResult<DataFingerprint>;
 }

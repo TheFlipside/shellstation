@@ -10,6 +10,7 @@ import { MoveDialog } from "./MoveDialog";
 import { SessionDialog, type SessionFormData } from "./SessionDialog";
 import { SessionIconComponent } from "./SessionIcons";
 import { SettingsDialog } from "./SettingsDialog";
+import { useSettingsStore } from "../stores/settingsStore";
 
 // eslint-disable-next-line @typescript-eslint/no-empty-function
 const noop = (): void => {};
@@ -46,6 +47,7 @@ export function SessionSidebar(): React.JSX.Element {
     searchQuery,
     searchResults,
     loadAll,
+    checkForUpdates,
     createFolder,
     renameFolder,
     deleteFolder,
@@ -79,9 +81,23 @@ export function SessionSidebar(): React.JSX.Element {
   } | null>(null);
   const [showSettings, setShowSettings] = useState(false);
 
+  const { autoRefreshInterval } = useSettingsStore();
+
   useEffect(() => {
     loadAll().catch(noop);
   }, [loadAll]);
+
+  // Auto-refresh polling when interval is set (for multi-user PostgreSQL setups).
+  // Polls a lightweight fingerprint; only fetches full data when it changes.
+  useEffect(() => {
+    if (autoRefreshInterval <= 0) return;
+    const id = window.setInterval(() => {
+      checkForUpdates().catch(noop);
+    }, autoRefreshInterval * 1000);
+    return () => {
+      window.clearInterval(id);
+    };
+  }, [autoRefreshInterval, checkForUpdates]);
 
   const handleContextMenu = useCallback(
     (e: React.MouseEvent, id: string, type: "folder" | "session") => {
@@ -318,6 +334,16 @@ export function SessionSidebar(): React.JSX.Element {
             }}
           >
             +S
+          </button>
+          <button
+            type="button"
+            className="sidebar-btn"
+            title={t("sidebar.refresh")}
+            onClick={() => {
+              loadAll().catch(noop);
+            }}
+          >
+            {"\u21BB"}
           </button>
         </div>
       </div>

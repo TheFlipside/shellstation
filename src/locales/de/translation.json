@@ -5,7 +5,8 @@
     "newSession": "Neue Sitzung",
     "createFolderFirst": "Erstelle zuerst einen Ordner.",
     "searchPlaceholder": "Sitzungen suchen\u2026",
-    "empty": "Noch keine Ordner vorhanden. Klicke +F um einen zu erstellen."
+    "empty": "Noch keine Ordner vorhanden. Klicke +F um einen zu erstellen.",
+    "refresh": "Aktualisieren"
   },
   "contextMenu": {
     "newSession": "Neue Sitzung",
@@ -120,6 +121,9 @@
     "openLocalOnStartupHint": "Wenn aktiviert, wird beim Starten der Anwendung automatisch ein lokaler Terminal-Tab ge\u00f6ffnet. Wenn deaktiviert, startet die Anwendung ohne offene Tabs.",
     "confirmOnCloseTabLabel": "Best\u00e4tigung vor dem Schlie\u00dfen eines Tabs",
     "confirmOnCloseTabHint": "Wenn aktiviert, wird vor dem Schlie\u00dfen eines Terminal-Tabs eine Best\u00e4tigung angezeigt. Wenn deaktiviert, werden Tabs sofort geschlossen.",
+    "autoRefreshLabel": "Sitzungsliste automatisch aktualisieren",
+    "autoRefreshOff": "Aus",
+    "autoRefreshHint": "Ordner und Sitzungen regelm\u00e4\u00dfig aus der Datenbank neu laden. N\u00fctzlich, wenn mehrere Clients ein gemeinsames PostgreSQL-Backend verwenden. Auf Aus setzen, um zu deaktivieren.",
     "confirmOnQuitLabel": "Best\u00e4tigung vor dem Beenden bei offenen Sitzungen",
     "confirmOnQuitHint": "Wenn aktiviert, wird vor dem Beenden eine Best\u00e4tigung angezeigt, falls Terminal-Tabs ge\u00f6ffnet sind. Wenn deaktiviert, wird die Anwendung bei Strg+Q / Cmd+Q sofort geschlossen.",
     "quitConfirmMessage": "Es sind {{count}} Sitzung(en) ge\u00f6ffnet. M\u00f6chten Sie wirklich beenden?",

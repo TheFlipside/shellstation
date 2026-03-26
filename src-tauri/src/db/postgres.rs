@@ -3,7 +3,12 @@ use sqlx::postgres::PgRow;
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
-use super::models::{Credential, Folder, NewFolder, NewSession, Session, UpdateSession};
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
+
+use super::models::{
+    Credential, DataFingerprint, Folder, NewFolder, NewSession, Session, UpdateSession,
+};
 use super::{DatabaseProvider, DbResult};
 
 pub struct PostgresProvider {
@@ -399,5 +404,42 @@ impl DatabaseProvider for PostgresProvider {
         .map_err(|e| format!("Failed to list credentials: {e}"))?;
 
         rows.iter().map(row_to_credential).collect()
+    }
+
+    async fn data_fingerprint(&self) -> DbResult<DataFingerprint> {
+        let folder_rows = sqlx::query("SELECT id, name FROM folders ORDER BY id")
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| format!("Failed to fingerprint folders: {e}"))?;
+        let session_rows =
+            sqlx::query("SELECT id, name, hostname, port, folder_id FROM sessions ORDER BY id")
+                .fetch_all(&self.pool)
+                .await
+                .map_err(|e| format!("Failed to fingerprint sessions: {e}"))?;
+
+        let mut hasher = DefaultHasher::new();
+        folder_rows.len().hash(&mut hasher);
+        for row in &folder_rows {
+            let id: Uuid = row.get("id");
+            let name: String = row.get("name");
+            id.hash(&mut hasher);
+            name.hash(&mut hasher);
+        }
+        session_rows.len().hash(&mut hasher);
+        for row in &session_rows {
+            let id: Uuid = row.get("id");
+            let name: String = row.get("name");
+            let hostname: String = row.get("hostname");
+            let port: i32 = row.get("port");
+            let folder_id: Uuid = row.get("folder_id");
+            id.hash(&mut hasher);
+            name.hash(&mut hasher);
+            hostname.hash(&mut hasher);
+            port.hash(&mut hasher);
+            folder_id.hash(&mut hasher);
+        }
+        Ok(DataFingerprint {
+            hash: format!("{:x}", hasher.finish()),
+        })
     }
 }

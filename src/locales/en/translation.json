@@ -5,7 +5,8 @@
     "newSession": "New Session",
     "createFolderFirst": "Create a folder first.",
     "searchPlaceholder": "Search sessions\u2026",
-    "empty": "No folders yet. Click +F to create one."
+    "empty": "No folders yet. Click +F to create one.",
+    "refresh": "Refresh"
   },
   "contextMenu": {
     "newSession": "New Session",
@@ -121,6 +122,9 @@
     "confirmOnCloseTabLabel": "Confirm before closing a tab",
     "confirmOnCloseTabHint": "When enabled, a confirmation dialog is shown before closing a terminal tab. When disabled, tabs close immediately.",
     "confirmOnQuitLabel": "Confirm before quitting with open sessions",
+    "autoRefreshLabel": "Auto-refresh session list",
+    "autoRefreshOff": "Off",
+    "autoRefreshHint": "Periodically reload folders and sessions from the database. Useful when multiple clients share a PostgreSQL backend. Set to Off to disable.",
     "confirmOnQuitHint": "When enabled, a confirmation dialog is shown before quitting if there are open terminal tabs. When disabled, the application closes immediately on Ctrl+Q / Cmd+Q regardless of open sessions.",
     "quitConfirmMessage": "There are {{count}} open session(s). Are you sure you want to quit?",
     "quitConfirmTitle": "Quit ShellStation",

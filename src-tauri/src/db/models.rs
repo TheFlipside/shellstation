@@ -102,6 +102,14 @@ impl From<ExportCredential> for Credential {
     }
 }
 
+/// Lightweight fingerprint for polling-based change detection.
+/// The frontend compares this string across polls — if it changes,
+/// a full `loadAll()` is triggered.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DataFingerprint {
+    pub hash: String,
+}
+
 /// Complete database export for migration between backends.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ExportData {

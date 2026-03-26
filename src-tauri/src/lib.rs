@@ -252,6 +252,7 @@ pub fn run() {
             commands::session_move,
             commands::session_delete,
             commands::session_search,
+            commands::session_data_fingerprint,
             commands::session_connect,
             // Database config & migration
             commands::db_get_config,

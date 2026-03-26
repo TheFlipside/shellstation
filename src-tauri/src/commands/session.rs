@@ -5,7 +5,9 @@ use uuid::Uuid;
 
 use zeroize::Zeroizing;
 
-use crate::db::models::{Credential, Folder, NewFolder, NewSession, Session, UpdateSession};
+use crate::db::models::{
+    Credential, DataFingerprint, Folder, NewFolder, NewSession, Session, UpdateSession,
+};
 use crate::db::{CredentialDbState, DbState};
 use crate::ssh::{SshConnectParams, SshState};
 use crate::telnet::{TelnetConnectParams, TelnetState};
@@ -260,6 +262,13 @@ pub async fn session_search(
     query: String,
 ) -> Result<Vec<Session>, String> {
     state.0.search_sessions(&query).await
+}
+
+#[tauri::command]
+pub async fn session_data_fingerprint(
+    state: State<'_, DbState>,
+) -> Result<DataFingerprint, String> {
+    state.0.data_fingerprint().await
 }
 
 // ── Connect a saved session ──────────────────────────────────────────
