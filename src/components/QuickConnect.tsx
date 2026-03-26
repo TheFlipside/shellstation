@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import { useTranslation } from "react-i18next";
+import { open } from "@tauri-apps/plugin-dialog";
 import { useEscapeKey } from "../hooks/useEscapeKey";
 
 export interface QuickConnectParams {
@@ -136,19 +137,50 @@ export function QuickConnect({ onConnect, onCancel }: QuickConnectProps): React.
                     ? t("session.passwordLabel")
                     : t("session.keyPathLabel")}
                 </label>
-                <input
-                  id="qc-credential"
-                  type={authMethod === "password" ? "password" : "text"}
-                  value={credential}
-                  onChange={(e) => {
-                    setCredential(e.target.value);
-                  }}
-                  placeholder={
-                    authMethod === "password"
-                      ? t("session.passwordPlaceholder")
-                      : t("session.keyPathPlaceholder")
-                  }
-                />
+                {authMethod === "password" ? (
+                  <input
+                    id="qc-credential"
+                    type="password"
+                    value={credential}
+                    onChange={(e) => {
+                      setCredential(e.target.value);
+                    }}
+                    placeholder={t("session.passwordPlaceholder")}
+                  />
+                ) : (
+                  <div className="dialog-row">
+                    <div className="dialog-field-grow">
+                      <input
+                        id="qc-credential"
+                        type="text"
+                        value={credential}
+                        onChange={(e) => {
+                          setCredential(e.target.value);
+                        }}
+                        placeholder={t("session.keyPathPlaceholder")}
+                      />
+                    </div>
+                    <button
+                      type="button"
+                      className="dialog-btn"
+                      onClick={() => {
+                        void (async () => {
+                          const path = await open({
+                            title: t("session.keyPathLabel"),
+                            defaultPath: credential || undefined,
+                            multiple: false,
+                            directory: false,
+                          });
+                          if (path) {
+                            setCredential(path);
+                          }
+                        })();
+                      }}
+                    >
+                      {t("session.keyPathBrowse")}
+                    </button>
+                  </div>
+                )}
               </div>
             </>
           )}
