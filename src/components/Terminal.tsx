@@ -289,10 +289,9 @@ export function Terminal({
       });
 
       exitUnlisten = await listen(`terminal-exit-${sessionId}`, () => {
+        term.write(`\r\n${i18n.t("terminal.processExited")}\r\n`);
         if (onExitRef.current) {
           onExitRef.current();
-        } else {
-          term.write(`\r\n${i18n.t("terminal.processExited")}\r\n`);
         }
       });
     };

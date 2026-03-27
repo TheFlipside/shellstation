@@ -66,7 +66,8 @@ function App(): React.JSX.Element {
 
   const requestQuit = useCallback(() => {
     const tabs = useTerminalStore.getState().tabs;
-    if (tabs.length === 0) {
+    const aliveTabs = tabs.filter((t) => !t.exited);
+    if (aliveTabs.length === 0) {
       void getCurrentWindow().destroy();
       return;
     }
@@ -95,8 +96,9 @@ function App(): React.JSX.Element {
   useEffect(() => {
     const unlisten = getCurrentWindow().onCloseRequested((event) => {
       const tabs = useTerminalStore.getState().tabs;
+      const aliveTabs = tabs.filter((t) => !t.exited);
       const { confirmOnQuit } = useSettingsStore.getState();
-      if (tabs.length > 0 && confirmOnQuit) {
+      if (aliveTabs.length > 0 && confirmOnQuit) {
         event.preventDefault();
         setShowQuitConfirm(true);
       }
@@ -144,7 +146,7 @@ function App(): React.JSX.Element {
       {showQuitConfirm && (
         <ConfirmDialog
           message={t("settings.quitConfirmMessage", {
-            count: String(useTerminalStore.getState().tabs.length),
+            count: String(useTerminalStore.getState().tabs.filter((tb) => !tb.exited).length),
           })}
           confirmLabel={t("settings.quit")}
           onConfirm={handleQuitConfirm}

@@ -27,6 +27,7 @@ export function TerminalTabs({ uiScale }: TerminalTabsProps): React.JSX.Element 
     removeTab,
     setActiveTab,
     reorderTabs,
+    markTabExited,
     connectionError,
     setConnectionError,
   } = useTerminalStore();
@@ -188,7 +189,8 @@ export function TerminalTabs({ uiScale }: TerminalTabsProps): React.JSX.Element 
 
   const requestCloseTab = useCallback(
     (id: string) => {
-      if (confirmOnCloseTab) {
+      const tab = tabs.find((tb) => tb.id === id);
+      if (confirmOnCloseTab && !tab?.exited) {
         setConfirmClose({
           message: t("terminal.closeTabConfirm"),
           confirmLabel: t("terminal.tabContextClose"),
@@ -201,7 +203,7 @@ export function TerminalTabs({ uiScale }: TerminalTabsProps): React.JSX.Element 
         destroyTab(id).catch(noop);
       }
     },
-    [confirmOnCloseTab, destroyTab, t],
+    [confirmOnCloseTab, destroyTab, tabs, t],
   );
 
   const destroyMultipleTabs = useCallback(
@@ -216,7 +218,11 @@ export function TerminalTabs({ uiScale }: TerminalTabsProps): React.JSX.Element 
   const requestCloseMultipleTabs = useCallback(
     (ids: string[]) => {
       if (ids.length === 0) return;
-      if (confirmOnCloseTab) {
+      const hasAlive = ids.some((id) => {
+        const tab = tabs.find((tb) => tb.id === id);
+        return tab && !tab.exited;
+      });
+      if (confirmOnCloseTab && hasAlive) {
         setConfirmClose({
           message: t("terminal.closeAllTabsConfirm", { count: String(ids.length) }),
           confirmLabel: t("terminal.tabContextClose"),
@@ -229,7 +235,7 @@ export function TerminalTabs({ uiScale }: TerminalTabsProps): React.JSX.Element 
         destroyMultipleTabs(ids).catch(noop);
       }
     },
-    [confirmOnCloseTab, destroyMultipleTabs, t],
+    [confirmOnCloseTab, destroyMultipleTabs, tabs, t],
   );
 
   const cloneTab = useCallback(
@@ -427,13 +433,12 @@ export function TerminalTabs({ uiScale }: TerminalTabsProps): React.JSX.Element 
               sessionId={tab.id}
               sessionType={tab.type}
               visible={tab.id === activeTabId}
-              onExit={
-                closeOnDisconnect
-                  ? () => {
-                      destroyTab(tab.id).catch(noop);
-                    }
-                  : undefined
-              }
+              onExit={() => {
+                markTabExited(tab.id);
+                if (closeOnDisconnect) {
+                  destroyTab(tab.id).catch(noop);
+                }
+              }}
             />
           );
         })}
@@ -449,10 +454,7 @@ export function TerminalTabs({ uiScale }: TerminalTabsProps): React.JSX.Element 
         />
       )}
       {hostVerifyRequest && (
-        <HostVerifyDialog
-          request={hostVerifyRequest}
-          onRespond={handleHostVerifyResponse}
-        />
+        <HostVerifyDialog request={hostVerifyRequest} onRespond={handleHostVerifyResponse} />
       )}
       {tabCtx && (
         <ContextMenu
