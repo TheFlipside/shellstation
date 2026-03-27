@@ -42,13 +42,17 @@ pub async fn db_test_connection(
     database: String,
     username: String,
     password: String,
+    ssl_mode: Option<String>,
 ) -> Result<String, String> {
+    let ssl = ssl_mode.unwrap_or_else(|| "prefer".to_string());
+    PostgresConfig::validate_ssl_mode(&ssl)?;
     let pg_opts = PostgresConfig {
         host,
         port,
         database,
         username,
         password,
+        ssl_mode: ssl,
     }
     .connect_options();
 
@@ -79,6 +83,7 @@ pub async fn db_save_config(
     database: String,
     username: String,
     password: String,
+    ssl_mode: Option<String>,
 ) -> Result<(), String> {
     let db_backend = match backend.as_str() {
         "sqlite" => DbBackend::Sqlite,
@@ -124,6 +129,9 @@ pub async fn db_save_config(
         }
     }
 
+    let ssl = ssl_mode.unwrap_or_else(|| "prefer".to_string());
+    PostgresConfig::validate_ssl_mode(&ssl)?;
+
     let new_config = AppConfig {
         db_backend,
         sqlite_path,
@@ -133,6 +141,7 @@ pub async fn db_save_config(
             database,
             username,
             password,
+            ssl_mode: ssl,
         },
     };
 

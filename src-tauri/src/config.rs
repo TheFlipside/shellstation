@@ -35,10 +35,18 @@ pub struct PostgresConfig {
     pub username: String,
     #[serde(default)]
     pub password: String,
+    /// SSL mode for the PostgreSQL connection.
+    /// Accepted values: "disable", "prefer" (default), "require".
+    #[serde(default = "default_ssl_mode")]
+    pub ssl_mode: String,
 }
 
 fn default_pg_port() -> u16 {
     5432
+}
+
+fn default_ssl_mode() -> String {
+    "prefer".to_string()
 }
 
 impl Default for PostgresConfig {
@@ -49,6 +57,7 @@ impl Default for PostgresConfig {
             database: String::new(),
             username: String::new(),
             password: String::new(),
+            ssl_mode: default_ssl_mode(),
         }
     }
 }
@@ -60,12 +69,31 @@ impl PostgresConfig {
     /// parameter injection when the password contains special characters
     /// (`@`, `:`, `/`, etc.) and to prevent credentials leaking into logs.
     pub fn connect_options(&self) -> sqlx::postgres::PgConnectOptions {
+        use sqlx::postgres::PgSslMode;
+
+        let ssl_mode = match self.ssl_mode.as_str() {
+            "disable" => PgSslMode::Disable,
+            "require" => PgSslMode::Require,
+            _ => PgSslMode::Prefer,
+        };
+
         sqlx::postgres::PgConnectOptions::new()
             .host(&self.host)
             .port(self.port)
             .database(&self.database)
             .username(&self.username)
             .password(&self.password)
+            .ssl_mode(ssl_mode)
+    }
+
+    /// Validate the ssl_mode value.
+    pub fn validate_ssl_mode(mode: &str) -> Result<(), String> {
+        match mode {
+            "disable" | "prefer" | "require" => Ok(()),
+            other => Err(format!(
+                "Invalid SSL mode: \"{other}\". Must be \"disable\", \"prefer\", or \"require\"."
+            )),
+        }
     }
 }
 
@@ -80,8 +108,30 @@ pub struct ConfigState {
 pub fn load_config(config_dir: &Path) -> AppConfig {
     let path = config_dir.join("config.json");
     match std::fs::read_to_string(&path) {
-        Ok(contents) => serde_json::from_str(&contents).unwrap_or_default(),
-        Err(_) => AppConfig::default(),
+        Ok(contents) => match serde_json::from_str::<AppConfig>(&contents) {
+            Ok(config) => {
+                tracing::info!(
+                    backend = ?config.db_backend,
+                    pg_host = %config.postgres.host,
+                    pg_port = config.postgres.port,
+                    pg_ssl_mode = %config.postgres.ssl_mode,
+                    "Loaded config from {}",
+                    path.display()
+                );
+                config
+            }
+            Err(e) => {
+                tracing::error!("Failed to parse {}: {e} — using defaults", path.display());
+                AppConfig::default()
+            }
+        },
+        Err(e) => {
+            tracing::info!(
+                "Config file not found or unreadable ({}): {e} — using defaults",
+                path.display()
+            );
+            AppConfig::default()
+        }
     }
 }
 

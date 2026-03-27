@@ -36,6 +36,7 @@ interface AppConfig {
     database: string;
     username: string;
     password: string;
+    ssl_mode: string;
   };
 }
 
@@ -84,6 +85,7 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
   const [pgDatabase, setPgDatabase] = useState("");
   const [pgUsername, setPgUsername] = useState("");
   const [pgPassword, setPgPassword] = useState("");
+  const [pgSslMode, setPgSslMode] = useState("prefer");
   const [dbTestResult, setDbTestResult] = useState<string | null>(null);
   const [dbTestLoading, setDbTestLoading] = useState(false);
   const [dbSaved, setDbSaved] = useState(false);
@@ -100,6 +102,7 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
         setPgDatabase(config.postgres.database);
         setPgUsername(config.postgres.username);
         setPgPassword(config.postgres.password);
+        setPgSslMode(config.postgres.ssl_mode || "prefer");
       })
       .catch(() => {
         // Config load failed — keep defaults
@@ -127,6 +130,7 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
         host: pgHost,
         port: pgPort,
         database: pgDatabase,
+        sslMode: pgSslMode,
         username: pgUsername,
         password: pgPassword,
       });
@@ -136,7 +140,7 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
     } finally {
       setDbTestLoading(false);
     }
-  }, [pgHost, pgPort, pgDatabase, pgUsername, pgPassword]);
+  }, [pgHost, pgPort, pgDatabase, pgUsername, pgPassword, pgSslMode]);
 
   const handleDbSave = useCallback(async () => {
     setDbError(null);
@@ -149,13 +153,14 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
         database: pgDatabase,
         username: pgUsername,
         password: pgPassword,
+        sslMode: pgSslMode,
       });
       setDbSaved(true);
       setDbDirty(false);
     } catch (e) {
       setDbError(String(e));
     }
-  }, [dbBackend, sqlitePath, pgHost, pgPort, pgDatabase, pgUsername, pgPassword]);
+  }, [dbBackend, sqlitePath, pgHost, pgPort, pgDatabase, pgUsername, pgPassword, pgSslMode]);
 
   const handleDbExport = useCallback(async () => {
     try {
@@ -609,6 +614,21 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
                   handlePgFieldChange();
                 }}
               />
+            </div>
+            <div className="dialog-field">
+              <label htmlFor="settings-pg-sslmode">{t("settings.dbSslModeLabel")}</label>
+              <select
+                id="settings-pg-sslmode"
+                value={pgSslMode}
+                onChange={(e) => {
+                  setPgSslMode(e.target.value);
+                  handlePgFieldChange();
+                }}
+              >
+                <option value="disable">{t("settings.dbSslModeDisable")}</option>
+                <option value="prefer">{t("settings.dbSslModePrefer")}</option>
+                <option value="require">{t("settings.dbSslModeRequire")}</option>
+              </select>
             </div>
             <div className="dialog-field">
               <button

@@ -170,6 +170,13 @@ pub fn run() {
                         Arc::new(SqliteProvider::new(local_pool)) as Arc<dyn db::DatabaseProvider>;
                     app.manage(CredentialDbState(cred_provider));
 
+                    tracing::info!(
+                        host = %app_config.postgres.host,
+                        port = app_config.postgres.port,
+                        database = %app_config.postgres.database,
+                        ssl_mode = %app_config.postgres.ssl_mode,
+                        "Connecting to PostgreSQL…"
+                    );
                     let pg_opts = app_config.postgres.connect_options();
                     match tauri::async_runtime::block_on(async {
                         let pool = PgPoolOptions::new()
@@ -190,6 +197,10 @@ pub fn run() {
                             }));
                         }
                         Err(e) => {
+                            // Log the raw error for debugging (visible only in
+                            // console/log file, not shown to the user).
+                            //tracing::error!("PostgreSQL connection failed (raw): {e}");
+                            //let safe_msg = sanitize_pg_error(&e.to_string());
                             // Sanitize before logging — raw errors may contain
                             // connection strings or credentials.
                             let safe_msg = sanitize_pg_error(&e.to_string());
