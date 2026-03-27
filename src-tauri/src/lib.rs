@@ -17,6 +17,7 @@ use db::postgres::PostgresProvider;
 use db::sqlite::SqliteProvider;
 use db::{CredentialDbState, DbState};
 use pty::PtyState;
+use sha2::{Digest, Sha384};
 use sqlx::postgres::PgPoolOptions;
 use sqlx::sqlite::SqliteConnectOptions;
 use sqlx::SqlitePool;
@@ -61,6 +62,84 @@ fn init_local_sqlite(
     })
 }
 
+/// Fix migration checksum mismatches caused by CRLF/LF line-ending
+/// differences across platforms.
+///
+/// sqlx embeds migration checksums at compile time. When compiled on
+/// Windows (CRLF files) but the DB was initialized from Linux/macOS (LF),
+/// every checksum differs even though the SQL content is identical.
+///
+/// This function detects that specific case and updates the DB checksums
+/// to match the compiled binary, so `sqlx::migrate!().run()` succeeds.
+async fn fix_crlf_migration_checksums(
+    pool: &sqlx::PgPool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    // If the migrations table doesn't exist yet, nothing to fix.
+    let table_exists = sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS (\
+             SELECT FROM information_schema.tables \
+             WHERE table_name = '_sqlx_migrations'\
+         )",
+    )
+    .fetch_one(pool)
+    .await?;
+    if !table_exists {
+        return Ok(());
+    }
+
+    let migrator = sqlx::migrate!();
+    for migration in migrator.iter() {
+        let compiled_checksum: &[u8] = migration.checksum.as_ref();
+
+        // Fetch the checksum that was stored when this migration was applied.
+        let row: Option<(Vec<u8>,)> =
+            sqlx::query_as("SELECT checksum FROM _sqlx_migrations WHERE version = $1")
+                .bind(migration.version)
+                .fetch_optional(pool)
+                .await?;
+
+        let Some((db_checksum,)) = row else {
+            continue;
+        };
+
+        if db_checksum == compiled_checksum {
+            continue;
+        }
+
+        // Checksums differ — verify it's purely a line-ending difference.
+        // Compute the SHA-384 of the SQL with LF-only line endings.
+        let lf_sql = migration.sql.replace("\r\n", "\n");
+        let lf_hash: Vec<u8> = Sha384::digest(lf_sql.as_bytes()).to_vec();
+
+        // Compute the SHA-384 of the SQL with CRLF line endings.
+        let crlf_sql = lf_sql.replace('\n', "\r\n");
+        let crlf_hash: Vec<u8> = Sha384::digest(crlf_sql.as_bytes()).to_vec();
+
+        // The DB checksum must match one of the two normalized forms.
+        if db_checksum != lf_hash && db_checksum != crlf_hash {
+            // Genuine content change — don't touch it.
+            tracing::warn!(
+                version = migration.version,
+                "Migration checksum mismatch is NOT a line-ending issue — skipping"
+            );
+            continue;
+        }
+
+        tracing::info!(
+            version = migration.version,
+            "Fixing CRLF migration checksum for \"{}\"",
+            migration.description
+        );
+        sqlx::query("UPDATE _sqlx_migrations SET checksum = $1 WHERE version = $2")
+            .bind(compiled_checksum)
+            .bind(migration.version)
+            .execute(pool)
+            .await?;
+    }
+
+    Ok(())
+}
+
 /// Strip connection URLs and credentials from PostgreSQL error messages
 /// so they are safe to display in the frontend.
 fn sanitize_pg_error(raw: &str) -> String {
@@ -75,6 +154,13 @@ fn sanitize_pg_error(raw: &str) -> String {
     }
     if raw.contains("does not exist") {
         return "Database does not exist — check the database name.".to_string();
+    }
+    if raw.contains("previously applied but has been modified") {
+        return "Migration checksum mismatch — the database was set up from a \
+                different platform with different line endings. \
+                Re-checkout the repository with LF line endings or reset the \
+                _sqlx_migrations table."
+            .to_string();
     }
     // Fallback: generic message without leaking internals.
     "Failed to connect to PostgreSQL. Check your settings and try again.".to_string()
@@ -184,6 +270,10 @@ pub fn run() {
                             .acquire_timeout(std::time::Duration::from_secs(5))
                             .connect_with(pg_opts)
                             .await?;
+                        // Fix CRLF/LF checksum mismatches before running migrations
+                        // so that Windows checkouts don't fail against a DB initialized
+                        // from Linux/macOS (or vice versa).
+                        fix_crlf_migration_checksums(&pool).await?;
                         sqlx::migrate!().run(&pool).await?;
                         Ok::<sqlx::PgPool, Box<dyn std::error::Error>>(pool)
                     }) {
