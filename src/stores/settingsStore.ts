@@ -38,9 +38,9 @@ export const useSettingsStore = create<SettingsState>()(
     (set) => ({
       language: "",
       uiScale: 100,
-      themeMode: "dark" as ThemeMode,
+      themeMode: "system" as ThemeMode,
       closeOnDisconnect: false,
-      openLocalOnStartup: true,
+      openLocalOnStartup: false,
       confirmOnQuit: true,
       confirmOnCloseTab: true,
       terminalFontFamily: "JetBrains Mono",
