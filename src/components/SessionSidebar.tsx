@@ -1,14 +1,25 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import {
+  DndContext,
+  DragOverlay,
+  PointerSensor,
+  KeyboardSensor,
+  useSensor,
+  useSensors,
+  type DragStartEvent,
+  type DragEndEvent,
+} from "@dnd-kit/core";
 import { useSessionStore } from "../stores/sessionStore";
+import type { Folder, Session } from "../stores/sessionStore";
 import { useTerminalStore } from "../stores/terminalStore";
-import { SessionTree } from "./SessionTree";
+import { SessionTree, parseDndId } from "./SessionTree";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { FolderDialog } from "./FolderDialog";
 import { MoveDialog } from "./MoveDialog";
 import { SessionDialog, type SessionFormData } from "./SessionDialog";
-import { SessionIconComponent } from "./SessionIcons";
+import { FolderIcon, SessionIconComponent } from "./SessionIcons";
 import { SettingsDialog } from "./SettingsDialog";
 import { useSettingsStore } from "../stores/settingsStore";
 
@@ -80,6 +91,18 @@ export function SessionSidebar(): React.JSX.Element {
     onConfirm: () => void;
   } | null>(null);
   const [showSettings, setShowSettings] = useState(false);
+  const [activeItem, setActiveItem] = useState<{
+    type: "folder" | "session";
+    id: string;
+  } | null>(null);
+
+  // Track whether a reorder is in progress to avoid double-firing.
+  const reordering = useRef(false);
+
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
+    useSensor(KeyboardSensor),
+  );
 
   const { autoRefreshInterval } = useSettingsStore();
 
@@ -118,6 +141,100 @@ export function SessionSidebar(): React.JSX.Element {
     [connectSession, t],
   );
 
+  const handleDragStart = useCallback((event: DragStartEvent): void => {
+    const parsed = parseDndId(String(event.active.id));
+    if (parsed) setActiveItem(parsed);
+  }, []);
+
+  const handleDragEnd = useCallback(
+    (event: DragEndEvent): void => {
+      setActiveItem(null);
+      const { active, over } = event;
+      if (!over || active.id === over.id || reordering.current) return;
+
+      const activeParsed = parseDndId(String(active.id));
+      const overParsed = parseDndId(String(over.id));
+      if (!activeParsed || !overParsed) return;
+
+      // Only allow reordering among same type and same parent.
+      if (activeParsed.type !== overParsed.type) return;
+
+      reordering.current = true;
+
+      if (activeParsed.type === "folder") {
+        const activeFolder = folders.find((f) => f.id === activeParsed.id);
+        const overFolder = folders.find((f) => f.id === overParsed.id);
+        if (!activeFolder || !overFolder) {
+          reordering.current = false;
+          return;
+        }
+        // Only reorder within same parent.
+        if (activeFolder.parent_id !== overFolder.parent_id) {
+          reordering.current = false;
+          return;
+        }
+        const parentId = activeFolder.parent_id;
+        const siblings = folders.filter((f) => f.parent_id === parentId);
+        const ids = siblings.map((f) => f.id);
+        const fromIdx = ids.indexOf(activeParsed.id);
+        const toIdx = ids.indexOf(overParsed.id);
+        if (fromIdx === -1 || toIdx === -1) {
+          reordering.current = false;
+          return;
+        }
+        ids.splice(fromIdx, 1);
+        ids.splice(toIdx, 0, activeParsed.id);
+        store
+          .reorderFolders(parentId, ids)
+          .catch(noop)
+          .finally(() => {
+            reordering.current = false;
+          });
+      } else {
+        const activeSession = sessions.find((s) => s.id === activeParsed.id);
+        const overSession = sessions.find((s) => s.id === overParsed.id);
+        if (!activeSession || !overSession) {
+          reordering.current = false;
+          return;
+        }
+        if (activeSession.folder_id !== overSession.folder_id) {
+          reordering.current = false;
+          return;
+        }
+        const folderId = activeSession.folder_id;
+        const siblings = sessions.filter((s) => s.folder_id === folderId);
+        const ids = siblings.map((s) => s.id);
+        const fromIdx = ids.indexOf(activeParsed.id);
+        const toIdx = ids.indexOf(overParsed.id);
+        if (fromIdx === -1 || toIdx === -1) {
+          reordering.current = false;
+          return;
+        }
+        ids.splice(fromIdx, 1);
+        ids.splice(toIdx, 0, activeParsed.id);
+        store
+          .reorderSessions(folderId, ids)
+          .catch(noop)
+          .finally(() => {
+            reordering.current = false;
+          });
+      }
+    },
+    [folders, sessions, store],
+  );
+
+  const handleSortRootAlphabetically = useCallback((): void => {
+    store.sortFolderAlphabetically(null).catch(noop);
+  }, [store]);
+
+  const getActiveItemData = (): { folder?: Folder; session?: Session } => {
+    if (!activeItem) return {};
+    if (activeItem.type === "folder") {
+      return { folder: folders.find((f) => f.id === activeItem.id) };
+    }
+    return { session: sessions.find((s) => s.id === activeItem.id) };
+  };
+
   const getContextItems = (): ContextMenuItem[] => {
     if (!ctx) return [];
 
@@ -145,6 +262,12 @@ export function SessionSidebar(): React.JSX.Element {
               folderId: ctx.id,
               initialName: folder?.name,
             });
+          },
+        },
+        {
+          label: t("contextMenu.sortAlphabetically"),
+          onClick: () => {
+            store.sortFolderAlphabetically(ctx.id, true).catch(noop);
           },
         },
         {
@@ -338,6 +461,14 @@ export function SessionSidebar(): React.JSX.Element {
           <button
             type="button"
             className="sidebar-btn"
+            title={t("sidebar.sortAlphabetically")}
+            onClick={handleSortRootAlphabetically}
+          >
+            A&#x2193;
+          </button>
+          <button
+            type="button"
+            className="sidebar-btn"
             title={t("sidebar.refresh")}
             onClick={() => {
               loadAll().catch(noop);
@@ -361,47 +492,75 @@ export function SessionSidebar(): React.JSX.Element {
           }}
         />
       </div>
-      <div className="sidebar-tree" role="tree">
-        {searchResults ? (
-          displaySessions.map((s) => (
-            <div
-              key={s.id}
-              className="tree-item tree-session"
-              style={{ paddingLeft: "8px" }}
-              onDoubleClick={() => {
-                handleSessionDoubleClick(s.id);
-              }}
-              onContextMenu={(e) => {
-                e.preventDefault();
-                handleContextMenu(e, s.id, "session");
-              }}
-              role="treeitem"
-              tabIndex={0}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") handleSessionDoubleClick(s.id);
-              }}
-            >
-              <span className="tree-icon">
-                <SessionIconComponent iconKey={s.icon} />
-              </span>
-              <span className="tree-label">{s.name}</span>
-              <span className="tree-meta">{s.hostname}</span>
-            </div>
-          ))
-        ) : (
-          <SessionTree
-            parentId={null}
-            depth={0}
-            folders={folders}
-            sessions={sessions}
-            onContextMenu={handleContextMenu}
-            onSessionDoubleClick={handleSessionDoubleClick}
-          />
-        )}
-        {!searchResults && folders.length === 0 && (
-          <div className="sidebar-empty">{t("sidebar.empty")}</div>
-        )}
-      </div>
+      <DndContext sensors={sensors} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
+        <div className="sidebar-tree" role="tree">
+          {searchResults ? (
+            displaySessions.map((s) => (
+              <div
+                key={s.id}
+                className="tree-item tree-session"
+                style={{ paddingLeft: "8px" }}
+                onDoubleClick={() => {
+                  handleSessionDoubleClick(s.id);
+                }}
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  handleContextMenu(e, s.id, "session");
+                }}
+                role="treeitem"
+                tabIndex={0}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") handleSessionDoubleClick(s.id);
+                }}
+              >
+                <span className="tree-icon">
+                  <SessionIconComponent iconKey={s.icon} />
+                </span>
+                <span className="tree-label">{s.name}</span>
+                <span className="tree-meta">{s.hostname}</span>
+              </div>
+            ))
+          ) : (
+            <SessionTree
+              parentId={null}
+              depth={0}
+              folders={folders}
+              sessions={sessions}
+              onContextMenu={handleContextMenu}
+              onSessionDoubleClick={handleSessionDoubleClick}
+            />
+          )}
+          {!searchResults && folders.length === 0 && (
+            <div className="sidebar-empty">{t("sidebar.empty")}</div>
+          )}
+        </div>
+        <DragOverlay>
+          {(() => {
+            const { folder, session } = getActiveItemData();
+            if (folder) {
+              return (
+                <div className="tree-item-drag-overlay">
+                  <span className="tree-icon">
+                    <FolderIcon />
+                  </span>
+                  <span className="tree-label">{folder.name}</span>
+                </div>
+              );
+            }
+            if (session) {
+              return (
+                <div className="tree-item-drag-overlay">
+                  <span className="tree-icon">
+                    <SessionIconComponent iconKey={session.icon} />
+                  </span>
+                  <span className="tree-label">{session.name}</span>
+                </div>
+              );
+            }
+            return null;
+          })()}
+        </DragOverlay>
+      </DndContext>
 
       {ctx && (
         <ContextMenu

@@ -6,7 +6,8 @@
     "createFolderFirst": "Create a folder first.",
     "searchPlaceholder": "Search sessions\u2026",
     "empty": "No folders yet. Click +F to create one.",
-    "refresh": "Refresh"
+    "refresh": "Refresh",
+    "sortAlphabetically": "Sort Alphabetically"
   },
   "contextMenu": {
     "newSession": "New Session",
@@ -15,7 +16,8 @@
     "moveTo": "Move To\u2026",
     "delete": "Delete",
     "connect": "Connect",
-    "edit": "Edit"
+    "edit": "Edit",
+    "sortAlphabetically": "Sort Alphabetically"
   },
   "folder": {
     "deleteWithSessions": "Delete folder and its {{count}} session(s)?",

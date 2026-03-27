@@ -7,6 +7,7 @@ export interface Folder {
   id: string;
   name: string;
   parent_id: string | null;
+  sort_order: number;
 }
 
 export interface Session {
@@ -21,6 +22,7 @@ export interface Session {
   jump_host_id: string | null;
   tags: string;
   icon: string;
+  sort_order: number;
 }
 
 interface SessionState {
@@ -49,6 +51,12 @@ interface SessionState {
   deleteSession: (id: string) => Promise<void>;
   searchSessions: (query: string) => Promise<void>;
   clearSearch: () => void;
+
+  // Reordering
+  reorderFolders: (parentId: string | null, orderedIds: string[]) => Promise<void>;
+  reorderSessions: (folderId: string, orderedIds: string[]) => Promise<void>;
+  sortFolderAlphabetically: (parentId: string | null, recursive?: boolean) => Promise<void>;
+  sortSessionsAlphabetically: (folderId: string) => Promise<void>;
 
   // UI
   toggleFolder: (id: string) => void;
@@ -221,6 +229,31 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
   clearSearch: () => {
     set({ searchQuery: "", searchResults: null });
+  },
+
+  // ── Reordering ──────────────────────────────────────────────────────
+
+  reorderFolders: async (parentId, orderedIds) => {
+    await invoke("folder_reorder", { parentId, orderedIds });
+    await get().loadAll();
+  },
+
+  reorderSessions: async (folderId, orderedIds) => {
+    await invoke("session_reorder", { folderId, orderedIds });
+    await get().loadAll();
+  },
+
+  sortFolderAlphabetically: async (parentId, recursive) => {
+    await invoke("folder_sort_alphabetically", {
+      parentId,
+      recursive: recursive ?? false,
+    });
+    await get().loadAll();
+  },
+
+  sortSessionsAlphabetically: async (folderId) => {
+    await invoke("session_sort_alphabetically", { folderId });
+    await get().loadAll();
   },
 
   // ── UI ─────────────────────────────────────────────────────────────

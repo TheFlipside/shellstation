@@ -271,6 +271,88 @@ pub async fn session_data_fingerprint(
     state.0.data_fingerprint().await
 }
 
+// ── Reordering commands ──────────────────────────────────────────────
+
+#[tauri::command]
+pub async fn folder_reorder(
+    state: State<'_, DbState>,
+    parent_id: Option<String>,
+    ordered_ids: Vec<String>,
+) -> Result<(), String> {
+    let parent_uuid = parent_id
+        .as_deref()
+        .map(|s| Uuid::parse_str(s).map_err(|e| format!("Invalid parent_id: {e}")))
+        .transpose()?;
+    let uuids: Vec<Uuid> = ordered_ids
+        .iter()
+        .map(|s| Uuid::parse_str(s).map_err(|e| format!("Invalid UUID '{s}': {e}")))
+        .collect::<Result<_, _>>()?;
+    state.0.reorder_folders(parent_uuid, uuids).await
+}
+
+#[tauri::command]
+pub async fn session_reorder(
+    state: State<'_, DbState>,
+    folder_id: String,
+    ordered_ids: Vec<String>,
+) -> Result<(), String> {
+    let folder_uuid = Uuid::parse_str(&folder_id).map_err(|e| format!("Invalid folder_id: {e}"))?;
+    let uuids: Vec<Uuid> = ordered_ids
+        .iter()
+        .map(|s| Uuid::parse_str(s).map_err(|e| format!("Invalid UUID '{s}': {e}")))
+        .collect::<Result<_, _>>()?;
+    state.0.reorder_sessions(folder_uuid, uuids).await
+}
+
+#[tauri::command]
+pub async fn folder_sort_alphabetically(
+    state: State<'_, DbState>,
+    parent_id: Option<String>,
+    recursive: Option<bool>,
+) -> Result<(), String> {
+    let parent_uuid = parent_id
+        .as_deref()
+        .map(|s| Uuid::parse_str(s).map_err(|e| format!("Invalid parent_id: {e}")))
+        .transpose()?;
+    sort_children_alphabetically(&state.0, parent_uuid, recursive.unwrap_or(false)).await
+}
+
+#[tauri::command]
+pub async fn session_sort_alphabetically(
+    state: State<'_, DbState>,
+    folder_id: String,
+) -> Result<(), String> {
+    let folder_uuid = Uuid::parse_str(&folder_id).map_err(|e| format!("Invalid folder_id: {e}"))?;
+    state.0.sort_sessions_alphabetically(folder_uuid).await
+}
+
+/// Sort the immediate children (folders + sessions) of a parent folder
+/// alphabetically.  When `recursive` is true, descend into every subfolder
+/// and do the same.
+async fn sort_children_alphabetically(
+    db: &std::sync::Arc<dyn super::super::db::DatabaseProvider>,
+    parent_id: Option<Uuid>,
+    recursive: bool,
+) -> Result<(), String> {
+    db.sort_folders_alphabetically(parent_id).await?;
+    if let Some(pid) = parent_id {
+        db.sort_sessions_alphabetically(pid).await?;
+    }
+
+    if recursive {
+        let all_folders = db.list_folders().await?;
+        let children: Vec<Uuid> = all_folders
+            .iter()
+            .filter(|f| f.parent_id == parent_id)
+            .map(|f| f.id)
+            .collect();
+        for child_id in children {
+            Box::pin(sort_children_alphabetically(db, Some(child_id), true)).await?;
+        }
+    }
+    Ok(())
+}
+
 // ── Connect a saved session ──────────────────────────────────────────
 
 /// Load a saved session from the database, retrieve its credential from the

@@ -37,6 +37,7 @@ fn row_to_folder(row: &SqliteRow) -> DbResult<Folder> {
         id: parse_uuid(row.get("id"))?,
         name: row.get("name"),
         parent_id: parse_optional_uuid(row.get("parent_id"))?,
+        sort_order: row.get("sort_order"),
     })
 }
 
@@ -53,6 +54,7 @@ fn row_to_session(row: &SqliteRow) -> DbResult<Session> {
         jump_host_id: parse_optional_uuid(row.get("jump_host_id"))?,
         tags: row.get("tags"),
         icon: row.get("icon"),
+        sort_order: row.get("sort_order"),
     })
 }
 
@@ -75,10 +77,20 @@ impl DatabaseProvider for SqliteProvider {
         let id_str = id.to_string();
         let parent_str = folder.parent_id.map(|u| u.to_string());
 
-        sqlx::query("INSERT INTO folders (id, name, parent_id) VALUES (?, ?, ?)")
+        // Place new folder at the end of its sibling list.
+        let sort_order: i32 = sqlx::query_scalar(
+            "SELECT COALESCE(MAX(sort_order), -1) + 1 FROM folders WHERE parent_id IS ?",
+        )
+        .bind(&parent_str)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(|e| format!("Failed to compute sort_order: {e}"))?;
+
+        sqlx::query("INSERT INTO folders (id, name, parent_id, sort_order) VALUES (?, ?, ?, ?)")
             .bind(&id_str)
             .bind(&folder.name)
             .bind(&parent_str)
+            .bind(sort_order)
             .execute(&self.pool)
             .await
             .map_err(|e| format!("Failed to create folder: {e}"))?;
@@ -87,14 +99,17 @@ impl DatabaseProvider for SqliteProvider {
             id,
             name: folder.name,
             parent_id: folder.parent_id,
+            sort_order,
         })
     }
 
     async fn list_folders(&self) -> DbResult<Vec<Folder>> {
-        let rows = sqlx::query("SELECT id, name, parent_id FROM folders ORDER BY name")
-            .fetch_all(&self.pool)
-            .await
-            .map_err(|e| format!("Failed to list folders: {e}"))?;
+        let rows = sqlx::query(
+            "SELECT id, name, parent_id, sort_order FROM folders ORDER BY sort_order ASC, name ASC",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| format!("Failed to list folders: {e}"))?;
 
         rows.iter().map(row_to_folder).collect()
     }
@@ -116,8 +131,18 @@ impl DatabaseProvider for SqliteProvider {
     async fn move_folder(&self, id: Uuid, new_parent_id: Option<Uuid>) -> DbResult<()> {
         let parent_str = new_parent_id.map(|u| u.to_string());
 
-        let result = sqlx::query("UPDATE folders SET parent_id = ? WHERE id = ?")
+        // Append at end of new parent's sibling list.
+        let sort_order: i32 = sqlx::query_scalar(
+            "SELECT COALESCE(MAX(sort_order), -1) + 1 FROM folders WHERE parent_id IS ?",
+        )
+        .bind(&parent_str)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(|e| format!("Failed to compute sort_order: {e}"))?;
+
+        let result = sqlx::query("UPDATE folders SET parent_id = ?, sort_order = ? WHERE id = ?")
             .bind(&parent_str)
+            .bind(sort_order)
             .bind(id.to_string())
             .execute(&self.pool)
             .await
@@ -150,9 +175,18 @@ impl DatabaseProvider for SqliteProvider {
         let folder_str = session.folder_id.to_string();
         let jump_str = session.jump_host_id.map(|u| u.to_string());
 
+        // Place new session at the end of its folder.
+        let sort_order: i32 = sqlx::query_scalar(
+            "SELECT COALESCE(MAX(sort_order), -1) + 1 FROM sessions WHERE folder_id = ?",
+        )
+        .bind(&folder_str)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(|e| format!("Failed to compute sort_order: {e}"))?;
+
         sqlx::query(
-            "INSERT INTO sessions (id, folder_id, name, hostname, port, protocol, username, auth_method, jump_host_id, tags, icon) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO sessions (id, folder_id, name, hostname, port, protocol, username, auth_method, jump_host_id, tags, icon, sort_order) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&id_str)
         .bind(&folder_str)
@@ -165,6 +199,7 @@ impl DatabaseProvider for SqliteProvider {
         .bind(&jump_str)
         .bind(&session.tags)
         .bind(&session.icon)
+        .bind(sort_order)
         .execute(&self.pool)
         .await
         .map_err(|e| format!("Failed to create session: {e}"))?;
@@ -181,12 +216,13 @@ impl DatabaseProvider for SqliteProvider {
             jump_host_id: session.jump_host_id,
             tags: session.tags,
             icon: session.icon,
+            sort_order,
         })
     }
 
     async fn get_session(&self, id: Uuid) -> DbResult<Option<Session>> {
         let row = sqlx::query(
-            "SELECT id, folder_id, name, hostname, port, protocol, username, auth_method, jump_host_id, tags, icon \
+            "SELECT id, folder_id, name, hostname, port, protocol, username, auth_method, jump_host_id, tags, icon, sort_order \
              FROM sessions WHERE id = ?",
         )
         .bind(id.to_string())
@@ -202,8 +238,8 @@ impl DatabaseProvider for SqliteProvider {
 
     async fn list_all_sessions(&self) -> DbResult<Vec<Session>> {
         let rows = sqlx::query(
-            "SELECT id, folder_id, name, hostname, port, protocol, username, auth_method, jump_host_id, tags, icon \
-             FROM sessions ORDER BY name",
+            "SELECT id, folder_id, name, hostname, port, protocol, username, auth_method, jump_host_id, tags, icon, sort_order \
+             FROM sessions ORDER BY sort_order ASC, name ASC",
         )
         .fetch_all(&self.pool)
         .await
@@ -291,8 +327,20 @@ impl DatabaseProvider for SqliteProvider {
     }
 
     async fn move_session(&self, id: Uuid, new_folder_id: Uuid) -> DbResult<()> {
-        let result = sqlx::query("UPDATE sessions SET folder_id = ? WHERE id = ?")
-            .bind(new_folder_id.to_string())
+        let folder_str = new_folder_id.to_string();
+
+        // Append at end of new folder's session list.
+        let sort_order: i32 = sqlx::query_scalar(
+            "SELECT COALESCE(MAX(sort_order), -1) + 1 FROM sessions WHERE folder_id = ?",
+        )
+        .bind(&folder_str)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(|e| format!("Failed to compute sort_order: {e}"))?;
+
+        let result = sqlx::query("UPDATE sessions SET folder_id = ?, sort_order = ? WHERE id = ?")
+            .bind(&folder_str)
+            .bind(sort_order)
             .bind(id.to_string())
             .execute(&self.pool)
             .await
@@ -321,13 +369,13 @@ impl DatabaseProvider for SqliteProvider {
         let escaped = query.replace('%', "\\%").replace('_', "\\_");
         let pattern = format!("%{escaped}%");
         let rows = sqlx::query(
-            "SELECT id, folder_id, name, hostname, port, protocol, username, auth_method, jump_host_id, tags, icon \
+            "SELECT id, folder_id, name, hostname, port, protocol, username, auth_method, jump_host_id, tags, icon, sort_order \
              FROM sessions \
              WHERE name LIKE ? ESCAPE '\\' \
                 OR hostname LIKE ? ESCAPE '\\' \
                 OR username LIKE ? ESCAPE '\\' \
                 OR tags LIKE ? ESCAPE '\\' \
-             ORDER BY name",
+             ORDER BY sort_order ASC, name ASC",
         )
         .bind(&pattern)
         .bind(&pattern)
@@ -338,6 +386,80 @@ impl DatabaseProvider for SqliteProvider {
         .map_err(|e| format!("Failed to search sessions: {e}"))?;
 
         rows.iter().map(row_to_session).collect()
+    }
+
+    // ── Reordering ─────────────────────────────────────────────────────
+
+    async fn reorder_folders(
+        &self,
+        parent_id: Option<Uuid>,
+        ordered_ids: Vec<Uuid>,
+    ) -> DbResult<()> {
+        let parent_str = parent_id.map(|u| u.to_string());
+        for (i, id) in ordered_ids.iter().enumerate() {
+            sqlx::query("UPDATE folders SET sort_order = ? WHERE id = ? AND parent_id IS ?")
+                .bind(i as i32)
+                .bind(id.to_string())
+                .bind(&parent_str)
+                .execute(&self.pool)
+                .await
+                .map_err(|e| format!("Failed to reorder folders: {e}"))?;
+        }
+        Ok(())
+    }
+
+    async fn reorder_sessions(&self, folder_id: Uuid, ordered_ids: Vec<Uuid>) -> DbResult<()> {
+        let folder_str = folder_id.to_string();
+        for (i, id) in ordered_ids.iter().enumerate() {
+            sqlx::query("UPDATE sessions SET sort_order = ? WHERE id = ? AND folder_id = ?")
+                .bind(i as i32)
+                .bind(id.to_string())
+                .bind(&folder_str)
+                .execute(&self.pool)
+                .await
+                .map_err(|e| format!("Failed to reorder sessions: {e}"))?;
+        }
+        Ok(())
+    }
+
+    async fn sort_folders_alphabetically(&self, parent_id: Option<Uuid>) -> DbResult<()> {
+        let parent_str = parent_id.map(|u| u.to_string());
+        let rows = sqlx::query("SELECT id FROM folders WHERE parent_id IS ? ORDER BY name ASC")
+            .bind(&parent_str)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| format!("Failed to sort folders: {e}"))?;
+
+        for (i, row) in rows.iter().enumerate() {
+            let id: String = row.get("id");
+            sqlx::query("UPDATE folders SET sort_order = ? WHERE id = ?")
+                .bind(i as i32)
+                .bind(&id)
+                .execute(&self.pool)
+                .await
+                .map_err(|e| format!("Failed to sort folders: {e}"))?;
+        }
+        Ok(())
+    }
+
+    async fn sort_sessions_alphabetically(&self, folder_id: Uuid) -> DbResult<()> {
+        let folder_str = folder_id.to_string();
+        let rows = sqlx::query("SELECT id FROM sessions WHERE folder_id = ? ORDER BY name ASC")
+            .bind(&folder_str)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| format!("Failed to sort sessions: {e}"))?;
+
+        for (i, row) in rows.iter().enumerate() {
+            let id: String = row.get("id");
+            sqlx::query("UPDATE sessions SET sort_order = ? WHERE id = ?")
+                .bind(i as i32)
+                .bind(&id)
+                .execute(&self.pool)
+                .await
+                .map_err(|e| format!("Failed to sort sessions: {e}"))?;
+        }
+        Ok(())
     }
 
     // ── Credentials ──────────────────────────────────────────────────────
@@ -401,23 +523,26 @@ impl DatabaseProvider for SqliteProvider {
 
     async fn data_fingerprint(&self) -> DbResult<DataFingerprint> {
         // Fetch only id + name from both tables — minimal data transfer.
-        let folder_rows = sqlx::query("SELECT id, name FROM folders ORDER BY id")
+        let folder_rows = sqlx::query("SELECT id, name, sort_order FROM folders ORDER BY id")
             .fetch_all(&self.pool)
             .await
             .map_err(|e| format!("Failed to fingerprint folders: {e}"))?;
-        let session_rows =
-            sqlx::query("SELECT id, name, hostname, port, folder_id FROM sessions ORDER BY id")
-                .fetch_all(&self.pool)
-                .await
-                .map_err(|e| format!("Failed to fingerprint sessions: {e}"))?;
+        let session_rows = sqlx::query(
+            "SELECT id, name, hostname, port, folder_id, sort_order FROM sessions ORDER BY id",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| format!("Failed to fingerprint sessions: {e}"))?;
 
         let mut hasher = DefaultHasher::new();
         folder_rows.len().hash(&mut hasher);
         for row in &folder_rows {
             let id: String = row.get("id");
             let name: String = row.get("name");
+            let sort_order: i32 = row.get("sort_order");
             id.hash(&mut hasher);
             name.hash(&mut hasher);
+            sort_order.hash(&mut hasher);
         }
         session_rows.len().hash(&mut hasher);
         for row in &session_rows {
@@ -426,11 +551,13 @@ impl DatabaseProvider for SqliteProvider {
             let hostname: String = row.get("hostname");
             let port: i32 = row.get("port");
             let folder_id: String = row.get("folder_id");
+            let sort_order: i32 = row.get("sort_order");
             id.hash(&mut hasher);
             name.hash(&mut hasher);
             hostname.hash(&mut hasher);
             port.hash(&mut hasher);
             folder_id.hash(&mut hasher);
+            sort_order.hash(&mut hasher);
         }
         Ok(DataFingerprint {
             hash: format!("{:x}", hasher.finish()),

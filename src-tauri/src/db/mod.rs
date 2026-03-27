@@ -39,6 +39,25 @@ pub trait DatabaseProvider: Send + Sync {
     async fn delete_session(&self, id: Uuid) -> DbResult<()>;
     async fn search_sessions(&self, query: &str) -> DbResult<Vec<Session>>;
 
+    // ── Reordering ───────────────────────────────────────────────────────
+
+    /// Persist a custom order for sibling folders under the given parent.
+    /// `ordered_ids` contains every folder ID in the desired sequence.
+    async fn reorder_folders(
+        &self,
+        parent_id: Option<Uuid>,
+        ordered_ids: Vec<Uuid>,
+    ) -> DbResult<()>;
+
+    /// Persist a custom order for sessions inside the given folder.
+    async fn reorder_sessions(&self, folder_id: Uuid, ordered_ids: Vec<Uuid>) -> DbResult<()>;
+
+    /// Reset sort_order for sibling folders so they appear alphabetically.
+    async fn sort_folders_alphabetically(&self, parent_id: Option<Uuid>) -> DbResult<()>;
+
+    /// Reset sort_order for sessions inside a folder so they appear alphabetically.
+    async fn sort_sessions_alphabetically(&self, folder_id: Uuid) -> DbResult<()>;
+
     // ── Credentials (metadata — secrets live in OS keychain) ─────────────
 
     async fn upsert_credential(&self, cred: Credential) -> DbResult<()>;

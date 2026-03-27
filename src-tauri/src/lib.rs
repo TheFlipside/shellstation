@@ -254,6 +254,11 @@ pub fn run() {
             commands::session_search,
             commands::session_data_fingerprint,
             commands::session_connect,
+            // Reordering
+            commands::folder_reorder,
+            commands::session_reorder,
+            commands::folder_sort_alphabetically,
+            commands::session_sort_alphabetically,
             // Database config & migration
             commands::db_get_config,
             commands::db_get_status,

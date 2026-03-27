@@ -262,7 +262,6 @@ impl SshManager {
         info!(session_id = %id, "SSH session disconnected");
         Ok(())
     }
-
 }
 
 /// Thread-safe wrapper around `SshManager` for use as Tauri managed state.
@@ -350,8 +349,8 @@ fn validate_key_path(path: &str) -> Result<String, String> {
 
     // Reject symlinks before canonicalization to prevent symlink-based
     // attacks that could redirect reads to arbitrary files.
-    let metadata = std::fs::symlink_metadata(path)
-        .map_err(|e| format!("Key file not accessible: {e}"))?;
+    let metadata =
+        std::fs::symlink_metadata(path).map_err(|e| format!("Key file not accessible: {e}"))?;
     if metadata.file_type().is_symlink() {
         return Err("Symbolic links are not allowed for key files".to_string());
     }
@@ -582,7 +581,10 @@ async fn connect_with_hops(
         // Direct connection — no jump hosts.
         let config = ssh_config();
         let (verify_tx, verify_rx) = oneshot::channel::<bool>();
-        verify_senders.lock().unwrap().insert(session_id.to_string(), verify_tx);
+        verify_senders
+            .lock()
+            .unwrap()
+            .insert(session_id.to_string(), verify_tx);
 
         let handler = SshHandler {
             session_id: session_id.to_string(),
@@ -610,7 +612,10 @@ async fn connect_with_hops(
     let config = ssh_config();
     let hop_id = format!("{session_id}-hop0");
     let (verify_tx, verify_rx) = oneshot::channel::<bool>();
-    verify_senders.lock().unwrap().insert(hop_id.clone(), verify_tx);
+    verify_senders
+        .lock()
+        .unwrap()
+        .insert(hop_id.clone(), verify_tx);
 
     let handler = SshHandler {
         session_id: hop_id,
@@ -656,7 +661,10 @@ async fn connect_with_hops(
         let config = ssh_config();
         let hop_id = format!("{session_id}-hop{i}");
         let (verify_tx, verify_rx) = oneshot::channel::<bool>();
-        verify_senders.lock().unwrap().insert(hop_id.clone(), verify_tx);
+        verify_senders
+            .lock()
+            .unwrap()
+            .insert(hop_id.clone(), verify_tx);
 
         let handler = SshHandler {
             session_id: hop_id,
@@ -698,7 +706,10 @@ async fn connect_with_hops(
     let stream = tunnel.into_stream();
     let config = ssh_config();
     let (verify_tx, verify_rx) = oneshot::channel::<bool>();
-    verify_senders.lock().unwrap().insert(session_id.to_string(), verify_tx);
+    verify_senders
+        .lock()
+        .unwrap()
+        .insert(session_id.to_string(), verify_tx);
 
     let handler = SshHandler {
         session_id: session_id.to_string(),

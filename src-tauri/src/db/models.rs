@@ -6,6 +6,7 @@ pub struct Folder {
     pub id: Uuid,
     pub name: String,
     pub parent_id: Option<Uuid>,
+    pub sort_order: i32,
 }
 
 #[derive(Debug, Deserialize)]
@@ -27,6 +28,7 @@ pub struct Session {
     pub jump_host_id: Option<Uuid>,
     pub tags: String,
     pub icon: String,
+    pub sort_order: i32,
 }
 
 #[derive(Debug, Deserialize)]

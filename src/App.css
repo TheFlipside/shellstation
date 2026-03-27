@@ -712,6 +712,21 @@ body,
   max-width: 100px;
 }
 
+/* Drag-and-drop overlay (floating clone of dragged item) */
+.tree-item-drag-overlay {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  font-size: 12px;
+  background: var(--color-surface1);
+  border: 1px solid var(--color-blue);
+  border-radius: 4px;
+  box-shadow: 0 4px 12px var(--color-shadow);
+  white-space: nowrap;
+  pointer-events: none;
+}
+
 /* ── Context Menu ──────────────────────────────────────────────── */
 
 .context-menu {

@@ -6,7 +6,8 @@
     "createFolderFirst": "Erstelle zuerst einen Ordner.",
     "searchPlaceholder": "Sitzungen suchen\u2026",
     "empty": "Noch keine Ordner vorhanden. Klicke +F um einen zu erstellen.",
-    "refresh": "Aktualisieren"
+    "refresh": "Aktualisieren",
+    "sortAlphabetically": "Alphabetisch sortieren"
   },
   "contextMenu": {
     "newSession": "Neue Sitzung",
@@ -15,7 +16,8 @@
     "moveTo": "Verschieben nach\u2026",
     "delete": "L\u00f6schen",
     "connect": "Verbinden",
-    "edit": "Bearbeiten"
+    "edit": "Bearbeiten",
+    "sortAlphabetically": "Alphabetisch sortieren"
   },
   "folder": {
     "deleteWithSessions": "Ordner und seine {{count}} Sitzung(en) l\u00f6schen?",
