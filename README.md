@@ -3,9 +3,7 @@
 ## Cross-Platform Terminal Manager & SSH/Telnet Client
 
 **Project Design Document**
-**Version 1.0 — March 2026**
-
-*A modern, open-source replacement for mRemoteNG and SecureCRT*
+**Version 1.1 — March 2026**
 
 ---
 
@@ -50,14 +48,14 @@ ShellStation provides a native terminal emulator with built-in SSH and Telnet su
 
 ### 2.3 Core Requirements Derived
 
-| Requirement | Rationale |
-|---|---|
-| Cross-platform | Eliminates Windows lock-in; supports Linux, macOS, Windows equally. |
-| Scalable storage | SQLite for single-user, PostgreSQL for teams; replaces XML entirely. |
-| Built-in terminal/SSH/Telnet | No external PuTTY or OpenSSH process dependency. |
-| SSH jump host chaining | First-class support for ProxyJump with arbitrary hop depth. |
-| Command broadcast | Send predefined command sets to one or multiple active sessions. |
-| Multi-user shared DB | Central PostgreSQL instance allows team-wide session sharing. |
+| Requirement                  | Rationale                                                            |
+| ---------------------------- | -------------------------------------------------------------------- |
+| Cross-platform               | Eliminates Windows lock-in; supports Linux, macOS, Windows equally.  |
+| Scalable storage             | SQLite for single-user, PostgreSQL for teams; replaces XML entirely. |
+| Built-in terminal/SSH/Telnet | No external PuTTY or OpenSSH process dependency.                     |
+| SSH jump host chaining       | First-class support for ProxyJump with arbitrary hop depth.          |
+| Command broadcast            | Send predefined command sets to one or multiple active sessions.     |
+| Multi-user shared DB         | Central PostgreSQL instance allows team-wide session sharing.        |
 
 ---
 
@@ -65,18 +63,18 @@ ShellStation provides a native terminal emulator with built-in SSH and Telnet su
 
 ### 3.1 Stack Overview
 
-| Layer | Technology | Purpose |
-|---|---|---|
-| Application Shell | Tauri 2.x | Cross-platform native app container; Rust backend, webview frontend. Produces small binaries without bundling Chromium. |
-| Backend Language | Rust | Memory-safe, high-performance systems language. Handles SSH, DB, and IPC. |
-| Frontend Framework | React + TypeScript | Mature ecosystem for building complex UI with strong type safety. |
-| Terminal Emulator | xterm.js | Battle-tested terminal emulator used by VS Code, Theia, and others. Supports ANSI, mouse events, ligatures, WebGL renderer. |
-| SSH Library | russh | Pure Rust SSH2 implementation with native channel forwarding for jump hosts. Replaces Paramiko. |
-| Local Database | SQLite (via rusqlite) | Zero-configuration embedded DB for single-user deployments. |
-| Central Database | PostgreSQL (via sqlx) | Scalable relational DB for multi-user/team shared session management. |
-| ORM / Query Layer | sqlx (compile-time) | Async, compile-time verified SQL queries. Same crate supports both SQLite and PostgreSQL. |
-| Build System | Cargo + Vite | Cargo for Rust backend; Vite for fast frontend bundling with HMR. |
-| Linting / Quality | clippy, eslint, prettier | Zero-warning policy across both backend and frontend code. |
+| Layer              | Technology               | Purpose                                                                                                                     |
+| ------------------ | ------------------------ | --------------------------------------------------------------------------------------------------------------------------- |
+| Application Shell  | Tauri 2.x                | Cross-platform native app container; Rust backend, webview frontend. Produces small binaries without bundling Chromium.     |
+| Backend Language   | Rust                     | Memory-safe, high-performance systems language. Handles SSH, DB, and IPC.                                                   |
+| Frontend Framework | React + TypeScript       | Mature ecosystem for building complex UI with strong type safety.                                                           |
+| Terminal Emulator  | xterm.js                 | Battle-tested terminal emulator used by VS Code, Theia, and others. Supports ANSI, mouse events, ligatures, WebGL renderer. |
+| SSH Library        | russh                    | Pure Rust SSH2 implementation with native channel forwarding for jump hosts. Replaces Paramiko.                             |
+| Local Database     | SQLite (via rusqlite)    | Zero-configuration embedded DB for single-user deployments.                                                                 |
+| Central Database   | PostgreSQL (via sqlx)    | Scalable relational DB for multi-user/team shared session management.                                                       |
+| ORM / Query Layer  | sqlx (compile-time)      | Async, compile-time verified SQL queries. Same crate supports both SQLite and PostgreSQL.                                   |
+| Build System       | Cargo + Vite             | Cargo for Rust backend; Vite for fast frontend bundling with HMR.                                                           |
+| Linting / Quality  | clippy, eslint, prettier | Zero-warning policy across both backend and frontend code.                                                                  |
 
 ### 3.2 Why Tauri + Rust over Alternatives
 
@@ -109,12 +107,12 @@ This model supports arbitrary hop depth, and because each session object owns it
 
 The application follows a clean separation between the Tauri/Rust backend and the React/TypeScript frontend, communicating via Tauri's IPC command system.
 
-| Frontend (WebView) | Backend (Rust / Tauri) |
-|---|---|
+| Frontend (WebView)                                                | Backend (Rust / Tauri)                                       |
+| ----------------------------------------------------------------- | ------------------------------------------------------------ |
 | React UI shell with tab management, session tree, settings panels | Tauri app lifecycle, window management, IPC command handlers |
-| xterm.js terminal instances (one per session tab) | SSH connection manager (russh sessions, channel pool) |
-| Command palette and broadcast UI | Database abstraction layer (sqlx → SQLite or PostgreSQL) |
-| Session import/export wizards | Credential store (OS keychain via keyring-rs) |
+| xterm.js terminal instances (one per session tab)                 | SSH connection manager (russh sessions, channel pool)        |
+| Command palette and broadcast UI                                  | Database abstraction layer (sqlx → SQLite or PostgreSQL)     |
+| Session import/export wizards                                     | Credential store (OS keychain via keyring-rs)                |
 
 Communication flow: The frontend invokes Tauri commands (e.g., `ssh_connect`, `session_create`, `broadcast_command`) via the `@tauri-apps/api`. The Rust backend processes these asynchronously and streams terminal output back to xterm.js instances via Tauri events.
 
@@ -122,14 +120,14 @@ Communication flow: The frontend invokes Tauri commands (e.g., `ssh_connect`, `s
 
 The schema is designed to be identical across SQLite and PostgreSQL, using only standard SQL types. Migrations are managed via sqlx-cli.
 
-| Table | Key Columns | Types | Notes |
-|---|---|---|---|
-| `folders` | id, name, parent_id | UUID, TEXT, UUID? | Hierarchical folder tree for organizing sessions. Self-referencing parent_id for nesting. |
-| `sessions` | id, folder_id, name, hostname, port, protocol, username, auth_method, jump_host_id, tags | UUID, UUID, TEXT, TEXT, INT, ENUM, TEXT, ENUM, UUID?, TEXT[] | Core session definitions. jump_host_id references another session to use as bastion. Tags enable flexible search/filter. |
-| `credentials` | id, session_id, auth_type, keychain_ref | UUID, UUID, ENUM, TEXT | Credential metadata. Actual secrets stored in OS keychain (via keyring-rs), not in DB. |
-| `command_sets` | id, name, description | UUID, TEXT, TEXT | Named groups of predefined commands for broadcast. |
-| `commands` | id, set_id, label, command_text, sort_order | UUID, UUID, TEXT, TEXT, INT | Individual commands within a set. sort_order controls execution sequence. |
-| `session_logs` | id, session_id, started_at, ended_at, log_path | UUID, UUID, TIMESTAMP, TIMESTAMP?, TEXT | Optional session logging metadata. Actual log content written to files, not DB. |
+| Table          | Key Columns                                                                              | Types                                                        | Notes                                                                                                                    |
+| -------------- | ---------------------------------------------------------------------------------------- | ------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------ |
+| `folders`      | id, name, parent_id                                                                      | UUID, TEXT, UUID?                                            | Hierarchical folder tree for organizing sessions. Self-referencing parent_id for nesting.                                |
+| `sessions`     | id, folder_id, name, hostname, port, protocol, username, auth_method, jump_host_id, tags | UUID, UUID, TEXT, TEXT, INT, ENUM, TEXT, ENUM, UUID?, TEXT[] | Core session definitions. jump_host_id references another session to use as bastion. Tags enable flexible search/filter. |
+| `credentials`  | id, session_id, auth_type, keychain_ref                                                  | UUID, UUID, ENUM, TEXT                                       | Credential metadata. Actual secrets stored in OS keychain (via keyring-rs), not in DB.                                   |
+| `command_sets` | id, name, description                                                                    | UUID, TEXT, TEXT                                             | Named groups of predefined commands for broadcast.                                                                       |
+| `commands`     | id, set_id, label, command_text, sort_order                                              | UUID, UUID, TEXT, TEXT, INT                                  | Individual commands within a set. sort_order controls execution sequence.                                                |
+| `session_logs` | id, session_id, started_at, ended_at, log_path                                           | UUID, UUID, TIMESTAMP, TIMESTAMP?, TEXT                      | Optional session logging metadata. Actual log content written to files, not DB.                                          |
 
 **Indexing strategy:** `sessions.hostname`, `sessions.tags` (GIN index on PostgreSQL, JSON index on SQLite), and `folders.parent_id` are indexed. With proper indexing, this schema handles tens of thousands of sessions without perceptible latency on either backend.
 
@@ -198,18 +196,18 @@ The command broadcast feature allows sending predefined commands to one or more 
 
 The repository follows standard Tauri 2.x conventions with a clear separation of concerns:
 
-| Path | Contents |
-|---|---|
-| `src-tauri/src/main.rs` | Tauri application entry point and command registration. |
-| `src-tauri/src/ssh/` | SSH connection manager, jump host logic, channel handling (russh). |
-| `src-tauri/src/db/` | Database abstraction trait, SQLite and PostgreSQL implementations, migrations. |
-| `src-tauri/src/commands/` | Tauri IPC command handlers (session CRUD, connect, broadcast, etc.). |
-| `src-tauri/src/credentials/` | Keychain integration via keyring-rs. |
-| `src-tauri/src/import/` | Parsers for mRemoteNG XML, SecureCRT XML, and CSV import. |
-| `src/components/` | React UI components: SessionTree, TerminalTabs, CommandPalette, Settings. |
-| `src/hooks/` | Custom React hooks for Tauri IPC, terminal lifecycle, and state management. |
-| `src/stores/` | Zustand state stores for sessions, connections, UI state. |
-| `migrations/` | sqlx migration files (shared between SQLite and PostgreSQL). |
+| Path                         | Contents                                                                       |
+| ---------------------------- | ------------------------------------------------------------------------------ |
+| `src-tauri/src/main.rs`      | Tauri application entry point and command registration.                        |
+| `src-tauri/src/ssh/`         | SSH connection manager, jump host logic, channel handling (russh).             |
+| `src-tauri/src/db/`          | Database abstraction trait, SQLite and PostgreSQL implementations, migrations. |
+| `src-tauri/src/commands/`    | Tauri IPC command handlers (session CRUD, connect, broadcast, etc.).           |
+| `src-tauri/src/credentials/` | Keychain integration via keyring-rs.                                           |
+| `src-tauri/src/import/`      | Parsers for mRemoteNG XML, SecureCRT XML, and CSV import.                      |
+| `src/components/`            | React UI components: SessionTree, TerminalTabs, CommandPalette, Settings.      |
+| `src/hooks/`                 | Custom React hooks for Tauri IPC, terminal lifecycle, and state management.    |
+| `src/stores/`                | Zustand state stores for sessions, connections, UI state.                      |
+| `migrations/`                | sqlx migration files (shared between SQLite and PostgreSQL).                   |
 
 ---
 
@@ -281,18 +279,18 @@ The repository follows standard Tauri 2.x conventions with a clear separation of
 
 ## 8. Key Rust Crate Dependencies
 
-| Crate | Version | Purpose |
-|---|---|---|
-| `tauri` | 2.x | Application shell, IPC, window management, bundling. |
-| `russh` | 0.45+ | SSH2 client: connection, authentication, channel forwarding. |
-| `russh-keys` | 0.45+ | SSH key parsing (OpenSSH, PEM, PKCS#8 formats). |
-| `sqlx` | 0.8+ | Async database driver with compile-time query checks. |
-| `tokio` | 1.x | Async runtime for concurrent SSH sessions and DB operations. |
-| `keyring` | 3.x | Cross-platform OS keychain access for credential storage. |
-| `serde` / `serde_json` | 1.x | Serialization for IPC, config files, and import/export. |
-| `uuid` | 1.x | UUID v4 generation for all entity primary keys. |
-| `portable-pty` | 0.8+ | Cross-platform pseudo-terminal spawning for local shell tabs. |
-| `tracing` | 0.1+ | Structured logging and diagnostics. |
+| Crate                  | Version | Purpose                                                       |
+| ---------------------- | ------- | ------------------------------------------------------------- |
+| `tauri`                | 2.x     | Application shell, IPC, window management, bundling.          |
+| `russh`                | 0.45+   | SSH2 client: connection, authentication, channel forwarding.  |
+| `russh-keys`           | 0.45+   | SSH key parsing (OpenSSH, PEM, PKCS#8 formats).               |
+| `sqlx`                 | 0.8+    | Async database driver with compile-time query checks.         |
+| `tokio`                | 1.x     | Async runtime for concurrent SSH sessions and DB operations.  |
+| `keyring`              | 3.x     | Cross-platform OS keychain access for credential storage.     |
+| `serde` / `serde_json` | 1.x     | Serialization for IPC, config files, and import/export.       |
+| `uuid`                 | 1.x     | UUID v4 generation for all entity primary keys.               |
+| `portable-pty`         | 0.8+    | Cross-platform pseudo-terminal spawning for local shell tabs. |
+| `tracing`              | 0.1+    | Structured logging and diagnostics.                           |
 
 ---
 
