@@ -82,7 +82,13 @@ pub async fn session_create(
     key_path: Option<String>,
 ) -> Result<Session, String> {
     validate_port(port)?;
-    validate_session_fields(Some(&name), Some(&hostname), Some(&username), Some(&tags))?;
+    validate_session_fields(Some(&name), Some(&hostname), Some(&tags))?;
+    if username.len() > super::MAX_USERNAME_LEN {
+        return Err(format!(
+            "Username too long (max {} characters)",
+            super::MAX_USERNAME_LEN
+        ));
+    }
     let folder = parse_uuid(&folder_id)?;
     let jump = jump_host_id.map(|s| parse_uuid(&s)).transpose()?;
 
@@ -99,7 +105,6 @@ pub async fn session_create(
             hostname,
             port,
             protocol: effective_protocol,
-            username,
             auth_method: auth_method.clone(),
             jump_host_id: jump,
             tags,
@@ -107,10 +112,8 @@ pub async fn session_create(
         })
         .await?;
 
-    // Store credential locally (never in the shared central DB).
-    // Credential failure must not block session creation — the session is
-    // valid without a credential; the user just cannot connect until they
-    // set one via session_update.
+    // Store credential (including username) locally — never in the shared
+    // central DB. Credential failure must not block session creation.
     let secret = match auth_method.as_str() {
         "password" => password,
         "publickey" => key_path,
@@ -123,6 +126,7 @@ pub async fn session_create(
             .upsert_credential(Credential {
                 id: Uuid::new_v4(),
                 session_id: session.id,
+                username,
                 auth_type: auth_method,
                 keychain_ref,
                 secret: secret_value,
@@ -172,12 +176,15 @@ pub async fn session_update(
             return Err(format!("Unsupported protocol: {proto}"));
         }
     }
-    validate_session_fields(
-        name.as_deref(),
-        hostname.as_deref(),
-        username.as_deref(),
-        tags.as_deref(),
-    )?;
+    validate_session_fields(name.as_deref(), hostname.as_deref(), tags.as_deref())?;
+    if let Some(ref u) = username {
+        if u.len() > super::MAX_USERNAME_LEN {
+            return Err(format!(
+                "Username too long (max {} characters)",
+                super::MAX_USERNAME_LEN
+            ));
+        }
+    }
     let session_id = parse_uuid(&id)?;
     let jump = jump_host_id
         .map(|opt| opt.map(|s| parse_uuid(&s)).transpose())
@@ -192,7 +199,6 @@ pub async fn session_update(
                 hostname,
                 port,
                 protocol,
-                username,
                 auth_method: auth_method.clone(),
                 jump_host_id: jump,
                 tags,
@@ -201,23 +207,43 @@ pub async fn session_update(
         )
         .await?;
 
-    // Update credential locally if a new secret was provided.
+    // Update credential locally if username or secret was provided.
     let effective_method = auth_method;
     let secret = match effective_method.as_deref() {
         Some("password") => password,
         Some("publickey") => key_path,
         _ => password.or(key_path),
     };
-    if let Some(secret_value) = secret {
+    // Upsert credential if either username or secret changed.
+    if username.is_some() || secret.is_some() {
+        // Fetch existing credential to merge fields.
+        let existing = cred_db.0.get_credential(session_id).await?;
+        let effective_username = username.unwrap_or_else(|| {
+            existing
+                .as_ref()
+                .map_or(String::new(), |c| c.username.clone())
+        });
+        let effective_secret = secret.unwrap_or_else(|| {
+            existing
+                .as_ref()
+                .map_or(String::new(), |c| c.secret.clone())
+        });
+        let effective_auth = effective_method.unwrap_or_else(|| {
+            existing
+                .as_ref()
+                .map_or(String::new(), |c| c.auth_type.clone())
+        });
+
         let keychain_ref = format!("session-{session_id}");
         if let Err(e) = cred_db
             .0
             .upsert_credential(Credential {
                 id: Uuid::new_v4(),
                 session_id,
-                auth_type: effective_method.unwrap_or_default(),
+                username: effective_username,
+                auth_type: effective_auth,
                 keychain_ref,
-                secret: secret_value,
+                secret: effective_secret,
             })
             .await
         {
@@ -403,15 +429,15 @@ pub async fn session_connect(
     }
 
     // SSH path (default).
-    // Retrieve credential from local store — wrapped in Zeroizing so it is
-    // scrubbed from memory as soon as it is no longer needed.
-    let auth_credential: Zeroizing<String> = match cred_db.0.get_credential(session_id).await? {
-        Some(cred) => Zeroizing::new(cred.secret),
-        None if session.auth_method == "none" => Zeroizing::new(String::new()),
+    // Retrieve credential (including username) from local store.
+    let cred = cred_db.0.get_credential(session_id).await?;
+    let (username, auth_credential) = match cred {
+        Some(c) => (c.username, Zeroizing::new(c.secret)),
+        None if session.auth_method == "none" => (String::new(), Zeroizing::new(String::new())),
         None => {
             return Err(format!(
                 "No credential stored for session \"{}\". \
-                 Edit the session to set a password or key path.",
+                 Edit the session to set a username and password or key path.",
                 session.name
             ))
         }
@@ -430,7 +456,7 @@ pub async fn session_connect(
             id: conn_id.clone(),
             host: session.hostname,
             port: session.port as u16,
-            username: session.username,
+            username,
             auth_method: session.auth_method,
             auth_credential,
             cols,
@@ -486,13 +512,14 @@ pub async fn folder_apply_credentials(
 
     let mut count: u32 = 0;
     for session in &ssh_sessions {
-        // Upsert credential.
+        // Upsert credential (includes username — stored locally per user).
         let keychain_ref = format!("session-{}", session.id);
         if let Err(e) = cred_db
             .0
             .upsert_credential(Credential {
                 id: Uuid::new_v4(),
                 session_id: session.id,
+                username: username.clone(),
                 auth_type: auth_method.clone(),
                 keychain_ref,
                 secret: credential.clone(),
@@ -503,9 +530,8 @@ pub async fn folder_apply_credentials(
             continue;
         }
 
-        // Update username, auth_method (and optionally jump_host_id) on the session.
+        // Update auth_method (and optionally jump_host_id) on the session.
         let update = UpdateSession {
-            username: Some(username.clone()),
             auth_method: Some(auth_method.clone()),
             jump_host_id: jump_host_uuid,
             ..Default::default()
@@ -562,12 +588,12 @@ async fn resolve_jump_chain(
                 .await?
                 .ok_or_else(|| format!("Jump host session {jump_id} not found"))?;
 
-        let jump_credential = match cred_db.0.get_credential(jump_id).await? {
-            Some(cred) => Zeroizing::new(cred.secret),
+        let jump_cred = match cred_db.0.get_credential(jump_id).await? {
+            Some(cred) => cred,
             None => {
                 return Err(format!(
                     "No credential stored for jump host \"{}\". \
-                     Edit the session to set a password or key path.",
+                     Edit the session to set a username and password or key path.",
                     jump_session.name
                 ));
             }
@@ -576,9 +602,9 @@ async fn resolve_jump_chain(
         hops.push(crate::ssh::JumpHop {
             host: jump_session.hostname.clone(),
             port: jump_session.port as u16,
-            username: jump_session.username.clone(),
+            username: jump_cred.username,
             auth_method: jump_session.auth_method.clone(),
-            auth_credential: jump_credential,
+            auth_credential: Zeroizing::new(jump_cred.secret),
         });
 
         current_jump_id = jump_session.jump_host_id;

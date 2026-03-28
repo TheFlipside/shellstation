@@ -62,6 +62,7 @@ fn row_to_credential(row: &PgRow) -> DbResult<Credential> {
     Ok(Credential {
         id: parse_uuid(row.get("id"))?,
         session_id: parse_uuid(row.get("session_id"))?,
+        username: row.get("username"),
         auth_type: row.get("auth_type"),
         keychain_ref: row.get("keychain_ref"),
         secret: row.get("secret"),
@@ -194,7 +195,7 @@ impl DatabaseProvider for PostgresProvider {
         .bind(&session.hostname)
         .bind(session.port)
         .bind(&session.protocol)
-        .bind(&session.username)
+        .bind("")
         .bind(&session.auth_method)
         .bind(&jump_str)
         .bind(&session.tags)
@@ -211,7 +212,7 @@ impl DatabaseProvider for PostgresProvider {
             hostname: session.hostname,
             port: session.port,
             protocol: session.protocol,
-            username: session.username,
+            username: String::new(),
             auth_method: session.auth_method,
             jump_host_id: session.jump_host_id,
             tags: session.tags,
@@ -279,11 +280,6 @@ impl DatabaseProvider for PostgresProvider {
         if let Some(ref protocol) = update.protocol {
             sets.push(format!("protocol = ${idx}"));
             values.push(BindVal::Text(protocol.clone()));
-            idx += 1;
-        }
-        if let Some(ref username) = update.username {
-            sets.push(format!("username = ${idx}"));
-            values.push(BindVal::Text(username.clone()));
             idx += 1;
         }
         if let Some(ref auth_method) = update.auth_method {
@@ -477,15 +473,17 @@ impl DatabaseProvider for PostgresProvider {
 
     async fn upsert_credential(&self, cred: Credential) -> DbResult<()> {
         sqlx::query(
-            "INSERT INTO credentials (id, session_id, auth_type, keychain_ref, secret) \
-             VALUES ($1, $2, $3, $4, $5) \
+            "INSERT INTO credentials (id, session_id, username, auth_type, keychain_ref, secret) \
+             VALUES ($1, $2, $3, $4, $5, $6) \
              ON CONFLICT(session_id) DO UPDATE SET \
+               username = EXCLUDED.username, \
                auth_type = EXCLUDED.auth_type, \
                keychain_ref = EXCLUDED.keychain_ref, \
                secret = EXCLUDED.secret",
         )
         .bind(cred.id.to_string())
         .bind(cred.session_id.to_string())
+        .bind(&cred.username)
         .bind(&cred.auth_type)
         .bind(&cred.keychain_ref)
         .bind(&cred.secret)
@@ -498,7 +496,7 @@ impl DatabaseProvider for PostgresProvider {
 
     async fn get_credential(&self, session_id: Uuid) -> DbResult<Option<Credential>> {
         let row = sqlx::query(
-            "SELECT id, session_id, auth_type, keychain_ref, secret FROM credentials WHERE session_id = $1",
+            "SELECT id, session_id, username, auth_type, keychain_ref, secret FROM credentials WHERE session_id = $1",
         )
         .bind(session_id.to_string())
         .fetch_optional(&self.pool)
@@ -523,7 +521,7 @@ impl DatabaseProvider for PostgresProvider {
 
     async fn list_all_credentials(&self) -> DbResult<Vec<Credential>> {
         let rows = sqlx::query(
-            "SELECT id, session_id, auth_type, keychain_ref, secret FROM credentials ORDER BY session_id",
+            "SELECT id, session_id, username, auth_type, keychain_ref, secret FROM credentials ORDER BY session_id",
         )
         .fetch_all(&self.pool)
         .await

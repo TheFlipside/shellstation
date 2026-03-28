@@ -266,11 +266,14 @@ pub async fn db_export(
 
     // Strip secrets from exported credentials — export only metadata.
     // Secrets are local-only and must not leave the device.
+    // Username is exported (not secret — needed for other users to know
+    // what format to use when setting their own).
     let safe_creds: Vec<ExportCredential> = credentials
         .into_iter()
         .map(|c| ExportCredential {
             id: c.id,
             session_id: c.session_id,
+            username: c.username,
             auth_type: c.auth_type,
             keychain_ref: c.keychain_ref,
             secret: String::new(),
@@ -331,9 +334,6 @@ fn validate_import_data(data: &ExportData) -> Result<(), String> {
         }
         if session.hostname.len() > 255 {
             return Err("Session hostname too long (max 255 chars)".to_string());
-        }
-        if session.username.len() > 128 {
-            return Err("Session username too long (max 128 chars)".to_string());
         }
         if session.tags.len() > 1024 {
             return Err("Session tags too long (max 1024 chars)".to_string());
@@ -441,7 +441,6 @@ pub async fn db_import(
                 hostname: session.hostname.clone(),
                 port: session.port,
                 protocol: session.protocol.clone(),
-                username: session.username.clone(),
                 auth_method: session.auth_method.clone(),
                 jump_host_id: None,
                 tags: session.tags.clone(),

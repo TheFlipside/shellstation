@@ -38,7 +38,6 @@ pub struct NewSession {
     pub hostname: String,
     pub port: i32,
     pub protocol: String,
-    pub username: String,
     pub auth_method: String,
     pub jump_host_id: Option<Uuid>,
     pub tags: String,
@@ -51,7 +50,6 @@ pub struct UpdateSession {
     pub hostname: Option<String>,
     pub port: Option<i32>,
     pub protocol: Option<String>,
-    pub username: Option<String>,
     pub auth_method: Option<String>,
     pub jump_host_id: Option<Option<Uuid>>,
     pub tags: Option<String>,
@@ -62,6 +60,7 @@ pub struct UpdateSession {
 pub struct Credential {
     pub id: Uuid,
     pub session_id: Uuid,
+    pub username: String,
     pub auth_type: String,
     pub keychain_ref: String,
     /// The actual secret (password or key path). Stored in DB for now;
@@ -75,6 +74,7 @@ pub struct Credential {
 pub struct ExportCredential {
     pub id: Uuid,
     pub session_id: Uuid,
+    pub username: String,
     pub auth_type: String,
     pub keychain_ref: String,
     pub secret: String,
@@ -85,6 +85,7 @@ impl From<Credential> for ExportCredential {
         Self {
             id: c.id,
             session_id: c.session_id,
+            username: c.username,
             auth_type: c.auth_type,
             keychain_ref: c.keychain_ref,
             secret: c.secret,
@@ -97,6 +98,7 @@ impl From<ExportCredential> for Credential {
         Self {
             id: c.id,
             session_id: c.session_id,
+            username: c.username,
             auth_type: c.auth_type,
             keychain_ref: c.keychain_ref,
             secret: c.secret,

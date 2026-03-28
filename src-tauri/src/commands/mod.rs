@@ -45,7 +45,6 @@ const MAX_TAGS_LEN: usize = 1024;
 fn validate_session_fields(
     name: Option<&str>,
     hostname: Option<&str>,
-    username: Option<&str>,
     tags: Option<&str>,
 ) -> Result<(), String> {
     if let Some(v) = name {
@@ -57,13 +56,6 @@ fn validate_session_fields(
         if v.len() > MAX_HOSTNAME_LEN {
             return Err(format!(
                 "Hostname too long (max {MAX_HOSTNAME_LEN} characters)"
-            ));
-        }
-    }
-    if let Some(v) = username {
-        if v.len() > MAX_USERNAME_LEN {
-            return Err(format!(
-                "Username too long (max {MAX_USERNAME_LEN} characters)"
             ));
         }
     }

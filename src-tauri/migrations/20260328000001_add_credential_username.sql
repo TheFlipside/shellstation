@@ -1,0 +1,1 @@
+ALTER TABLE credentials ADD COLUMN username TEXT NOT NULL DEFAULT '';
