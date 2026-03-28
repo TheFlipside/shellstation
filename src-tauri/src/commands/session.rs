@@ -6,7 +6,8 @@ use uuid::Uuid;
 use zeroize::Zeroizing;
 
 use crate::db::models::{
-    Credential, DataFingerprint, Folder, NewFolder, NewSession, Session, UpdateSession,
+    Credential, DataFingerprint, ExportCredential, Folder, NewFolder, NewSession, Session,
+    UpdateSession,
 };
 use crate::db::{CredentialDbState, DbState};
 use crate::ssh::{SshConnectParams, SshState};
@@ -115,26 +116,24 @@ pub async fn session_create(
     // Store credential (including username) locally — never in the shared
     // central DB. Credential failure must not block session creation.
     let secret = match auth_method.as_str() {
-        "password" => password,
-        "publickey" => key_path,
-        _ => None,
+        "password" => password.unwrap_or_default(),
+        "publickey" => key_path.unwrap_or_default(),
+        _ => String::new(),
     };
-    if let Some(secret_value) = secret {
-        let keychain_ref = format!("session-{}", session.id);
-        if let Err(e) = cred_db
-            .0
-            .upsert_credential(Credential {
-                id: Uuid::new_v4(),
-                session_id: session.id,
-                username,
-                auth_type: auth_method,
-                keychain_ref,
-                secret: secret_value,
-            })
-            .await
-        {
-            tracing::error!(session_id = %session.id, "credential upsert failed: {e}");
-        }
+    let keychain_ref = format!("session-{}", session.id);
+    if let Err(e) = cred_db
+        .0
+        .upsert_credential(Credential {
+            id: Uuid::new_v4(),
+            session_id: session.id,
+            username,
+            auth_type: auth_method,
+            keychain_ref,
+            secret,
+        })
+        .await
+    {
+        tracing::error!(session_id = %session.id, "credential upsert failed: {e}");
     }
 
     Ok(session)
@@ -143,6 +142,15 @@ pub async fn session_create(
 #[tauri::command]
 pub async fn session_get(state: State<'_, DbState>, id: String) -> Result<Option<Session>, String> {
     state.0.get_session(parse_uuid(&id)?).await
+}
+
+#[tauri::command]
+pub async fn credential_get(
+    cred_db: State<'_, CredentialDbState>,
+    session_id: String,
+) -> Result<Option<ExportCredential>, String> {
+    let cred = cred_db.0.get_credential(parse_uuid(&session_id)?).await?;
+    Ok(cred.map(ExportCredential::from))
 }
 
 #[tauri::command]

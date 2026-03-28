@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { useTranslation } from "react-i18next";
 import {
   DndContext,
@@ -86,6 +87,7 @@ export function SessionSidebar(): React.JSX.Element {
     sessionId?: string;
     initial?: Partial<SessionFormData>;
   } | null>(null);
+  const prefillCredRef = useRef<{ password: string; keyPath: string } | null>(null);
   const [moveTarget, setMoveTarget] = useState<MoveTarget | null>(null);
   const [confirmDialog, setConfirmDialog] = useState<{
     message: string;
@@ -319,25 +321,72 @@ export function SessionSidebar(): React.JSX.Element {
       {
         label: t("contextMenu.edit"),
         onClick: () => {
-          if (session) {
-            setSessionDialog({
-              mode: "edit",
-              folderId: session.folder_id,
-              sessionId: session.id,
-              initial: {
+          if (!session) return;
+          invoke<{ username: string; secret: string } | null>("credential_get", {
+            sessionId: session.id,
+          })
+            .then((cred) => {
+              const secret = cred?.secret ?? "";
+              prefillCredRef.current = {
+                password: session.auth_method === "password" ? secret : "",
+                keyPath: session.auth_method === "publickey" ? secret : "",
+              };
+              setSessionDialog({
+                mode: "edit",
                 folderId: session.folder_id,
-                name: session.name,
-                hostname: session.hostname,
-                port: session.port,
-                protocol: session.protocol,
-                username: session.username,
-                authMethod: session.auth_method,
-                tags: tagsToDisplay(session.tags),
-                icon: session.icon,
-                jumpHostId: session.jump_host_id,
-              },
-            });
-          }
+                sessionId: session.id,
+                initial: {
+                  folderId: session.folder_id,
+                  name: session.name,
+                  hostname: session.hostname,
+                  port: session.port,
+                  protocol: session.protocol,
+                  username: cred?.username ?? "",
+                  authMethod: session.auth_method,
+                  tags: tagsToDisplay(session.tags),
+                  icon: session.icon,
+                  jumpHostId: session.jump_host_id,
+                  password: session.auth_method === "password" ? secret : "",
+                  keyPath: session.auth_method === "publickey" ? secret : "",
+                },
+              });
+            })
+            .catch(noop);
+        },
+      },
+      {
+        label: t("contextMenu.clone"),
+        onClick: () => {
+          if (!session) return;
+          invoke<{ username: string; secret: string } | null>("credential_get", {
+            sessionId: session.id,
+          })
+            .then((cred) => {
+              const secret = cred?.secret ?? "";
+              prefillCredRef.current = {
+                password: session.auth_method === "password" ? secret : "",
+                keyPath: session.auth_method === "publickey" ? secret : "",
+              };
+              setSessionDialog({
+                mode: "create",
+                folderId: session.folder_id,
+                initial: {
+                  folderId: session.folder_id,
+                  name: session.name + "_copy",
+                  hostname: session.hostname,
+                  port: session.port,
+                  protocol: session.protocol,
+                  username: cred?.username ?? "",
+                  authMethod: session.auth_method,
+                  tags: tagsToDisplay(session.tags),
+                  icon: session.icon,
+                  jumpHostId: session.jump_host_id,
+                  password: session.auth_method === "password" ? secret : "",
+                  keyPath: session.auth_method === "publickey" ? secret : "",
+                },
+              });
+            })
+            .catch(noop);
         },
       },
       {
@@ -384,6 +433,14 @@ export function SessionSidebar(): React.JSX.Element {
         )
       : "[]";
 
+    // Use prefilled credential as fallback when the dialog didn't
+    // preserve the password/keyPath (e.g. webview clearing the field).
+    const prefill = prefillCredRef.current;
+    const effectivePassword =
+      (data.password !== "" ? data.password : prefill?.password) ?? undefined;
+    const effectiveKeyPath = (data.keyPath !== "" ? data.keyPath : prefill?.keyPath) ?? undefined;
+    prefillCredRef.current = null;
+
     if (sessionDialog.mode === "create") {
       createSession({
         folderId: data.folderId,
@@ -396,8 +453,8 @@ export function SessionSidebar(): React.JSX.Element {
         tags: tagsJson,
         icon: data.icon,
         jumpHostId: data.jumpHostId ?? undefined,
-        password: data.password || undefined,
-        keyPath: data.keyPath || undefined,
+        password: effectivePassword,
+        keyPath: effectiveKeyPath,
       }).catch(noop);
     } else if (sessionDialog.sessionId) {
       const sid = sessionDialog.sessionId;
@@ -413,8 +470,8 @@ export function SessionSidebar(): React.JSX.Element {
           tags: tagsJson,
           icon: data.icon,
           jumpHostId: data.jumpHostId,
-          password: data.password || undefined,
-          keyPath: data.keyPath || undefined,
+          password: effectivePassword,
+          keyPath: effectiveKeyPath,
         });
         if (data.folderId !== originalFolderId) {
           await moveSession(sid, data.folderId);

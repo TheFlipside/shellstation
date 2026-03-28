@@ -17,6 +17,7 @@
     "delete": "Delete",
     "connect": "Connect",
     "edit": "Edit",
+    "clone": "Clone Session",
     "sortAlphabetically": "Sort Alphabetically",
     "setCredentials": "Set Credentials\u2026"
   },
