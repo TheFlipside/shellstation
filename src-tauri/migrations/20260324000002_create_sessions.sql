@@ -8,7 +8,9 @@ CREATE TABLE IF NOT EXISTS sessions (
     username TEXT NOT NULL,
     auth_method TEXT NOT NULL DEFAULT 'password',
     jump_host_id TEXT REFERENCES sessions(id) ON DELETE SET NULL,
-    tags TEXT NOT NULL DEFAULT '[]'
+    tags TEXT NOT NULL DEFAULT '[]',
+    icon TEXT NOT NULL DEFAULT 'desktop',
+    sort_order INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE INDEX idx_sessions_folder_id ON sessions(folder_id);

@@ -1,1 +1,0 @@
-ALTER TABLE credentials ADD COLUMN secret TEXT NOT NULL DEFAULT '';
