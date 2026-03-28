@@ -22,7 +22,9 @@ use sqlx::postgres::PgPoolOptions;
 use sqlx::sqlite::SqliteConnectOptions;
 use sqlx::SqlitePool;
 use ssh::SshState;
+use tauri::menu::{Menu, MenuItemBuilder, PredefinedMenuItem, Submenu};
 use tauri::Manager;
+use tauri_plugin_opener::OpenerExt;
 use telnet::TelnetState;
 use tracing_subscriber::EnvFilter;
 
@@ -166,6 +168,115 @@ fn sanitize_pg_error(raw: &str) -> String {
     "Failed to connect to PostgreSQL. Check your settings and try again.".to_string()
 }
 
+/// Build the application menu, mirroring the Tauri default but using a custom
+/// Help submenu passed by the caller.
+fn build_app_menu(
+    app: &tauri::AppHandle,
+    help_menu: &Submenu<tauri::Wry>,
+) -> Result<Menu<tauri::Wry>, Box<dyn std::error::Error>> {
+    #[cfg(target_os = "macos")]
+    let pkg = app.package_info();
+    #[cfg(target_os = "macos")]
+    let about = tauri::menu::AboutMetadata {
+        name: Some(pkg.name.clone()),
+        version: Some(pkg.version.to_string()),
+        copyright: app.config().bundle.copyright.clone(),
+        authors: app.config().bundle.publisher.clone().map(|p| vec![p]),
+        ..Default::default()
+    };
+
+    #[cfg(not(any(
+        target_os = "linux",
+        target_os = "dragonfly",
+        target_os = "freebsd",
+        target_os = "netbsd",
+        target_os = "openbsd"
+    )))]
+    let window_menu = Submenu::with_items(
+        app,
+        "Window",
+        true,
+        &[
+            &PredefinedMenuItem::minimize(app, None)?,
+            &PredefinedMenuItem::maximize(app, None)?,
+            #[cfg(target_os = "macos")]
+            &PredefinedMenuItem::separator(app)?,
+            &PredefinedMenuItem::close_window(app, None)?,
+        ],
+    )?;
+
+    let menu = Menu::with_items(
+        app,
+        &[
+            #[cfg(target_os = "macos")]
+            &Submenu::with_items(
+                app,
+                pkg.name.clone(),
+                true,
+                &[
+                    &PredefinedMenuItem::about(app, None, Some(about.clone()))?,
+                    &PredefinedMenuItem::separator(app)?,
+                    &PredefinedMenuItem::services(app, None)?,
+                    &PredefinedMenuItem::separator(app)?,
+                    &PredefinedMenuItem::hide(app, None)?,
+                    &PredefinedMenuItem::hide_others(app, None)?,
+                    &PredefinedMenuItem::separator(app)?,
+                    &PredefinedMenuItem::quit(app, None)?,
+                ],
+            )?,
+            #[cfg(not(any(
+                target_os = "linux",
+                target_os = "dragonfly",
+                target_os = "freebsd",
+                target_os = "netbsd",
+                target_os = "openbsd"
+            )))]
+            &Submenu::with_items(
+                app,
+                "File",
+                true,
+                &[
+                    &PredefinedMenuItem::close_window(app, None)?,
+                    #[cfg(not(target_os = "macos"))]
+                    &PredefinedMenuItem::quit(app, None)?,
+                ],
+            )?,
+            &Submenu::with_items(
+                app,
+                "Edit",
+                true,
+                &[
+                    &PredefinedMenuItem::undo(app, None)?,
+                    &PredefinedMenuItem::redo(app, None)?,
+                    &PredefinedMenuItem::separator(app)?,
+                    &PredefinedMenuItem::cut(app, None)?,
+                    &PredefinedMenuItem::copy(app, None)?,
+                    &PredefinedMenuItem::paste(app, None)?,
+                    &PredefinedMenuItem::select_all(app, None)?,
+                ],
+            )?,
+            #[cfg(target_os = "macos")]
+            &Submenu::with_items(
+                app,
+                "View",
+                true,
+                &[&PredefinedMenuItem::fullscreen(app, None)?],
+            )?,
+            #[cfg(not(any(
+                target_os = "linux",
+                target_os = "dragonfly",
+                target_os = "freebsd",
+                target_os = "netbsd",
+                target_os = "openbsd"
+            )))]
+            &window_menu,
+            help_menu,
+        ],
+    )?;
+
+    Ok(menu)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tracing_subscriber::fmt()
@@ -179,6 +290,43 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
+            // Build custom menu: replicate Tauri defaults but with a
+            // functional Help submenu that links to our project pages.
+            let app_handle = app.handle();
+            let help_docs =
+                MenuItemBuilder::with_id("help_docs", "ShellStation Help").build(app_handle)?;
+            let help_issues =
+                MenuItemBuilder::with_id("help_issues", "Report an Issue").build(app_handle)?;
+            let help_menu = Submenu::with_items(
+                app_handle,
+                "Help",
+                true,
+                &[
+                    &help_docs,
+                    &PredefinedMenuItem::separator(app_handle)?,
+                    &help_issues,
+                ],
+            )?;
+
+            let menu = build_app_menu(app_handle, &help_menu)?;
+            app.set_menu(menu)?;
+
+            app.on_menu_event(|handle, event| {
+                let opener = handle.opener();
+                match event.id().as_ref() {
+                    "help_docs" => {
+                        let _ = opener
+                            .open_url("https://git.fiedler.live/tux/shellstation", None::<&str>);
+                    }
+                    "help_issues" => {
+                        let _ = opener.open_url(
+                            "https://git.fiedler.live/tux/shellstation/issues",
+                            None::<&str>,
+                        );
+                    }
+                    _ => {}
+                }
+            });
             // Set window icon at runtime (needed on Linux outside of bundled installs)
             if let Some(window) = app.get_webview_window("main") {
                 if let Ok(icon) =

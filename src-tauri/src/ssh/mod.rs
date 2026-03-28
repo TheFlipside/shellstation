@@ -604,7 +604,9 @@ async fn connect_with_hops(
             client::connect(config, (target_host, target_port), handler),
         )
         .await
-        .map_err(|_| format!("SSH connection failed: connection to {target_host}:{target_port} timed out"))?
+        .map_err(|_| {
+            format!("SSH connection failed: connection to {target_host}:{target_port} timed out")
+        })?
         .map_err(|e| {
             error!(host = %target_host, port = %target_port, error = %e, "SSH connection failed");
             sanitize_ssh_error(&e.to_string())
@@ -636,14 +638,15 @@ async fn connect_with_hops(
 
     let mut current_handle = tokio::time::timeout(
         std::time::Duration::from_secs(connect_timeout_secs),
-        client::connect(
-            config,
-            (first_hop.host.as_str(), first_hop.port),
-            handler,
-        ),
+        client::connect(config, (first_hop.host.as_str(), first_hop.port), handler),
     )
     .await
-    .map_err(|_| format!("SSH jump host connection failed: connection to {}:{} timed out", first_hop.host, first_hop.port))?
+    .map_err(|_| {
+        format!(
+            "SSH jump host connection failed: connection to {}:{} timed out",
+            first_hop.host, first_hop.port
+        )
+    })?
     .map_err(|e| {
         error!(host = %first_hop.host, port = %first_hop.port, error = %e, "SSH hop failed");
         format!(

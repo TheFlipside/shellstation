@@ -460,10 +460,7 @@ pub async fn db_import(
                 .get(&session.id)
                 .copied()
                 .unwrap_or(session.id);
-            let new_jump_id = session_id_map
-                .get(&jump_id)
-                .copied()
-                .unwrap_or(jump_id);
+            let new_jump_id = session_id_map.get(&jump_id).copied().unwrap_or(jump_id);
             state
                 .0
                 .update_session(
