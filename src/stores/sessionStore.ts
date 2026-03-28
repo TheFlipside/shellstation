@@ -285,12 +285,13 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     const session = get().sessions.find((s) => s.id === id);
     if (!session) return;
 
-    const { restrictPrivateIps } = useSettingsStore.getState();
+    const { restrictPrivateIps, connectTimeout } = useSettingsStore.getState();
     const connId = await invoke<string>("session_connect", {
       id,
       cols: 80,
       rows: 24,
       restrictPrivateIps,
+      connectTimeout,
     });
 
     const isTelnet = session.protocol === "telnet";

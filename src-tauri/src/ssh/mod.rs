@@ -66,6 +66,7 @@ pub struct SshConnectParams {
     pub username: String,
     pub auth_method: String,
     pub restrict_private_ips: bool,
+    pub connect_timeout_secs: u64,
     pub auth_credential: Zeroizing<String>,
     pub cols: u16,
     pub rows: u16,
@@ -116,6 +117,7 @@ impl SshManager {
             app_handle,
             jump_hops,
             restrict_private_ips,
+            connect_timeout_secs,
         } = params;
 
         info!(session_id = %id, host = %host, port = %port, hops = jump_hops.len(), "Connecting via SSH");
@@ -127,6 +129,7 @@ impl SshManager {
             port,
             &jump_hops,
             restrict_private_ips,
+            connect_timeout_secs,
             &app_handle,
             &verify_senders,
         )
@@ -560,12 +563,14 @@ fn validate_ssh_target(host: &str, port: u16) -> Result<(), String> {
 ///
 /// Returns the final `Handle` to the target host, plus a list of intermediate
 /// bastion handles that must be kept alive for the tunnel to remain open.
+#[allow(clippy::too_many_arguments)]
 async fn connect_with_hops(
     session_id: &str,
     target_host: &str,
     target_port: u16,
     jump_hops: &[JumpHop],
     restrict_private_ips: bool,
+    connect_timeout_secs: u64,
     app_handle: &AppHandle,
     verify_senders: &HostVerifySenders,
 ) -> Result<(client::Handle<SshHandler>, Vec<client::Handle<SshHandler>>), String> {
@@ -594,12 +599,16 @@ async fn connect_with_hops(
             verify_rx: Arc::new(Mutex::new(Some(verify_rx))),
         };
 
-        let handle = client::connect(config, (target_host, target_port), handler)
-            .await
-            .map_err(|e| {
-                error!(host = %target_host, port = %target_port, error = %e, "SSH connection failed");
-                sanitize_ssh_error(&e.to_string())
-            })?;
+        let handle = tokio::time::timeout(
+            std::time::Duration::from_secs(connect_timeout_secs),
+            client::connect(config, (target_host, target_port), handler),
+        )
+        .await
+        .map_err(|_| format!("SSH connection failed: connection to {target_host}:{target_port} timed out"))?
+        .map_err(|e| {
+            error!(host = %target_host, port = %target_port, error = %e, "SSH connection failed");
+            sanitize_ssh_error(&e.to_string())
+        })?;
 
         return Ok((handle, Vec::new()));
     }
@@ -625,12 +634,16 @@ async fn connect_with_hops(
         verify_rx: Arc::new(Mutex::new(Some(verify_rx))),
     };
 
-    let mut current_handle = client::connect(
-        config,
-        (first_hop.host.as_str(), first_hop.port),
-        handler,
+    let mut current_handle = tokio::time::timeout(
+        std::time::Duration::from_secs(connect_timeout_secs),
+        client::connect(
+            config,
+            (first_hop.host.as_str(), first_hop.port),
+            handler,
+        ),
     )
     .await
+    .map_err(|_| format!("SSH jump host connection failed: connection to {}:{} timed out", first_hop.host, first_hop.port))?
     .map_err(|e| {
         error!(host = %first_hop.host, port = %first_hop.port, error = %e, "SSH hop failed");
         format!(

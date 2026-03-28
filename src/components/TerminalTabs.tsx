@@ -10,6 +10,7 @@ import { HostVerifyDialog, type HostVerifyRequest } from "./HostVerifyDialog";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { useSettingsStore } from "../stores/settingsStore";
+import { useToastStore } from "../stores/toastStore";
 
 // eslint-disable-next-line @typescript-eslint/no-empty-function
 const noop = (): void => {};
@@ -20,17 +21,9 @@ interface TerminalTabsProps {
 
 export function TerminalTabs({ uiScale }: TerminalTabsProps): React.JSX.Element {
   const { t } = useTranslation();
-  const {
-    tabs,
-    activeTabId,
-    addTab,
-    removeTab,
-    setActiveTab,
-    reorderTabs,
-    markTabExited,
-    connectionError,
-    setConnectionError,
-  } = useTerminalStore();
+  const { tabs, activeTabId, addTab, removeTab, setActiveTab, reorderTabs, markTabExited } =
+    useTerminalStore();
+  const addToast = useToastStore((s) => s.addToast);
   const dragIndexRef = useRef<number | null>(null);
   const dragStartXRef = useRef(0);
   const isDraggingRef = useRef(false);
@@ -101,8 +94,13 @@ export function TerminalTabs({ uiScale }: TerminalTabsProps): React.JSX.Element 
     },
     [getTabIndexAtX, reorderTabs],
   );
-  const { closeOnDisconnect, openLocalOnStartup, restrictPrivateIps, confirmOnCloseTab } =
-    useSettingsStore();
+  const {
+    closeOnDisconnect,
+    openLocalOnStartup,
+    restrictPrivateIps,
+    confirmOnCloseTab,
+    connectTimeout,
+  } = useSettingsStore();
   const [showQuickConnect, setShowQuickConnect] = useState(false);
   const [tabCtx, setTabCtx] = useState<{ x: number; y: number; tabId: string } | null>(null);
   const [confirmClose, setConfirmClose] = useState<{
@@ -129,6 +127,7 @@ export function TerminalTabs({ uiScale }: TerminalTabsProps): React.JSX.Element 
             cols: 80,
             rows: 24,
             restrictPrivateIps: restrictPrivateIps,
+            connectTimeout: connectTimeout,
           });
           addTab(id, `${params.host}:${String(params.port)}`, "telnet", {
             host: params.host,
@@ -144,6 +143,7 @@ export function TerminalTabs({ uiScale }: TerminalTabsProps): React.JSX.Element 
             cols: 80,
             rows: 24,
             restrictPrivateIps: restrictPrivateIps,
+            connectTimeout: connectTimeout,
           });
           addTab(id, `${params.username}@${params.host}`, "ssh", {
             host: params.host,
@@ -152,10 +152,10 @@ export function TerminalTabs({ uiScale }: TerminalTabsProps): React.JSX.Element 
         }
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : String(err);
-        setConnectionError(t("terminal.connectionFailed", { message }));
+        addToast(t("terminal.connectionFailed", { message }));
       }
     },
-    [addTab, t, restrictPrivateIps, setConnectionError],
+    [addTab, t, restrictPrivateIps, connectTimeout, addToast],
   );
 
   const showNextVerifyRequest = useCallback(() => {
@@ -248,13 +248,13 @@ export function TerminalTabs({ uiScale }: TerminalTabsProps): React.JSX.Element 
           .connectSession(tab.sessionDbId)
           .catch((err: unknown) => {
             const msg = err instanceof Error ? err.message : String(err);
-            setConnectionError(t("terminal.connectionFailed", { message: msg }));
+            addToast(t("terminal.connectionFailed", { message: msg }));
           });
       } else if (tab.type === "local") {
         createLocalTab().catch(noop);
       }
     },
-    [tabs, createLocalTab, setConnectionError, t],
+    [tabs, createLocalTab, addToast, t],
   );
 
   const getTabContextItems = useCallback(
@@ -410,19 +410,6 @@ export function TerminalTabs({ uiScale }: TerminalTabsProps): React.JSX.Element 
           {t("terminal.connect")}
         </button>
       </div>
-      {connectionError !== null && (
-        <div className="connection-error-banner">
-          <span>{connectionError}</span>
-          <button
-            type="button"
-            onClick={() => {
-              setConnectionError(null);
-            }}
-          >
-            &times;
-          </button>
-        </div>
-      )}
       <div className="terminal-pane">
         {stableTabIdsRef.current.map((id) => {
           const tab = tabById.get(id);

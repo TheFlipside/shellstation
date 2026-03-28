@@ -21,6 +21,7 @@ pub async fn ssh_connect(
     rows: u16,
     jump_hops: Option<Vec<JumpHop>>,
     restrict_private_ips: Option<bool>,
+    connect_timeout: Option<u64>,
 ) -> Result<String, String> {
     validate_dimensions(cols, rows)?;
     let hops = jump_hops.unwrap_or_default();
@@ -42,6 +43,7 @@ pub async fn ssh_connect(
             app_handle,
             jump_hops: hops,
             restrict_private_ips: restrict_private_ips.unwrap_or(false),
+            connect_timeout_secs: connect_timeout.unwrap_or(10),
         })
         .await?;
     Ok(id)

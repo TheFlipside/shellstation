@@ -18,6 +18,9 @@ interface SettingsState {
   pasteOnRightClick: boolean;
   restrictPrivateIps: boolean;
   autoRefreshInterval: number;
+  connectTimeout: number;
+  toastAutoDismiss: boolean;
+  toastDismissSeconds: number;
   setLanguage: (lang: string) => void;
   setUiScale: (scale: number) => void;
   setThemeMode: (mode: ThemeMode) => void;
@@ -31,6 +34,9 @@ interface SettingsState {
   setPasteOnRightClick: (value: boolean) => void;
   setRestrictPrivateIps: (value: boolean) => void;
   setAutoRefreshInterval: (seconds: number) => void;
+  setConnectTimeout: (seconds: number) => void;
+  setToastAutoDismiss: (value: boolean) => void;
+  setToastDismissSeconds: (seconds: number) => void;
 }
 
 export const useSettingsStore = create<SettingsState>()(
@@ -49,6 +55,9 @@ export const useSettingsStore = create<SettingsState>()(
       pasteOnRightClick: false,
       restrictPrivateIps: false,
       autoRefreshInterval: 0,
+      connectTimeout: 10,
+      toastAutoDismiss: true,
+      toastDismissSeconds: 5,
       setLanguage: (lang: string) => {
         void i18n.changeLanguage(lang);
         set({ language: lang });
@@ -88,6 +97,15 @@ export const useSettingsStore = create<SettingsState>()(
       },
       setAutoRefreshInterval: (seconds: number) => {
         set({ autoRefreshInterval: seconds });
+      },
+      setConnectTimeout: (seconds: number) => {
+        set({ connectTimeout: seconds });
+      },
+      setToastAutoDismiss: (value: boolean) => {
+        set({ toastAutoDismiss: value });
+      },
+      setToastDismissSeconds: (seconds: number) => {
+        set({ toastDismissSeconds: seconds });
       },
     }),
     {

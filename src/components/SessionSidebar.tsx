@@ -12,7 +12,7 @@ import {
 } from "@dnd-kit/core";
 import { useSessionStore } from "../stores/sessionStore";
 import type { Folder, Session } from "../stores/sessionStore";
-import { useTerminalStore } from "../stores/terminalStore";
+import { useToastStore } from "../stores/toastStore";
 import { SessionTree, parseDndId } from "./SessionTree";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
@@ -133,9 +133,7 @@ export function SessionSidebar(): React.JSX.Element {
     (id: string) => {
       connectSession(id).catch((err: unknown) => {
         const msg = err instanceof Error ? err.message : String(err);
-        useTerminalStore
-          .getState()
-          .setConnectionError(t("terminal.connectionFailed", { message: msg }));
+        useToastStore.getState().addToast(t("terminal.connectionFailed", { message: msg }));
       });
     },
     [connectSession, t],

@@ -35,6 +35,7 @@ pub struct TelnetConnectParams {
     pub rows: u16,
     pub app_handle: AppHandle,
     pub restrict_private_ips: bool,
+    pub connect_timeout_secs: u64,
 }
 
 /// Per-connection Telnet session state.
@@ -71,6 +72,7 @@ impl TelnetManager {
             rows,
             app_handle,
             restrict_private_ips,
+            connect_timeout_secs,
         } = params;
 
         // Validate against restricted IP ranges if enabled.
@@ -81,11 +83,11 @@ impl TelnetManager {
         info!(session_id = %id, host = %host, port = %port, "Connecting via Telnet");
 
         let stream = tokio::time::timeout(
-            std::time::Duration::from_secs(10),
+            std::time::Duration::from_secs(connect_timeout_secs),
             TcpStream::connect((host.as_str(), port)),
         )
         .await
-        .map_err(|_| "Telnet connection timed out".to_string())?
+        .map_err(|_| format!("Telnet connection to {host}:{port} timed out"))?
         .map_err(|e| sanitize_telnet_error(&e.to_string()))?;
 
         let (read_half, write_half) = stream.into_split();

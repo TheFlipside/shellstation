@@ -370,6 +370,7 @@ pub async fn session_connect(
     cols: u16,
     rows: u16,
     restrict_private_ips: Option<bool>,
+    connect_timeout: Option<u64>,
 ) -> Result<String, String> {
     validate_dimensions(cols, rows)?;
 
@@ -380,6 +381,7 @@ pub async fn session_connect(
             .ok_or_else(|| format!("Session {id} not found"))?;
 
     let restrict = restrict_private_ips.unwrap_or(false);
+    let timeout_secs = connect_timeout.unwrap_or(10);
 
     // Dispatch by protocol.
     if session.protocol == "telnet" {
@@ -394,6 +396,7 @@ pub async fn session_connect(
                 rows,
                 app_handle,
                 restrict_private_ips: restrict,
+                connect_timeout_secs: timeout_secs,
             })
             .await?;
         return Ok(conn_id);
@@ -435,6 +438,7 @@ pub async fn session_connect(
             app_handle,
             jump_hops,
             restrict_private_ips: restrict,
+            connect_timeout_secs: timeout_secs,
         })
         .await?;
 

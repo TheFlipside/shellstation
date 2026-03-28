@@ -26,7 +26,6 @@ export interface TerminalTab {
 interface TerminalState {
   tabs: TerminalTab[];
   activeTabId: string | null;
-  connectionError: string | null;
   addTab: (
     id: string,
     title: string,
@@ -39,14 +38,11 @@ interface TerminalState {
   updateTabTitle: (id: string, title: string) => void;
   markTabExited: (id: string) => void;
   reorderTabs: (fromIndex: number, toIndex: number) => void;
-  setConnectionError: (error: string | null) => void;
 }
 
 export const useTerminalStore = create<TerminalState>((set, get) => ({
   tabs: [],
   activeTabId: null,
-  connectionError: null,
-
   addTab: (id: string, title: string, type_: SessionType, meta?: TabMeta, sessionDbId?: string) => {
     set((state) => ({
       tabs: [...state.tabs, { id, title, type: type_, meta, sessionDbId }],
@@ -87,10 +83,6 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
     set((state) => ({
       tabs: state.tabs.map((t) => (t.id === id ? { ...t, exited: true } : t)),
     }));
-  },
-
-  setConnectionError: (error: string | null) => {
-    set({ connectionError: error });
   },
 
   reorderTabs: (fromIndex: number, toIndex: number) => {

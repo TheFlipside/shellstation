@@ -496,8 +496,8 @@ body,
 }
 
 .sidebar-btn-settings {
-  font-size: 14px;
-  padding: 2px 6px;
+  font-size: 20px;
+  padding: 4px 8px;
 }
 
 /* ── Settings Dialog ──────────────────────────────────────────── */
@@ -655,6 +655,84 @@ body,
   color: var(--color-text);
 }
 
+/* ── Toast Notifications ──────────────────────────────────────── */
+
+.toast-container {
+  position: fixed;
+  top: 16px;
+  right: 16px;
+  z-index: 9999;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: 420px;
+}
+
+.toast {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-radius: 6px;
+  font-size: 13px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
+  animation: toast-slide-in 0.25s ease-out;
+}
+
+@keyframes toast-slide-in {
+  from {
+    opacity: 0;
+    transform: translateX(40px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.toast-error {
+  background: var(--color-surface1);
+  border-left: 3px solid var(--color-red);
+  color: var(--color-red);
+}
+
+.toast-warning {
+  background: var(--color-surface1);
+  border-left: 3px solid var(--color-yellow);
+  color: var(--color-yellow);
+}
+
+.toast-success {
+  background: var(--color-surface1);
+  border-left: 3px solid var(--color-green);
+  color: var(--color-green);
+}
+
+.toast-info {
+  background: var(--color-surface1);
+  border-left: 3px solid var(--color-blue);
+  color: var(--color-blue);
+}
+
+.toast-message {
+  flex: 1;
+}
+
+.toast-close {
+  background: transparent;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  font-size: 18px;
+  padding: 0 2px;
+  line-height: 1;
+  opacity: 0.7;
+}
+
+.toast-close:hover {
+  opacity: 1;
+}
+
 /* ── Tree Items ────────────────────────────────────────────────── */
 
 .tree-item {
@@ -678,8 +756,8 @@ body,
 }
 
 .tree-chevron {
-  font-size: 10px;
-  width: 12px;
+  font-size: 14px;
+  width: 16px;
   text-align: center;
   color: var(--color-overlay0);
   flex-shrink: 0;

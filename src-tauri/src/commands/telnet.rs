@@ -7,6 +7,7 @@ use super::{validate_dimensions, MAX_WRITE_SIZE};
 
 /// Connect to a remote host via Telnet. Returns the session ID.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn telnet_connect(
     app_handle: AppHandle,
     state: State<'_, TelnetState>,
@@ -15,6 +16,7 @@ pub async fn telnet_connect(
     cols: u16,
     rows: u16,
     restrict_private_ips: Option<bool>,
+    connect_timeout: Option<u64>,
 ) -> Result<String, String> {
     validate_dimensions(cols, rows)?;
     let id = Uuid::new_v4().to_string();
@@ -28,6 +30,7 @@ pub async fn telnet_connect(
             rows,
             app_handle,
             restrict_private_ips: restrict_private_ips.unwrap_or(false),
+            connect_timeout_secs: connect_timeout.unwrap_or(10),
         })
         .await?;
     Ok(id)

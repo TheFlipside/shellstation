@@ -73,6 +73,12 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
     setRestrictPrivateIps,
     autoRefreshInterval,
     setAutoRefreshInterval,
+    connectTimeout,
+    setConnectTimeout,
+    toastAutoDismiss,
+    setToastAutoDismiss,
+    toastDismissSeconds,
+    setToastDismissSeconds,
   } = useSettingsStore();
 
   const currentLang = language !== "" ? language : (i18n.resolvedLanguage ?? "en");
@@ -390,6 +396,62 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
             ?
           </span>
         </div>
+
+        <div className="dialog-field">
+          <label htmlFor="settings-connect-timeout">{t("settings.connectTimeoutLabel")}</label>
+          <select
+            id="settings-connect-timeout"
+            value={String(connectTimeout)}
+            onChange={(e) => {
+              setConnectTimeout(Number(e.target.value));
+            }}
+          >
+            <option value="5">5s</option>
+            <option value="10">10s</option>
+            <option value="15">15s</option>
+            <option value="30">30s</option>
+            <option value="60">60s</option>
+            <option value="120">120s</option>
+          </select>
+          <span className="settings-help" title={t("settings.connectTimeoutHint")}>
+            ?
+          </span>
+        </div>
+
+        <div className="dialog-field dialog-field-row">
+          <input
+            type="checkbox"
+            id="settings-toast-auto-dismiss"
+            checked={toastAutoDismiss}
+            onChange={(e) => {
+              setToastAutoDismiss(e.target.checked);
+            }}
+          />
+          <label htmlFor="settings-toast-auto-dismiss">{t("settings.toastAutoDismissLabel")}</label>
+          <span className="settings-help" title={t("settings.toastAutoDismissHint")}>
+            ?
+          </span>
+        </div>
+        {toastAutoDismiss && (
+          <div className="dialog-field">
+            <label htmlFor="settings-toast-dismiss-seconds">
+              {t("settings.toastDismissSecondsLabel")}
+            </label>
+            <select
+              id="settings-toast-dismiss-seconds"
+              value={String(toastDismissSeconds)}
+              onChange={(e) => {
+                setToastDismissSeconds(Number(e.target.value));
+              }}
+            >
+              <option value="3">3s</option>
+              <option value="5">5s</option>
+              <option value="10">10s</option>
+              <option value="15">15s</option>
+              <option value="30">30s</option>
+            </select>
+          </div>
+        )}
 
         {/* ── Terminal Section ──────────────────────────────────────── */}
         <h4 className="settings-section-title">{t("settings.terminal")}</h4>
