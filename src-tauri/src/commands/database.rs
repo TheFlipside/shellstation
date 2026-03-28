@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::time::Duration;
 
 use sqlx::postgres::PgPoolOptions;
@@ -261,62 +262,154 @@ pub async fn db_import(
     validate_import_data(&data)?;
 
     let mut folder_count = 0u32;
+    let mut skipped_folders = 0u32;
     let mut session_count = 0u32;
+    let mut skipped_sessions = 0u32;
     let mut credential_count = 0u32;
 
+    // Snapshot existing data so we can detect duplicates and merge.
+    let existing_folders = state
+        .0
+        .list_folders()
+        .await
+        .map_err(|e| format!("Failed to list existing folders: {e}"))?;
+    let existing_sessions = state
+        .0
+        .list_all_sessions()
+        .await
+        .map_err(|e| format!("Failed to list existing sessions: {e}"))?;
+
+    // Index existing folders by (name, parent_id) for dedup lookups.
+    let existing_folder_key: HashMap<(String, Option<Uuid>), Uuid> = existing_folders
+        .iter()
+        .map(|f| ((f.name.clone(), f.parent_id), f.id))
+        .collect();
+
     // Import folders — must respect parent ordering (parents before children).
-    // Sort by depth: folders with no parent first, then children.
+    // Build an ID remap table because create_folder generates new UUIDs.
     let ordered_folders = topological_sort_folders(&data.folders);
+    let mut folder_id_map: HashMap<Uuid, Uuid> = HashMap::new();
     for folder in &ordered_folders {
-        state
+        let remapped_parent = folder
+            .parent_id
+            .map(|pid| folder_id_map.get(&pid).copied().unwrap_or(pid));
+
+        // Reuse an existing folder with the same name under the same parent.
+        let key = (folder.name.clone(), remapped_parent);
+        if let Some(&existing_id) = existing_folder_key.get(&key) {
+            folder_id_map.insert(folder.id, existing_id);
+            skipped_folders += 1;
+            continue;
+        }
+
+        let created = state
             .0
             .create_folder(NewFolder {
                 name: folder.name.clone(),
-                parent_id: folder.parent_id,
+                parent_id: remapped_parent,
             })
             .await
             .map_err(|e| format!("Failed to import folder '{}': {e}", folder.name))?;
+        folder_id_map.insert(folder.id, created.id);
         folder_count += 1;
     }
 
-    // Import sessions
+    // Index existing sessions by (hostname, port, folder_id) for dedup.
+    let existing_session_key: HashMap<(String, i32, Uuid), Uuid> = existing_sessions
+        .iter()
+        .map(|s| ((s.hostname.clone(), s.port, s.folder_id), s.id))
+        .collect();
+
+    // Import sessions — remap folder_id and jump_host_id references.
+    // First pass: create all sessions and build an ID remap for jump hosts.
+    let mut session_id_map: HashMap<Uuid, Uuid> = HashMap::new();
     for session in &data.sessions {
-        state
+        let remapped_folder = folder_id_map
+            .get(&session.folder_id)
+            .copied()
+            .unwrap_or(session.folder_id);
+
+        // Skip sessions that already exist at the same host:port in the same folder.
+        let key = (session.hostname.clone(), session.port, remapped_folder);
+        if let Some(&existing_id) = existing_session_key.get(&key) {
+            session_id_map.insert(session.id, existing_id);
+            skipped_sessions += 1;
+            continue;
+        }
+
+        let created = state
             .0
             .create_session(NewSession {
-                folder_id: session.folder_id,
+                folder_id: remapped_folder,
                 name: session.name.clone(),
                 hostname: session.hostname.clone(),
                 port: session.port,
                 protocol: session.protocol.clone(),
                 username: session.username.clone(),
                 auth_method: session.auth_method.clone(),
-                jump_host_id: session.jump_host_id,
+                jump_host_id: None,
                 tags: session.tags.clone(),
                 icon: session.icon.clone(),
             })
             .await
             .map_err(|e| format!("Failed to import session '{}': {e}", session.name))?;
+        session_id_map.insert(session.id, created.id);
         session_count += 1;
+    }
+
+    // Second pass: wire up jump_host_id references with remapped IDs.
+    for session in &data.sessions {
+        if let Some(jump_id) = session.jump_host_id {
+            let new_session_id = session_id_map
+                .get(&session.id)
+                .copied()
+                .unwrap_or(session.id);
+            let new_jump_id = session_id_map
+                .get(&jump_id)
+                .copied()
+                .unwrap_or(jump_id);
+            state
+                .0
+                .update_session(
+                    new_session_id,
+                    crate::db::models::UpdateSession {
+                        jump_host_id: Some(Some(new_jump_id)),
+                        ..Default::default()
+                    },
+                )
+                .await
+                .map_err(|e| format!("Failed to set jump host for '{}': {e}", session.name))?;
+        }
     }
 
     // Import credentials into local store (skip entries with empty secrets
     // since exported data has secrets redacted for safety).
+    // Remap session_id to the newly created session IDs.
     for cred in &data.credentials {
         if cred.secret.is_empty() {
             continue;
         }
+        let mut remapped_cred = cred.clone();
+        if let Some(&new_sid) = session_id_map.get(&cred.session_id) {
+            remapped_cred.session_id = new_sid;
+        }
         cred_db
             .0
-            .upsert_credential(Credential::from(cred.clone()))
+            .upsert_credential(Credential::from(remapped_cred))
             .await
             .map_err(|e| format!("Failed to import credential: {e}"))?;
         credential_count += 1;
     }
 
-    Ok(format!(
+    let mut summary = format!(
         "Imported {folder_count} folders, {session_count} sessions, {credential_count} credentials"
-    ))
+    );
+    if skipped_folders > 0 || skipped_sessions > 0 {
+        summary.push_str(&format!(
+            " (skipped {skipped_folders} duplicate folders, {skipped_sessions} duplicate sessions)"
+        ));
+    }
+    Ok(summary)
 }
 
 /// Topological sort: parents before children.

@@ -45,7 +45,7 @@ pub struct NewSession {
     pub icon: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 pub struct UpdateSession {
     pub name: Option<String>,
     pub hostname: Option<String>,
