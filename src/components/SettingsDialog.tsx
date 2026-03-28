@@ -88,6 +88,8 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
   const [pgSslMode, setPgSslMode] = useState("prefer");
   const [dbTestResult, setDbTestResult] = useState<string | null>(null);
   const [dbTestLoading, setDbTestLoading] = useState(false);
+  const [dbCreateLoading, setDbCreateLoading] = useState(false);
+  const [dbCreateResult, setDbCreateResult] = useState<string | null>(null);
   const [dbSaved, setDbSaved] = useState(false);
   const [dbError, setDbError] = useState<string | null>(null);
   const [dbDirty, setDbDirty] = useState(false);
@@ -126,7 +128,7 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
     setDbTestLoading(true);
     setDbTestResult(null);
     try {
-      await invoke<string>("db_test_connection", {
+      const result = await invoke<string>("db_test_connection", {
         host: pgHost,
         port: pgPort,
         database: pgDatabase,
@@ -134,11 +136,31 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
         username: pgUsername,
         password: pgPassword,
       });
-      setDbTestResult("success");
+      setDbTestResult(result === "db_not_found" ? "db_not_found" : "success");
     } catch (e) {
       setDbTestResult(String(e));
     } finally {
       setDbTestLoading(false);
+    }
+  }, [pgHost, pgPort, pgDatabase, pgUsername, pgPassword, pgSslMode]);
+
+  const handleCreateDatabase = useCallback(async () => {
+    setDbCreateLoading(true);
+    setDbCreateResult(null);
+    try {
+      await invoke<string>("db_create_database", {
+        host: pgHost,
+        port: pgPort,
+        database: pgDatabase,
+        sslMode: pgSslMode,
+        username: pgUsername,
+        password: pgPassword,
+      });
+      setDbCreateResult("success");
+    } catch (e) {
+      setDbCreateResult(String(e));
+    } finally {
+      setDbCreateLoading(false);
     }
   }, [pgHost, pgPort, pgDatabase, pgUsername, pgPassword, pgSslMode]);
 
@@ -578,16 +600,39 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
             </div>
             <div className="dialog-field">
               <label htmlFor="settings-pg-database">{t("settings.dbDatabaseLabel")}</label>
-              <input
-                id="settings-pg-database"
-                type="text"
-                value={pgDatabase}
-                placeholder={t("settings.dbDatabasePlaceholder")}
-                onChange={(e) => {
-                  setPgDatabase(e.target.value);
-                  handlePgFieldChange();
-                }}
-              />
+              <div className="dialog-row">
+                <div className="dialog-field-grow">
+                  <input
+                    id="settings-pg-database"
+                    type="text"
+                    value={pgDatabase}
+                    placeholder={t("settings.dbDatabasePlaceholder")}
+                    onChange={(e) => {
+                      setPgDatabase(e.target.value);
+                      setDbCreateResult(null);
+                      handlePgFieldChange();
+                    }}
+                  />
+                </div>
+                <button
+                  type="button"
+                  className="dialog-btn"
+                  disabled={dbCreateLoading || !pgHost || !pgDatabase || !pgUsername}
+                  onClick={() => {
+                    void handleCreateDatabase();
+                  }}
+                >
+                  {dbCreateLoading ? "..." : t("settings.dbCreateDatabase")}
+                </button>
+              </div>
+              {dbCreateResult === "success" && (
+                <span className="settings-db-success">{t("settings.dbCreateDatabaseSuccess")}</span>
+              )}
+              {dbCreateResult !== null && dbCreateResult !== "success" && (
+                <span className="settings-db-error">
+                  {t("settings.dbCreateDatabaseFailed", { message: dbCreateResult })}
+                </span>
+              )}
             </div>
             <div className="dialog-field">
               <label htmlFor="settings-pg-username">{t("settings.dbUsernameLabel")}</label>
@@ -644,11 +689,16 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
               {dbTestResult === "success" && (
                 <span className="settings-db-success">{t("settings.dbTestSuccess")}</span>
               )}
-              {dbTestResult !== null && dbTestResult !== "success" && (
-                <span className="settings-db-error">
-                  {t("settings.dbTestFailed", { message: dbTestResult })}
-                </span>
+              {dbTestResult === "db_not_found" && (
+                <span className="settings-db-warning">{t("settings.dbTestDbNotFound")}</span>
               )}
+              {dbTestResult !== null &&
+                dbTestResult !== "success" &&
+                dbTestResult !== "db_not_found" && (
+                  <span className="settings-db-error">
+                    {t("settings.dbTestFailed", { message: dbTestResult })}
+                  </span>
+                )}
             </div>
             <p className="settings-db-note">{t("settings.dbCredentialNote")}</p>
           </>

@@ -47,10 +47,101 @@ pub async fn db_test_connection(
 ) -> Result<String, String> {
     let ssl = ssl_mode.unwrap_or_else(|| "prefer".to_string());
     PostgresConfig::validate_ssl_mode(&ssl)?;
-    let pg_opts = PostgresConfig {
+
+    let pg_config = PostgresConfig {
         host,
         port,
         database,
+        username,
+        password,
+        ssl_mode: ssl,
+    };
+
+    // First, try connecting to the requested database directly.
+    let pg_opts = pg_config.connect_options();
+    let result = PgPoolOptions::new()
+        .max_connections(1)
+        .acquire_timeout(Duration::from_secs(5))
+        .connect_with(pg_opts)
+        .await;
+
+    match result {
+        Ok(pool) => {
+            sqlx::query("SELECT 1")
+                .execute(&pool)
+                .await
+                .map_err(|_| "Connection succeeded but test query failed".to_string())?;
+            pool.close().await;
+            Ok("ok".to_string())
+        }
+        Err(_) => {
+            // The target database may not exist yet.  Try the "postgres"
+            // maintenance database with the same credentials to distinguish
+            // "server unreachable / bad credentials" from "database missing".
+            let fallback_opts = PostgresConfig {
+                database: "postgres".to_string(),
+                ..pg_config
+            }
+            .connect_options();
+
+            let fallback = PgPoolOptions::new()
+                .max_connections(1)
+                .acquire_timeout(Duration::from_secs(5))
+                .connect_with(fallback_opts)
+                .await
+                .map_err(|_| {
+                    "Connection failed: unable to connect to PostgreSQL server".to_string()
+                })?;
+
+            sqlx::query("SELECT 1")
+                .execute(&fallback)
+                .await
+                .map_err(|_| {
+                    "Connection failed: unable to connect to PostgreSQL server".to_string()
+                })?;
+
+            fallback.close().await;
+            // Server is reachable but the requested database doesn't exist.
+            Ok("db_not_found".to_string())
+        }
+    }
+}
+
+#[tauri::command]
+pub async fn db_create_database(
+    host: String,
+    port: u16,
+    database: String,
+    username: String,
+    password: String,
+    ssl_mode: Option<String>,
+) -> Result<String, String> {
+    // Validate the requested database name: only allow ASCII alphanumerics,
+    // underscores, and hyphens to prevent SQL injection.  The CREATE DATABASE
+    // statement uses quote_ident–style quoting as an extra safety layer, but
+    // restricting the character set upfront is the primary defence.
+    if database.is_empty() || database.len() > 63 {
+        return Err("Database name must be 1–63 characters".to_string());
+    }
+    if !database
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    {
+        return Err(
+            "Database name may only contain ASCII letters, digits, underscores, and hyphens"
+                .to_string(),
+        );
+    }
+
+    let ssl = ssl_mode.unwrap_or_else(|| "prefer".to_string());
+    PostgresConfig::validate_ssl_mode(&ssl)?;
+
+    // Connect to the default "postgres" maintenance database to issue
+    // the CREATE DATABASE command.
+    let pg_opts = PostgresConfig {
+        host,
+        port,
+        database: "postgres".to_string(),
         username,
         password,
         ssl_mode: ssl,
@@ -64,10 +155,15 @@ pub async fn db_test_connection(
         .await
         .map_err(|_| "Connection failed: unable to connect to PostgreSQL server".to_string())?;
 
-    sqlx::query("SELECT 1")
+    // Use PG's quote_ident equivalent: double-quote the identifier and
+    // escape any embedded double-quotes.
+    let quoted = format!("\"{}\"", database.replace('"', "\"\""));
+    let sql = format!("CREATE DATABASE {quoted}");
+
+    sqlx::query(&sql)
         .execute(&pool)
         .await
-        .map_err(|_| "Connection succeeded but test query failed".to_string())?;
+        .map_err(|e| format!("Failed to create database: {e}"))?;
 
     pool.close().await;
     Ok("ok".to_string())

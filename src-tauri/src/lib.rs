@@ -364,6 +364,7 @@ pub fn run() {
             commands::db_get_config,
             commands::db_get_status,
             commands::db_test_connection,
+            commands::db_create_database,
             commands::db_save_config,
             commands::db_export,
             commands::db_import,
