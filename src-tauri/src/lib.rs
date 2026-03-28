@@ -508,6 +508,8 @@ pub fn run() {
             commands::session_reorder,
             commands::folder_sort_alphabetically,
             commands::session_sort_alphabetically,
+            // Bulk operations
+            commands::folder_apply_credentials,
             // Database config & migration
             commands::db_get_config,
             commands::db_get_status,

@@ -17,7 +17,8 @@
     "delete": "Delete",
     "connect": "Connect",
     "edit": "Edit",
-    "sortAlphabetically": "Sort Alphabetically"
+    "sortAlphabetically": "Sort Alphabetically",
+    "setCredentials": "Set Credentials\u2026"
   },
   "folder": {
     "deleteWithSessions": "Delete folder and its {{count}} session(s)?",
@@ -26,6 +27,12 @@
     "dialogRename": "Rename Folder",
     "nameLabel": "Name",
     "namePlaceholder": "Folder name"
+  },
+  "folderCredential": {
+    "title": "Set Credentials \u2014 {{name}}",
+    "info": "Applies to all SSH sessions in this folder and subfolders. Telnet sessions are excluded.",
+    "jumpHostLabel": "Jump Host (optional)",
+    "success": "Updated credentials for {{count}} session(s)"
   },
   "session": {
     "deleteConfirm": "Delete session \"{{name}}\"?",

@@ -17,7 +17,8 @@
     "delete": "L\u00f6schen",
     "connect": "Verbinden",
     "edit": "Bearbeiten",
-    "sortAlphabetically": "Alphabetisch sortieren"
+    "sortAlphabetically": "Alphabetisch sortieren",
+    "setCredentials": "Zugangsdaten setzen\u2026"
   },
   "folder": {
     "deleteWithSessions": "Ordner und seine {{count}} Sitzung(en) l\u00f6schen?",
@@ -26,6 +27,12 @@
     "dialogRename": "Ordner umbenennen",
     "nameLabel": "Name",
     "namePlaceholder": "Ordnername"
+  },
+  "folderCredential": {
+    "title": "Zugangsdaten setzen \u2014 {{name}}",
+    "info": "Gilt f\u00fcr alle SSH-Sitzungen in diesem Ordner und Unterordnern. Telnet-Sitzungen sind ausgenommen.",
+    "jumpHostLabel": "Jump-Host (optional)",
+    "success": "Zugangsdaten f\u00fcr {{count}} Sitzung(en) aktualisiert"
   },
   "session": {
     "deleteConfirm": "Sitzung \"{{name}}\" l\u00f6schen?",

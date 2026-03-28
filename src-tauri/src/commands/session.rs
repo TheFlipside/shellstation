@@ -445,6 +445,91 @@ pub async fn session_connect(
     Ok(conn_id)
 }
 
+// ── Bulk credential assignment ──────────────────────────────────────
+
+/// Apply credentials (and optionally a jump host) to all SSH sessions
+/// in a folder and its subfolders. Telnet sessions are skipped.
+/// Returns the number of sessions updated.
+#[tauri::command]
+pub async fn folder_apply_credentials(
+    db: State<'_, DbState>,
+    cred_db: State<'_, CredentialDbState>,
+    folder_id: String,
+    username: String,
+    auth_method: String,
+    credential: String,
+    jump_host_id: Option<Option<String>>,
+) -> Result<u32, String> {
+    if auth_method != "password" && auth_method != "publickey" {
+        return Err(format!("Unsupported auth method: {auth_method}"));
+    }
+
+    let target_folder = parse_uuid(&folder_id)?;
+
+    // Resolve the optional jump host ID once.
+    let jump_host_uuid = jump_host_id
+        .map(|opt| opt.map(|s| parse_uuid(&s)).transpose())
+        .transpose()?;
+
+    // Collect all folder IDs under the target (inclusive, recursive).
+    let all_folders = db.0.list_folders().await?;
+    let mut folder_set = HashSet::new();
+    folder_set.insert(target_folder);
+    collect_descendant_folders(target_folder, &all_folders, &mut folder_set);
+
+    // Find all SSH sessions in those folders.
+    let all_sessions = db.0.list_all_sessions().await?;
+    let ssh_sessions: Vec<&Session> = all_sessions
+        .iter()
+        .filter(|s| folder_set.contains(&s.folder_id) && s.protocol == "ssh")
+        .collect();
+
+    let mut count: u32 = 0;
+    for session in &ssh_sessions {
+        // Upsert credential.
+        let keychain_ref = format!("session-{}", session.id);
+        if let Err(e) = cred_db
+            .0
+            .upsert_credential(Credential {
+                id: Uuid::new_v4(),
+                session_id: session.id,
+                auth_type: auth_method.clone(),
+                keychain_ref,
+                secret: credential.clone(),
+            })
+            .await
+        {
+            tracing::error!(session_id = %session.id, "bulk credential upsert failed: {e}");
+            continue;
+        }
+
+        // Update username, auth_method (and optionally jump_host_id) on the session.
+        let update = UpdateSession {
+            username: Some(username.clone()),
+            auth_method: Some(auth_method.clone()),
+            jump_host_id: jump_host_uuid,
+            ..Default::default()
+        };
+        if let Err(e) = db.0.update_session(session.id, update).await {
+            tracing::error!(session_id = %session.id, "bulk session update failed: {e}");
+            continue;
+        }
+
+        count += 1;
+    }
+
+    Ok(count)
+}
+
+/// Recursively collect all descendant folder IDs into `out`.
+fn collect_descendant_folders(parent: Uuid, all: &[Folder], out: &mut HashSet<Uuid>) {
+    for folder in all {
+        if folder.parent_id == Some(parent) && out.insert(folder.id) {
+            collect_descendant_folders(folder.id, all, out);
+        }
+    }
+}
+
 // ── Helpers ──────────────────────────────────────────────────────────
 
 fn parse_uuid(s: &str) -> Result<Uuid, String> {

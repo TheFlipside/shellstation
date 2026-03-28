@@ -52,6 +52,15 @@ interface SessionState {
   searchSessions: (query: string) => Promise<void>;
   clearSearch: () => void;
 
+  // Bulk operations
+  folderApplyCredentials: (
+    folderId: string,
+    username: string,
+    authMethod: string,
+    credential: string,
+    jumpHostId?: string | null,
+  ) => Promise<number>;
+
   // Reordering
   reorderFolders: (parentId: string | null, orderedIds: string[]) => Promise<void>;
   reorderSessions: (folderId: string, orderedIds: string[]) => Promise<void>;
@@ -229,6 +238,20 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
   clearSearch: () => {
     set({ searchQuery: "", searchResults: null });
+  },
+
+  // ── Bulk operations ─────────────────────────────────────────────────
+
+  folderApplyCredentials: async (folderId, username, authMethod, credential, jumpHostId) => {
+    const count = await invoke<number>("folder_apply_credentials", {
+      folderId,
+      username,
+      authMethod,
+      credential,
+      jumpHostId: jumpHostId !== undefined ? jumpHostId : null,
+    });
+    await get().loadAll();
+    return count;
   },
 
   // ── Reordering ──────────────────────────────────────────────────────

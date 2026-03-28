@@ -18,6 +18,7 @@ import { ConfirmDialog } from "./ConfirmDialog";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { FolderDialog } from "./FolderDialog";
 import { MoveDialog } from "./MoveDialog";
+import { FolderCredentialDialog } from "./FolderCredentialDialog";
 import { SessionDialog, type SessionFormData } from "./SessionDialog";
 import { FolderIcon, SessionIconComponent } from "./SessionIcons";
 import { SettingsDialog } from "./SettingsDialog";
@@ -91,6 +92,10 @@ export function SessionSidebar(): React.JSX.Element {
     onConfirm: () => void;
   } | null>(null);
   const [showSettings, setShowSettings] = useState(false);
+  const [credentialFolder, setCredentialFolder] = useState<{
+    id: string;
+    name: string;
+  } | null>(null);
   const [activeItem, setActiveItem] = useState<{
     type: "folder" | "session";
     id: string;
@@ -266,6 +271,12 @@ export function SessionSidebar(): React.JSX.Element {
           label: t("contextMenu.sortAlphabetically"),
           onClick: () => {
             store.sortFolderAlphabetically(ctx.id, true).catch(noop);
+          },
+        },
+        {
+          label: t("contextMenu.setCredentials"),
+          onClick: () => {
+            setCredentialFolder({ id: ctx.id, name: folder?.name ?? "" });
           },
         },
         {
@@ -596,6 +607,37 @@ export function SessionSidebar(): React.JSX.Element {
           onSubmit={handleSessionSubmit}
           onCancel={() => {
             setSessionDialog(null);
+          }}
+        />
+      )}
+
+      {credentialFolder && (
+        <FolderCredentialDialog
+          folderId={credentialFolder.id}
+          folderName={credentialFolder.name}
+          sessions={sessions}
+          onSubmit={(username, authMethod, credential, jumpHostId) => {
+            store
+              .folderApplyCredentials(
+                credentialFolder.id,
+                username,
+                authMethod,
+                credential,
+                jumpHostId,
+              )
+              .then((count) => {
+                useToastStore
+                  .getState()
+                  .addToast(t("folderCredential.success", { count: String(count) }), "info");
+              })
+              .catch((err: unknown) => {
+                const msg = err instanceof Error ? err.message : String(err);
+                useToastStore.getState().addToast(msg);
+              });
+            setCredentialFolder(null);
+          }}
+          onCancel={() => {
+            setCredentialFolder(null);
           }}
         />
       )}
