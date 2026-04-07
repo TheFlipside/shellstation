@@ -44,9 +44,13 @@ This guide walks through every step needed to set up a development workstation f
 - [Code Signing](#23-code-signing)
 - [CI/CD Release Pipeline](#24-cicd-release-pipeline)
 
+### Maintenance
+
+- [Updating Dependencies](#25-updating-dependencies)
+
 ### Testlab
 
-- [Docker SSH/Telnet Testlab](#25-docker-sshtelnet-testlab)
+- [Docker SSH/Telnet Testlab](#26-docker-sshtelnet-testlab)
 
 ---
 
@@ -1430,7 +1434,93 @@ ls src-tauri/target/release/bundle/
 
 Cross-compilation is not supported by Tauri — each platform must be built on its native OS. For a multi-platform release without CI, build on each target machine and collect the artifacts manually.
 
-## 25. Docker SSH/Telnet Testlab
+## 25. Updating Dependencies
+
+Keep dependencies up-to-date periodically (at minimum before each release) to pick up security patches and bug fixes.
+
+### Rust crates
+
+```bash
+# Check for outdated crates (install cargo-outdated if not present)
+cargo install cargo-outdated
+cd src-tauri && cargo outdated
+
+# Update all crates to the latest version allowed by Cargo.toml constraints
+cd src-tauri && cargo update
+
+# To upgrade past semver-pinned versions, edit src-tauri/Cargo.toml
+# then run cargo update again. Review changelogs for breaking changes.
+
+# Audit for known security vulnerabilities (install cargo-audit if not present)
+cargo install cargo-audit
+cd src-tauri && cargo audit
+```
+
+#### Handling cargo audit findings
+
+`cargo audit` reports the vulnerable crate name, its version, a RUSTSEC advisory ID, and a link to the full advisory description.
+
+**Step 1 — Find why the crate is in your tree:**
+
+```bash
+# Shows which of your dependencies pulls in the vulnerable crate
+cd src-tauri && cargo tree -i <vulnerable-crate>
+```
+
+**Step 2 — Fix it:**
+
+- **Direct dependency** (listed in `Cargo.toml`): bump the version in `Cargo.toml` to one that resolves the advisory, then run `cargo update`.
+- **Transitive dependency** (pulled in by another crate): run `cargo update -p <vulnerable-crate>` to pull a patched version within the existing semver range. If no patched version exists, update the parent crate that depends on it.
+- **No fix available yet**: check the advisory details. If the vulnerability does not apply to your usage (e.g., an unused feature or code path), you can temporarily suppress it with `cargo audit --ignore RUSTSEC-XXXX-XXXX` and track the upstream issue until a fix is released.
+
+After updating, verify the build and lint pass:
+
+```bash
+cd src-tauri && cargo build && cargo clippy -- -D warnings && cargo test
+```
+
+### npm packages
+
+```bash
+# Check for outdated packages
+npm outdated
+
+# Update all packages within the version ranges in package.json
+npm update
+
+# To upgrade to new major versions beyond the pinned ranges, use:
+npx npm-check-updates -u   # rewrites package.json to latest versions
+npm install                 # install the updated versions
+
+# Audit for known security vulnerabilities
+npm audit
+
+# Auto-fix vulnerabilities where possible
+npm audit fix
+```
+
+After updating, verify the frontend build and lint pass:
+
+```bash
+npx tsc --noEmit && npx vite build
+npx eslint src/ --ext .ts,.tsx
+npx prettier --check "src/**/*.{ts,tsx,css,json}"
+```
+
+### Tauri CLI
+
+The Tauri CLI is listed as a devDependency in `package.json` (`@tauri-apps/cli`) and is updated along with npm packages. Ensure the CLI version stays compatible with the `tauri` and `tauri-build` crate versions in `Cargo.toml` — they should track the same major.minor release line.
+
+### Recommended workflow
+
+1. Create a dedicated branch: `git checkout -b deps/update-YYYY-MM-DD`
+2. Update Rust crates (`cargo update`) and npm packages (`npm update` or `npx npm-check-updates -u && npm install`).
+3. Run `cargo audit` and `npm audit` to check for remaining vulnerabilities.
+4. Run the full lint and test suite (see [Verify the Environment](#8-verify-the-environment)).
+5. Test the application manually (connect via SSH/Telnet, open local terminal).
+6. Commit and open a PR for review.
+
+## 26. Docker SSH/Telnet Testlab
 
 To test the functionality of connecting to a remote system via SSH or Telnet,
 including with the use of a jumphost, see the Readme in the directory **ssh-testlab**.
