@@ -75,34 +75,40 @@ pub async fn db_test_connection(
             Ok("ok".to_string())
         }
         Err(_) => {
-            // The target database may not exist yet.  Try the "postgres"
-            // maintenance database with the same credentials to distinguish
+            // The target database may not exist yet.  Try well-known
+            // maintenance databases with the same credentials to distinguish
             // "server unreachable / bad credentials" from "database missing".
-            let fallback_opts = PostgresConfig {
-                database: "postgres".to_string(),
-                ..pg_config
+            // Not all servers have "postgres" — some only have "template1" or
+            // default to a database named after the user.
+            let fallback_dbs = [
+                "postgres",
+                "template1",
+                pg_config.username.as_str(),
+            ];
+
+            for db_name in fallback_dbs {
+                let fallback_opts = PostgresConfig {
+                    database: db_name.to_string(),
+                    ..pg_config.clone()
+                }
+                .connect_options();
+
+                let fallback = PgPoolOptions::new()
+                    .max_connections(1)
+                    .acquire_timeout(Duration::from_secs(5))
+                    .connect_with(fallback_opts)
+                    .await;
+
+                if let Ok(pool) = fallback {
+                    let query_ok = sqlx::query("SELECT 1").execute(&pool).await.is_ok();
+                    pool.close().await;
+                    if query_ok {
+                        return Ok("db_not_found".to_string());
+                    }
+                }
             }
-            .connect_options();
 
-            let fallback = PgPoolOptions::new()
-                .max_connections(1)
-                .acquire_timeout(Duration::from_secs(5))
-                .connect_with(fallback_opts)
-                .await
-                .map_err(|_| {
-                    "Connection failed: unable to connect to PostgreSQL server".to_string()
-                })?;
-
-            sqlx::query("SELECT 1")
-                .execute(&fallback)
-                .await
-                .map_err(|_| {
-                    "Connection failed: unable to connect to PostgreSQL server".to_string()
-                })?;
-
-            fallback.close().await;
-            // Server is reachable but the requested database doesn't exist.
-            Ok("db_not_found".to_string())
+            Err("Connection failed: unable to connect to PostgreSQL server".to_string())
         }
     }
 }
@@ -136,24 +142,45 @@ pub async fn db_create_database(
     let ssl = ssl_mode.unwrap_or_else(|| "prefer".to_string());
     PostgresConfig::validate_ssl_mode(&ssl)?;
 
-    // Connect to the default "postgres" maintenance database to issue
-    // the CREATE DATABASE command.
-    let pg_opts = PostgresConfig {
+    // Connect to a maintenance database to issue the CREATE DATABASE command.
+    // Not all servers have "postgres" — try well-known fallbacks.
+    let pg_config = PostgresConfig {
         host,
         port,
-        database: "postgres".to_string(),
+        database: String::new(),
         username,
         password,
         ssl_mode: ssl,
-    }
-    .connect_options();
+    };
 
-    let pool = PgPoolOptions::new()
-        .max_connections(1)
-        .acquire_timeout(Duration::from_secs(5))
-        .connect_with(pg_opts)
-        .await
-        .map_err(|_| "Connection failed: unable to connect to PostgreSQL server".to_string())?;
+    let fallback_dbs = [
+        "postgres",
+        "template1",
+        pg_config.username.as_str(),
+    ];
+
+    let mut pool = None;
+    for db_name in fallback_dbs {
+        let opts = PostgresConfig {
+            database: db_name.to_string(),
+            ..pg_config.clone()
+        }
+        .connect_options();
+
+        if let Ok(p) = PgPoolOptions::new()
+            .max_connections(1)
+            .acquire_timeout(Duration::from_secs(5))
+            .connect_with(opts)
+            .await
+        {
+            pool = Some(p);
+            break;
+        }
+    }
+
+    let pool = pool.ok_or_else(|| {
+        "Connection failed: unable to connect to PostgreSQL server".to_string()
+    })?;
 
     // Use PG's quote_ident equivalent: double-quote the identifier and
     // escape any embedded double-quotes.

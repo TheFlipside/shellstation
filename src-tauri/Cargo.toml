@@ -23,9 +23,16 @@ tauri-plugin-opener = "2"
 base64 = "0.22"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# russh pulls in the `rsa` crate which has an open advisory (RUSTSEC-2023-0071,
+# Marvin Attack: RSA PKCS#1 v1.5 decryption timing side-channel). This only
+# affects the decrypting party (i.e. an SSH server). ShellStation is purely an
+# SSH client — it signs with RSA keys but never decrypts — so the vulnerable
+# code path is not reachable here. No upstream fix exists as of 2026-04.
 russh = "0.45"
 russh-keys = "0.45"
-sqlx = { version = "0.8", features = ["runtime-tokio", "tls-rustls", "sqlite", "postgres", "uuid", "chrono"] }
+# default-features disabled to exclude sqlx-mysql, which is unused and
+# otherwise pulls in the `rsa` crate (see RUSTSEC-2023-0071 above).
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls", "sqlite", "postgres", "uuid", "chrono", "macros", "migrate"] }
 tokio = { version = "1", features = ["full"] }
 keyring = "3"
 uuid = { version = "1", features = ["v4", "serde"] }
