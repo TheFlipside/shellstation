@@ -39,7 +39,7 @@ pub struct TelnetConnectParams {
 }
 
 /// Per-connection Telnet session state.
-struct TelnetSession {
+pub(crate) struct TelnetSession {
     reader_task: JoinHandle<()>,
     write_tx: mpsc::Sender<Vec<u8>>,
     resize_tx: mpsc::Sender<ResizeRequest>,
@@ -54,82 +54,22 @@ pub struct TelnetManager {
 impl TelnetManager {
     const MAX_SESSIONS: usize = 100;
 
-    /// Connect to a remote host via Telnet, negotiate options, and start
-    /// streaming output via Tauri events.
-    pub async fn connect(&mut self, params: TelnetConnectParams) -> Result<(), String> {
+    /// Pre-flight check: verify we haven't hit the session limit.
+    pub fn check_capacity(&self) -> Result<(), String> {
         if self.sessions.len() >= Self::MAX_SESSIONS {
             return Err(format!(
                 "Session limit reached (max {})",
                 Self::MAX_SESSIONS
             ));
         }
+        Ok(())
+    }
 
-        let TelnetConnectParams {
-            id,
-            host,
-            port,
-            cols,
-            rows,
-            app_handle,
-            restrict_private_ips,
-            connect_timeout_secs,
-        } = params;
-
-        // Validate against restricted IP ranges if enabled.
-        if restrict_private_ips {
-            crate::ssh::validate_ssh_target_public(&host, port)?;
-        }
-
-        info!(session_id = %id, host = %host, port = %port, "Connecting via Telnet");
-
-        let stream = tokio::time::timeout(
-            std::time::Duration::from_secs(connect_timeout_secs),
-            TcpStream::connect((host.as_str(), port)),
-        )
-        .await
-        .map_err(|_| format!("Telnet connection to {host}:{port} timed out"))?
-        .map_err(|e| sanitize_telnet_error(&e.to_string()))?;
-
-        let (read_half, write_half) = stream.into_split();
-
-        // Channel for sending data to the writer task.
-        let (write_tx, write_rx) = mpsc::channel::<Vec<u8>>(64);
-        // Channel for resize requests.
-        let (resize_tx, resize_rx) = mpsc::channel::<ResizeRequest>(4);
-
-        let event_name = format!("terminal-output-{id}");
-        let exit_event = format!("terminal-exit-{id}");
-        let session_id = id.clone();
-        let app = app_handle;
-        let initial_cols = cols;
-        let initial_rows = rows;
-
-        let reader_task = tokio::spawn(async move {
-            telnet_io_loop(
-                read_half,
-                write_half,
-                write_rx,
-                resize_rx,
-                initial_cols,
-                initial_rows,
-                &event_name,
-                &exit_event,
-                &session_id,
-                &app,
-            )
-            .await;
-        });
-
-        self.sessions.insert(
-            id.clone(),
-            TelnetSession {
-                reader_task,
-                write_tx,
-                resize_tx,
-            },
-        );
-
-        info!(session_id = %id, "Telnet session established");
+    /// Register an established Telnet session. Re-checks capacity to prevent
+    /// TOCTOU races when multiple connections are established concurrently.
+    pub fn register_session(&mut self, id: String, session: TelnetSession) -> Result<(), String> {
+        self.check_capacity()?;
+        self.sessions.insert(id, session);
         Ok(())
     }
 
@@ -170,6 +110,78 @@ impl Default for TelnetState {
     fn default() -> Self {
         Self(Arc::new(Mutex::new(TelnetManager::default())))
     }
+}
+
+/// Establish a Telnet connection and start streaming I/O.
+///
+/// This is intentionally a free function (not a method on `TelnetManager`) so
+/// that callers can perform the expensive TCP handshake **without** holding the
+/// manager lock — preventing one slow or timed-out connection from blocking all
+/// other sessions.
+pub async fn establish_telnet_connection(
+    params: TelnetConnectParams,
+) -> Result<TelnetSession, String> {
+    let TelnetConnectParams {
+        id,
+        host,
+        port,
+        cols,
+        rows,
+        app_handle,
+        restrict_private_ips,
+        connect_timeout_secs,
+    } = params;
+
+    // Validate against restricted IP ranges if enabled.
+    if restrict_private_ips {
+        crate::ssh::validate_ssh_target_public(&host, port)?;
+    }
+
+    info!(session_id = %id, host = %host, port = %port, "Connecting via Telnet");
+
+    let stream = tokio::time::timeout(
+        std::time::Duration::from_secs(connect_timeout_secs),
+        TcpStream::connect((host.as_str(), port)),
+    )
+    .await
+    .map_err(|_| format!("Telnet connection to {host}:{port} timed out"))?
+    .map_err(|e| sanitize_telnet_error(&e.to_string()))?;
+
+    let (read_half, write_half) = stream.into_split();
+
+    // Channel for sending data to the writer task.
+    let (write_tx, write_rx) = mpsc::channel::<Vec<u8>>(64);
+    // Channel for resize requests.
+    let (resize_tx, resize_rx) = mpsc::channel::<ResizeRequest>(4);
+
+    let event_name = format!("terminal-output-{id}");
+    let exit_event = format!("terminal-exit-{id}");
+    let session_id = id.clone();
+    let app = app_handle;
+
+    let reader_task = tokio::spawn(async move {
+        telnet_io_loop(
+            read_half,
+            write_half,
+            write_rx,
+            resize_rx,
+            cols,
+            rows,
+            &event_name,
+            &exit_event,
+            &session_id,
+            &app,
+        )
+        .await;
+    });
+
+    info!(session_id = %id, "Telnet session established");
+
+    Ok(TelnetSession {
+        reader_task,
+        write_tx,
+        resize_tx,
+    })
 }
 
 // ── I/O loop ────────────────────────────────────────────────────────

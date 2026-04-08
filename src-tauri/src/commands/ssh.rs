@@ -2,7 +2,7 @@ use tauri::{AppHandle, State};
 use uuid::Uuid;
 use zeroize::Zeroizing;
 
-use crate::ssh::{JumpHop, SshConnectParams, SshState};
+use crate::ssh::{establish_ssh_connection, JumpHop, SshConnectParams, SshState};
 
 use super::{validate_dimensions, MAX_JUMP_HOPS, MAX_WRITE_SIZE};
 
@@ -29,9 +29,17 @@ pub async fn ssh_connect(
         return Err(format!("Too many jump hops (max {MAX_JUMP_HOPS})"));
     }
     let id = Uuid::new_v4().to_string();
-    let mut manager = state.manager.lock().await;
-    manager
-        .connect(SshConnectParams {
+
+    // Brief lock: check capacity only.
+    {
+        let manager = state.manager.lock().await;
+        manager.check_capacity()?;
+    }
+
+    // Establish connection WITHOUT holding the manager lock so other
+    // sessions remain fully usable during the (potentially slow) handshake.
+    let session = establish_ssh_connection(
+        SshConnectParams {
             id: id.clone(),
             host,
             port,
@@ -44,8 +52,17 @@ pub async fn ssh_connect(
             jump_hops: hops,
             restrict_private_ips: restrict_private_ips.unwrap_or(false),
             connect_timeout_secs: connect_timeout.unwrap_or(10),
-        })
-        .await?;
+        },
+        &state.host_verify_senders,
+    )
+    .await?;
+
+    // Brief lock: re-check capacity and register atomically.
+    {
+        let mut manager = state.manager.lock().await;
+        manager.register_session(id.clone(), session)?;
+    }
+
     Ok(id)
 }
 

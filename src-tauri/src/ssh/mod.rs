@@ -38,7 +38,7 @@ pub struct ResizeRequest {
 }
 
 /// Per-connection SSH session state.
-struct SshSession {
+pub(crate) struct SshSession {
     handle: Arc<client::Handle<SshHandler>>,
     channel_id: russh::ChannelId,
     reader_task: JoinHandle<()>,
@@ -75,156 +75,31 @@ pub struct SshConnectParams {
 }
 
 /// Manages all active SSH sessions.
+#[derive(Default)]
 pub struct SshManager {
     sessions: HashMap<String, SshSession>,
-    /// Pending TOFU verification senders — behind a separate std::sync::Mutex
-    /// so the verify response command can resolve without the main manager lock.
-    host_verify_senders: HostVerifySenders,
-}
-
-impl Default for SshManager {
-    fn default() -> Self {
-        Self {
-            sessions: HashMap::new(),
-            host_verify_senders: Arc::new(std::sync::Mutex::new(HashMap::new())),
-        }
-    }
 }
 
 impl SshManager {
     /// Maximum number of concurrent SSH sessions.
     const MAX_SESSIONS: usize = 100;
 
-    /// Connect to a remote SSH host, authenticate, open a PTY shell, and start
-    /// streaming output via Tauri events.
-    pub async fn connect(&mut self, params: SshConnectParams) -> Result<(), String> {
+    /// Pre-flight check: verify we haven't hit the session limit.
+    pub fn check_capacity(&self) -> Result<(), String> {
         if self.sessions.len() >= Self::MAX_SESSIONS {
             return Err(format!(
                 "Session limit reached (max {})",
                 Self::MAX_SESSIONS
             ));
         }
+        Ok(())
+    }
 
-        let SshConnectParams {
-            id,
-            host,
-            port,
-            username,
-            auth_method,
-            auth_credential,
-            cols,
-            rows,
-            app_handle,
-            jump_hops,
-            restrict_private_ips,
-            connect_timeout_secs,
-        } = params;
-
-        info!(session_id = %id, host = %host, port = %port, hops = jump_hops.len(), "Connecting via SSH");
-
-        let verify_senders = Arc::clone(&self.host_verify_senders);
-        let (mut handle, bastion_handles) = connect_with_hops(
-            &id,
-            &host,
-            port,
-            &jump_hops,
-            restrict_private_ips,
-            connect_timeout_secs,
-            &app_handle,
-            &verify_senders,
-        )
-        .await?;
-
-        // Authenticate.
-        authenticate_handle(&mut handle, &username, &auth_method, &auth_credential).await?;
-
-        info!(session_id = %id, "SSH authenticated");
-
-        // Open a session channel with PTY.
-        let channel = handle
-            .channel_open_session()
-            .await
-            .map_err(|e| format!("Failed to open channel: {e}"))?;
-
-        channel
-            .request_pty(
-                false,
-                "xterm-256color",
-                u32::from(cols),
-                u32::from(rows),
-                0,
-                0,
-                &[],
-            )
-            .await
-            .map_err(|e| format!("Failed to request PTY: {e}"))?;
-
-        channel
-            .request_shell(false)
-            .await
-            .map_err(|e| format!("Failed to request shell: {e}"))?;
-
-        let channel_id = channel.id();
-
-        // Create a channel for sending resize requests to the reader task.
-        let (resize_tx, mut resize_rx) = mpsc::channel::<ResizeRequest>(4);
-
-        // Spawn a reader task that owns the channel exclusively.
-        // It streams output to the frontend and handles resize requests.
-        let event_name = format!("terminal-output-{id}");
-        let exit_event = format!("terminal-exit-{id}");
-        let session_id = id.clone();
-        let app = app_handle;
-
-        let reader_task = tokio::spawn(async move {
-            let mut channel = channel;
-            loop {
-                tokio::select! {
-                    msg = channel.wait() => {
-                        match msg {
-                            Some(ChannelMsg::Data { ref data })
-                            | Some(ChannelMsg::ExtendedData { ref data, ext: 1 }) => {
-                                let payload = base64::prelude::BASE64_STANDARD.encode(data.as_ref());
-                                if app.emit(&event_name, &payload).is_err() {
-                                    break;
-                                }
-                            }
-                            Some(ChannelMsg::ExitStatus { exit_status }) => {
-                                info!(session_id = %session_id, exit_status, "SSH process exited");
-                            }
-                            Some(ChannelMsg::Eof | ChannelMsg::Close) => {
-                                info!(session_id = %session_id, "SSH channel closed");
-                                let _ = app.emit(&exit_event, ());
-                                break;
-                            }
-                            Some(_) => {}
-                            None => {
-                                let _ = app.emit(&exit_event, ());
-                                break;
-                            }
-                        }
-                    }
-                    Some(req) = resize_rx.recv() => {
-                        if let Err(e) = channel.window_change(req.cols, req.rows, 0, 0).await {
-                            warn!(session_id = %session_id, error = %e, "Failed to resize SSH PTY");
-                        }
-                    }
-                }
-            }
-        });
-
-        self.sessions.insert(
-            id.clone(),
-            SshSession {
-                handle: Arc::new(handle),
-                channel_id,
-                reader_task,
-                resize_tx,
-                bastion_handles,
-            },
-        );
-
-        info!(session_id = %id, "SSH session established");
+    /// Register an established SSH session. Re-checks capacity to prevent
+    /// TOCTOU races when multiple connections are established concurrently.
+    pub fn register_session(&mut self, id: String, session: SshSession) -> Result<(), String> {
+        self.check_capacity()?;
+        self.sessions.insert(id, session);
         Ok(())
     }
 
@@ -267,6 +142,135 @@ impl SshManager {
     }
 }
 
+/// Establish an SSH connection, authenticate, open a PTY shell, and start
+/// streaming output via Tauri events.
+///
+/// This is intentionally a free function (not a method on `SshManager`) so
+/// that callers can perform the expensive TCP handshake and authentication
+/// **without** holding the manager lock — preventing one slow or timed-out
+/// connection from blocking all other sessions.
+pub async fn establish_ssh_connection(
+    params: SshConnectParams,
+    verify_senders: &HostVerifySenders,
+) -> Result<SshSession, String> {
+    let SshConnectParams {
+        id,
+        host,
+        port,
+        username,
+        auth_method,
+        auth_credential,
+        cols,
+        rows,
+        app_handle,
+        jump_hops,
+        restrict_private_ips,
+        connect_timeout_secs,
+    } = params;
+
+    info!(session_id = %id, host = %host, port = %port, hops = jump_hops.len(), "Connecting via SSH");
+
+    let (mut handle, bastion_handles) = connect_with_hops(
+        &id,
+        &host,
+        port,
+        &jump_hops,
+        restrict_private_ips,
+        connect_timeout_secs,
+        &app_handle,
+        verify_senders,
+    )
+    .await?;
+
+    // Authenticate.
+    authenticate_handle(&mut handle, &username, &auth_method, &auth_credential).await?;
+
+    info!(session_id = %id, "SSH authenticated");
+
+    // Open a session channel with PTY.
+    let channel = handle
+        .channel_open_session()
+        .await
+        .map_err(|e| format!("Failed to open channel: {e}"))?;
+
+    channel
+        .request_pty(
+            false,
+            "xterm-256color",
+            u32::from(cols),
+            u32::from(rows),
+            0,
+            0,
+            &[],
+        )
+        .await
+        .map_err(|e| format!("Failed to request PTY: {e}"))?;
+
+    channel
+        .request_shell(false)
+        .await
+        .map_err(|e| format!("Failed to request shell: {e}"))?;
+
+    let channel_id = channel.id();
+
+    // Create a channel for sending resize requests to the reader task.
+    let (resize_tx, mut resize_rx) = mpsc::channel::<ResizeRequest>(4);
+
+    // Spawn a reader task that owns the channel exclusively.
+    // It streams output to the frontend and handles resize requests.
+    let event_name = format!("terminal-output-{id}");
+    let exit_event = format!("terminal-exit-{id}");
+    let session_id = id.clone();
+    let app = app_handle;
+
+    let reader_task = tokio::spawn(async move {
+        let mut channel = channel;
+        loop {
+            tokio::select! {
+                msg = channel.wait() => {
+                    match msg {
+                        Some(ChannelMsg::Data { ref data })
+                        | Some(ChannelMsg::ExtendedData { ref data, ext: 1 }) => {
+                            let payload = base64::prelude::BASE64_STANDARD.encode(data.as_ref());
+                            if app.emit(&event_name, &payload).is_err() {
+                                break;
+                            }
+                        }
+                        Some(ChannelMsg::ExitStatus { exit_status }) => {
+                            info!(session_id = %session_id, exit_status, "SSH process exited");
+                        }
+                        Some(ChannelMsg::Eof | ChannelMsg::Close) => {
+                            info!(session_id = %session_id, "SSH channel closed");
+                            let _ = app.emit(&exit_event, ());
+                            break;
+                        }
+                        Some(_) => {}
+                        None => {
+                            let _ = app.emit(&exit_event, ());
+                            break;
+                        }
+                    }
+                }
+                Some(req) = resize_rx.recv() => {
+                    if let Err(e) = channel.window_change(req.cols, req.rows, 0, 0).await {
+                        warn!(session_id = %session_id, error = %e, "Failed to resize SSH PTY");
+                    }
+                }
+            }
+        }
+    });
+
+    info!(session_id = %id, "SSH session established");
+
+    Ok(SshSession {
+        handle: Arc::new(handle),
+        channel_id,
+        reader_task,
+        resize_tx,
+        bastion_handles,
+    })
+}
+
 /// Thread-safe wrapper around `SshManager` for use as Tauri managed state.
 pub struct SshState {
     pub manager: Arc<Mutex<SshManager>>,
@@ -278,13 +282,9 @@ pub struct SshState {
 
 impl Default for SshState {
     fn default() -> Self {
-        let senders: HostVerifySenders = Arc::new(std::sync::Mutex::new(HashMap::new()));
         Self {
-            manager: Arc::new(Mutex::new(SshManager {
-                sessions: HashMap::new(),
-                host_verify_senders: Arc::clone(&senders),
-            })),
-            host_verify_senders: senders,
+            manager: Arc::new(Mutex::new(SshManager::default())),
+            host_verify_senders: Arc::new(std::sync::Mutex::new(HashMap::new())),
         }
     }
 }

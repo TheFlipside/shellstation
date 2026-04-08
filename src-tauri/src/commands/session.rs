@@ -10,8 +10,8 @@ use crate::db::models::{
     UpdateSession,
 };
 use crate::db::{CredentialDbState, DbState};
-use crate::ssh::{SshConnectParams, SshState};
-use crate::telnet::{TelnetConnectParams, TelnetState};
+use crate::ssh::{establish_ssh_connection, SshConnectParams, SshState};
+use crate::telnet::{establish_telnet_connection, TelnetConnectParams, TelnetState};
 
 use super::{validate_dimensions, validate_port, validate_session_fields, MAX_JUMP_HOPS};
 
@@ -420,19 +420,32 @@ pub async fn session_connect(
     // Dispatch by protocol.
     if session.protocol == "telnet" {
         let conn_id = Uuid::new_v4().to_string();
-        let mut manager = telnet.0.lock().await;
-        manager
-            .connect(TelnetConnectParams {
-                id: conn_id.clone(),
-                host: session.hostname,
-                port: session.port as u16,
-                cols,
-                rows,
-                app_handle,
-                restrict_private_ips: restrict,
-                connect_timeout_secs: timeout_secs,
-            })
-            .await?;
+
+        // Brief lock: check capacity only.
+        {
+            let manager = telnet.0.lock().await;
+            manager.check_capacity()?;
+        }
+
+        // Connect WITHOUT holding the lock.
+        let telnet_session = establish_telnet_connection(TelnetConnectParams {
+            id: conn_id.clone(),
+            host: session.hostname,
+            port: session.port as u16,
+            cols,
+            rows,
+            app_handle,
+            restrict_private_ips: restrict,
+            connect_timeout_secs: timeout_secs,
+        })
+        .await?;
+
+        // Brief lock: re-check capacity and register atomically.
+        {
+            let mut manager = telnet.0.lock().await;
+            manager.register_session(conn_id.clone(), telnet_session)?;
+        }
+
         return Ok(conn_id);
     }
 
@@ -458,9 +471,16 @@ pub async fn session_connect(
     }
 
     let conn_id = Uuid::new_v4().to_string();
-    let mut manager = ssh.manager.lock().await;
-    manager
-        .connect(SshConnectParams {
+
+    // Brief lock: check capacity only.
+    {
+        let manager = ssh.manager.lock().await;
+        manager.check_capacity()?;
+    }
+
+    // Connect WITHOUT holding the lock.
+    let ssh_session = establish_ssh_connection(
+        SshConnectParams {
             id: conn_id.clone(),
             host: session.hostname,
             port: session.port as u16,
@@ -473,8 +493,16 @@ pub async fn session_connect(
             jump_hops,
             restrict_private_ips: restrict,
             connect_timeout_secs: timeout_secs,
-        })
-        .await?;
+        },
+        &ssh.host_verify_senders,
+    )
+    .await?;
+
+    // Brief lock: re-check capacity and register atomically.
+    {
+        let mut manager = ssh.manager.lock().await;
+        manager.register_session(conn_id.clone(), ssh_session)?;
+    }
 
     Ok(conn_id)
 }

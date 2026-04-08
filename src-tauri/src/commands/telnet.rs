@@ -1,7 +1,7 @@
 use tauri::{AppHandle, State};
 use uuid::Uuid;
 
-use crate::telnet::{TelnetConnectParams, TelnetState};
+use crate::telnet::{establish_telnet_connection, TelnetConnectParams, TelnetState};
 
 use super::{validate_dimensions, MAX_WRITE_SIZE};
 
@@ -20,19 +20,33 @@ pub async fn telnet_connect(
 ) -> Result<String, String> {
     validate_dimensions(cols, rows)?;
     let id = Uuid::new_v4().to_string();
-    let mut manager = state.0.lock().await;
-    manager
-        .connect(TelnetConnectParams {
-            id: id.clone(),
-            host,
-            port,
-            cols,
-            rows,
-            app_handle,
-            restrict_private_ips: restrict_private_ips.unwrap_or(false),
-            connect_timeout_secs: connect_timeout.unwrap_or(10),
-        })
-        .await?;
+
+    // Brief lock: check capacity only.
+    {
+        let manager = state.0.lock().await;
+        manager.check_capacity()?;
+    }
+
+    // Establish connection WITHOUT holding the manager lock so other
+    // sessions remain fully usable during the (potentially slow) handshake.
+    let session = establish_telnet_connection(TelnetConnectParams {
+        id: id.clone(),
+        host,
+        port,
+        cols,
+        rows,
+        app_handle,
+        restrict_private_ips: restrict_private_ips.unwrap_or(false),
+        connect_timeout_secs: connect_timeout.unwrap_or(10),
+    })
+    .await?;
+
+    // Brief lock: re-check capacity and register atomically.
+    {
+        let mut manager = state.0.lock().await;
+        manager.register_session(id.clone(), session)?;
+    }
+
     Ok(id)
 }
 
