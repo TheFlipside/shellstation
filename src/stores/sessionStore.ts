@@ -69,6 +69,8 @@ interface SessionState {
 
   // UI
   toggleFolder: (id: string) => void;
+  expandFolder: (id: string) => void;
+  collapseFolder: (id: string) => void;
   selectItem: (id: string, type: "folder" | "session") => void;
   clearSelection: () => void;
 
@@ -289,6 +291,26 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       } else {
         next.add(id);
       }
+      localStorage.setItem("shellstation:expandedFolders", JSON.stringify([...next]));
+      return { expandedFolderIds: next };
+    });
+  },
+
+  expandFolder: (id) => {
+    set((state) => {
+      if (state.expandedFolderIds.has(id)) return state;
+      const next = new Set(state.expandedFolderIds);
+      next.add(id);
+      localStorage.setItem("shellstation:expandedFolders", JSON.stringify([...next]));
+      return { expandedFolderIds: next };
+    });
+  },
+
+  collapseFolder: (id) => {
+    set((state) => {
+      if (!state.expandedFolderIds.has(id)) return state;
+      const next = new Set(state.expandedFolderIds);
+      next.delete(id);
       localStorage.setItem("shellstation:expandedFolders", JSON.stringify([...next]));
       return { expandedFolderIds: next };
     });

@@ -14,7 +14,7 @@ import {
 import { useSessionStore } from "../stores/sessionStore";
 import type { Folder, Session } from "../stores/sessionStore";
 import { useToastStore } from "../stores/toastStore";
-import { SessionTree, parseDndId } from "./SessionTree";
+import { SessionTree, parseDndId, flattenVisibleItems } from "./SessionTree";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { FolderDialog } from "./FolderDialog";
@@ -72,6 +72,13 @@ export function SessionSidebar(): React.JSX.Element {
     searchSessions,
     clearSearch,
     connectSession,
+    selectedItemId,
+    selectedItemType,
+    selectItem,
+    expandedFolderIds,
+    expandFolder,
+    collapseFolder,
+    toggleFolder,
   } = store;
 
   const [ctx, setCtx] = useState<ContextState | null>(null);
@@ -129,12 +136,55 @@ export function SessionSidebar(): React.JSX.Element {
     };
   }, [autoRefreshInterval, checkForUpdates]);
 
-  const handleContextMenu = useCallback(
-    (e: React.MouseEvent, id: string, type: "folder" | "session") => {
-      setCtx({ x: e.clientX, y: e.clientY, id, type });
-    },
-    [],
-  );
+  /** Clone the given session by opening the SessionDialog in create mode with prefilled data. */
+  const cloneSession = useCallback((session: Session) => {
+    invoke<{ username: string; secret: string } | null>("credential_get", {
+      sessionId: session.id,
+    })
+      .then((cred) => {
+        const secret = cred?.secret ?? "";
+        prefillCredRef.current = {
+          password: session.auth_method === "password" ? secret : "",
+          keyPath: session.auth_method === "publickey" ? secret : "",
+        };
+        setSessionDialog({
+          mode: "create",
+          folderId: session.folder_id,
+          initial: {
+            folderId: session.folder_id,
+            name: session.name + "_copy",
+            hostname: session.hostname,
+            port: session.port,
+            protocol: session.protocol,
+            username: cred?.username ?? "",
+            authMethod: session.auth_method,
+            tags: tagsToDisplay(session.tags),
+            icon: session.icon,
+            jumpHostId: session.jump_host_id,
+            password: session.auth_method === "password" ? secret : "",
+            keyPath: session.auth_method === "publickey" ? secret : "",
+          },
+        });
+      })
+      .catch(noop);
+  }, []);
+
+  // Ctrl+D clones the currently selected session.
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent): void => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "d") {
+        if (selectedItemType !== "session" || !selectedItemId) return;
+        const session = sessions.find((s) => s.id === selectedItemId);
+        if (!session) return;
+        e.preventDefault();
+        cloneSession(session);
+      }
+    };
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [selectedItemId, selectedItemType, sessions, cloneSession]);
 
   const handleSessionDoubleClick = useCallback(
     (id: string) => {
@@ -144,6 +194,93 @@ export function SessionSidebar(): React.JSX.Element {
       });
     },
     [connectSession, t],
+  );
+
+  /** Scroll the newly-selected tree item into view. */
+  const scrollItemIntoView = useCallback((id: string): void => {
+    const el = document.querySelector<HTMLElement>(`[data-item-id="${id}"]`);
+    el?.scrollIntoView({ block: "nearest" });
+  }, []);
+
+  // Arrow-key and Enter navigation within the session tree.
+  const handleTreeKeyDown = useCallback(
+    (e: React.KeyboardEvent): void => {
+      const key = e.key;
+
+      // Enter: toggle folder or connect session
+      if (key === "Enter") {
+        if (selectedItemType === "folder" && selectedItemId) {
+          toggleFolder(selectedItemId);
+        } else if (selectedItemType === "session" && selectedItemId) {
+          handleSessionDoubleClick(selectedItemId);
+        }
+        return;
+      }
+
+      if (!["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(key)) return;
+      e.preventDefault();
+
+      const visible = flattenVisibleItems(folders, sessions, expandedFolderIds);
+      if (visible.length === 0) return;
+
+      const currentIdx = selectedItemId
+        ? visible.findIndex((item) => item.id === selectedItemId)
+        : -1;
+
+      if (key === "ArrowDown") {
+        const next = currentIdx < visible.length - 1 ? currentIdx + 1 : 0;
+        selectItem(visible[next].id, visible[next].type);
+        scrollItemIntoView(visible[next].id);
+      } else if (key === "ArrowUp") {
+        const next = currentIdx > 0 ? currentIdx - 1 : visible.length - 1;
+        selectItem(visible[next].id, visible[next].type);
+        scrollItemIntoView(visible[next].id);
+      } else if (key === "ArrowRight") {
+        if (selectedItemType === "folder" && selectedItemId) {
+          expandFolder(selectedItemId);
+        }
+      } else if (key === "ArrowLeft") {
+        if (selectedItemType === "folder" && selectedItemId) {
+          if (expandedFolderIds.has(selectedItemId)) {
+            collapseFolder(selectedItemId);
+          } else {
+            // Navigate to parent folder
+            const folder = folders.find((f) => f.id === selectedItemId);
+            if (folder?.parent_id) {
+              selectItem(folder.parent_id, "folder");
+              scrollItemIntoView(folder.parent_id);
+            }
+          }
+        } else if (selectedItemType === "session" && selectedItemId) {
+          // Navigate to the session's parent folder
+          const session = sessions.find((s) => s.id === selectedItemId);
+          if (session) {
+            selectItem(session.folder_id, "folder");
+            scrollItemIntoView(session.folder_id);
+          }
+        }
+      }
+    },
+    [
+      folders,
+      sessions,
+      expandedFolderIds,
+      selectedItemId,
+      selectedItemType,
+      selectItem,
+      expandFolder,
+      collapseFolder,
+      toggleFolder,
+      scrollItemIntoView,
+      handleSessionDoubleClick,
+    ],
+  );
+
+  const handleContextMenu = useCallback(
+    (e: React.MouseEvent, id: string, type: "folder" | "session") => {
+      setCtx({ x: e.clientX, y: e.clientY, id, type });
+    },
+    [],
   );
 
   const handleDragStart = useCallback((event: DragStartEvent): void => {
@@ -357,36 +494,7 @@ export function SessionSidebar(): React.JSX.Element {
       {
         label: t("contextMenu.clone"),
         onClick: () => {
-          if (!session) return;
-          invoke<{ username: string; secret: string } | null>("credential_get", {
-            sessionId: session.id,
-          })
-            .then((cred) => {
-              const secret = cred?.secret ?? "";
-              prefillCredRef.current = {
-                password: session.auth_method === "password" ? secret : "",
-                keyPath: session.auth_method === "publickey" ? secret : "",
-              };
-              setSessionDialog({
-                mode: "create",
-                folderId: session.folder_id,
-                initial: {
-                  folderId: session.folder_id,
-                  name: session.name + "_copy",
-                  hostname: session.hostname,
-                  port: session.port,
-                  protocol: session.protocol,
-                  username: cred?.username ?? "",
-                  authMethod: session.auth_method,
-                  tags: tagsToDisplay(session.tags),
-                  icon: session.icon,
-                  jumpHostId: session.jump_host_id,
-                  password: session.auth_method === "password" ? secret : "",
-                  keyPath: session.auth_method === "publickey" ? secret : "",
-                },
-              });
-            })
-            .catch(noop);
+          if (session) cloneSession(session);
         },
       },
       {
@@ -519,7 +627,16 @@ export function SessionSidebar(): React.JSX.Element {
                 alert(t("sidebar.createFolderFirst"));
                 return;
               }
-              setSessionDialog({ mode: "create", folderId: folders[0].id });
+              let targetFolderId = folders[0].id;
+              if (selectedItemId) {
+                if (selectedItemType === "folder") {
+                  targetFolderId = selectedItemId;
+                } else if (selectedItemType === "session") {
+                  const sel = sessions.find((s) => s.id === selectedItemId);
+                  if (sel) targetFolderId = sel.folder_id;
+                }
+              }
+              setSessionDialog({ mode: "create", folderId: targetFolderId });
             }}
           >
             +S
@@ -559,7 +676,7 @@ export function SessionSidebar(): React.JSX.Element {
         />
       </div>
       <DndContext sensors={sensors} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
-        <div className="sidebar-tree" role="tree">
+        <div className="sidebar-tree" role="tree" tabIndex={0} onKeyDown={handleTreeKeyDown}>
           {searchResults ? (
             displaySessions.map((s) => (
               <div

@@ -14,6 +14,39 @@ interface SessionTreeProps {
   onSessionDoubleClick: (id: string) => void;
 }
 
+/** Item entry in the flattened visible tree, used for keyboard navigation. */
+export interface FlatTreeItem {
+  id: string;
+  type: "folder" | "session";
+}
+
+/**
+ * Walk the tree in render order and return visible items as a flat list.
+ * Only recurses into expanded folders. Used by the sidebar keyboard
+ * navigation handler to map arrow-key presses to the correct next item.
+ */
+export function flattenVisibleItems(
+  folders: Folder[],
+  sessions: Session[],
+  expandedFolderIds: Set<string>,
+  parentId: string | null = null,
+): FlatTreeItem[] {
+  const result: FlatTreeItem[] = [];
+  const childFolders = folders.filter((f) => f.parent_id === parentId);
+  const childSessions = sessions.filter((s) => s.folder_id === parentId);
+
+  for (const folder of childFolders) {
+    result.push({ id: folder.id, type: "folder" });
+    if (expandedFolderIds.has(folder.id)) {
+      result.push(...flattenVisibleItems(folders, sessions, expandedFolderIds, folder.id));
+    }
+  }
+  for (const session of childSessions) {
+    result.push({ id: session.id, type: "session" });
+  }
+  return result;
+}
+
 /** Prefix helpers to create globally-unique DnD IDs. */
 export function folderDndId(id: string): string {
   return `folder-${id}`;
@@ -64,9 +97,15 @@ function SortableFolder({
         {...listeners}
         className={`tree-item tree-folder ${isSelected ? "tree-item-selected" : ""}`}
         style={{ paddingLeft: `${String(depth * 16 + 8)}px` }}
+        data-item-id={folder.id}
         onClick={() => {
-          toggleFolder(folder.id);
           selectItem(folder.id, "folder");
+        }}
+        onMouseDown={(e) => {
+          if (e.detail > 1) e.preventDefault();
+        }}
+        onDoubleClick={() => {
+          toggleFolder(folder.id);
         }}
         onContextMenu={(e) => {
           e.preventDefault();
@@ -75,10 +114,7 @@ function SortableFolder({
         }}
         role="treeitem"
         aria-expanded={isExpanded}
-        tabIndex={0}
-        onKeyDown={(e) => {
-          if (e.key === "Enter") toggleFolder(folder.id);
-        }}
+        tabIndex={-1}
       >
         <span className="tree-chevron">{isExpanded ? "\u25BE" : "\u25B8"}</span>
         <span className="tree-icon">
@@ -132,6 +168,7 @@ function SortableSession({
       {...listeners}
       style={{ ...style, paddingLeft: `${String(depth * 16 + 8)}px` }}
       className={`tree-item tree-session ${isSelected ? "tree-item-selected" : ""}`}
+      data-item-id={session.id}
       onClick={() => {
         selectItem(session.id, "session");
       }}
@@ -147,10 +184,7 @@ function SortableSession({
         onContextMenu(e, session.id, "session");
       }}
       role="treeitem"
-      tabIndex={0}
-      onKeyDown={(e) => {
-        if (e.key === "Enter") onSessionDoubleClick(session.id);
-      }}
+      tabIndex={-1}
     >
       <span className="tree-icon">
         <SessionIconComponent iconKey={session.icon} />
