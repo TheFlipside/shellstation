@@ -682,7 +682,6 @@ export function SessionSidebar(): React.JSX.Element {
               <div
                 key={s.id}
                 className="tree-item tree-session"
-                style={{ paddingLeft: "8px" }}
                 onDoubleClick={() => {
                   handleSessionDoubleClick(s.id);
                 }}

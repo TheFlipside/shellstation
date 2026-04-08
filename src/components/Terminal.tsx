@@ -349,11 +349,7 @@ export function Terminal({
   return (
     <div
       ref={containerRef}
-      style={{
-        width: "100%",
-        height: "100%",
-        display: visible ? "block" : "none",
-      }}
+      className={`terminal-instance${visible ? "" : " terminal-instance-hidden"}`}
     />
   );
 }

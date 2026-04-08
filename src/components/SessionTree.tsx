@@ -96,7 +96,7 @@ function SortableFolder({
         {...attributes}
         {...listeners}
         className={`tree-item tree-folder ${isSelected ? "tree-item-selected" : ""}`}
-        style={{ paddingLeft: `${String(depth * 16 + 8)}px` }}
+        style={{ "--tree-depth": depth } as React.CSSProperties}
         data-item-id={folder.id}
         onClick={() => {
           selectItem(folder.id, "folder");
@@ -113,7 +113,7 @@ function SortableFolder({
           onContextMenu(e, folder.id, "folder");
         }}
         role="treeitem"
-        aria-expanded={isExpanded}
+        aria-expanded={isExpanded ? "true" : "false"}
         tabIndex={-1}
       >
         <span className="tree-chevron">{isExpanded ? "\u25BE" : "\u25B8"}</span>
@@ -166,7 +166,7 @@ function SortableSession({
       ref={setNodeRef}
       {...attributes}
       {...listeners}
-      style={{ ...style, paddingLeft: `${String(depth * 16 + 8)}px` }}
+      style={{ ...style, "--tree-depth": depth } as React.CSSProperties}
       className={`tree-item tree-session ${isSelected ? "tree-item-selected" : ""}`}
       data-item-id={session.id}
       onClick={() => {
@@ -210,7 +210,7 @@ export function SessionTree({
   const sessionDndIds = childSessions.map((s) => sessionDndId(s.id));
 
   return (
-    <>
+    <div role="group">
       <SortableContext items={folderDndIds} strategy={verticalListSortingStrategy}>
         {childFolders.map((folder) => (
           <SortableFolder
@@ -235,6 +235,6 @@ export function SessionTree({
           />
         ))}
       </SortableContext>
-    </>
+    </div>
   );
 }

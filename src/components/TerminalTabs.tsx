@@ -346,7 +346,11 @@ export function TerminalTabs({ uiScale }: TerminalTabsProps): React.JSX.Element 
 
   return (
     <div className="terminal-container">
-      <div className="tab-bar" ref={tabBarRef} style={{ zoom: uiScale / 100 }}>
+      <div
+        className="tab-bar"
+        ref={tabBarRef}
+        style={{ "--ui-scale": uiScale / 100 } as React.CSSProperties}
+      >
         {tabs.map((tab, index) => (
           <button
             key={tab.id}
