@@ -226,6 +226,11 @@
     "dbOpenSettings": "Open Settings",
     "security": "Security",
     "restrictPrivateIpsLabel": "Block connections to private/loopback addresses",
-    "restrictPrivateIpsHint": "When enabled, SSH connections to loopback (127.x), link-local, and private RFC 1918 addresses (10.x, 172.16-31.x, 192.168.x) are blocked. Disable this if you connect to hosts on your local network or homelab."
+    "restrictPrivateIpsHint": "When enabled, SSH connections to loopback (127.x), link-local, and private RFC 1918 addresses (10.x, 172.16-31.x, 192.168.x) are blocked. Disable this if you connect to hosts on your local network or homelab.",
+    "importExternal": "Import from External Tools",
+    "importMremoteng": "Import mRemoteNG",
+    "importSecurecrt": "Import SecureCRT",
+    "importSuccess": "Imported {{summary}}.",
+    "importTooLarge": "Import file is too large (max 100 MB)."
   }
 }

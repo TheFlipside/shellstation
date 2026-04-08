@@ -4,7 +4,9 @@ import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { useEscapeKey } from "../hooks/useEscapeKey";
+import { useSessionStore } from "../stores/sessionStore";
 import { useSettingsStore } from "../stores/settingsStore";
+import { useToastStore } from "../stores/toastStore";
 
 const AVAILABLE_LANGUAGES = [
   { code: "en", label: "English" },
@@ -210,15 +212,17 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
     const input = document.createElement("input");
     input.type = "file";
     input.accept = ".json";
+    input.style.display = "none";
+    document.body.appendChild(input);
     input.onchange = async () => {
-      const file = input.files?.[0];
-      if (!file) return;
-      const MAX_IMPORT_SIZE = 10 * 1024 * 1024; // 10 MB
-      if (file.size > MAX_IMPORT_SIZE) {
-        setDbError("Import file is too large (max 10 MB).");
-        return;
-      }
       try {
+        const file = input.files?.[0];
+        if (!file) return;
+        const MAX_IMPORT_SIZE = 100 * 1024 * 1024; // 100 MB
+        if (file.size > MAX_IMPORT_SIZE) {
+          setDbError("Import file is too large (max 100 MB).");
+          return;
+        }
         const text = await file.text();
         const data: unknown = JSON.parse(text);
         if (
@@ -234,13 +238,66 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
           return;
         }
         const result = await invoke<string>("db_import", { data });
+        await useSessionStore.getState().loadAll();
         setDbTestResult(result);
       } catch (e) {
         setDbError(String(e));
+      } finally {
+        input.remove();
       }
     };
     input.click();
   }, []);
+
+  const handleImportExternal = useCallback(
+    (command: string, accept: string) => {
+      const input = document.createElement("input");
+      input.type = "file";
+      input.accept = accept;
+      input.style.display = "none";
+      document.body.appendChild(input);
+      input.onchange = async () => {
+        try {
+          const file = input.files?.[0];
+          if (!file) return;
+          const MAX_SIZE = 100 * 1024 * 1024;
+          if (file.size > MAX_SIZE) {
+            useToastStore.getState().addToast(t("settings.importTooLarge"));
+            return;
+          }
+          const xml = await file.text();
+          const result = await invoke<{
+            folders_created: number;
+            sessions_created: number;
+            skipped: number;
+            warnings: string[];
+          }>(command, { xml });
+          const parts = [
+            `${String(result.folders_created)} folders`,
+            `${String(result.sessions_created)} sessions`,
+          ];
+          if (result.skipped > 0) {
+            parts.push(`${String(result.skipped)} skipped`);
+          }
+          await useSessionStore.getState().loadAll();
+          useToastStore
+            .getState()
+            .addToast(t("settings.importSuccess", { summary: parts.join(", ") }), "success");
+          if (result.warnings.length > 0) {
+            for (const w of result.warnings) {
+              useToastStore.getState().addToast(w, "warning");
+            }
+          }
+        } catch (e) {
+          useToastStore.getState().addToast(String(e));
+        } finally {
+          input.remove();
+        }
+      };
+      input.click();
+    },
+    [t],
+  );
 
   // Clear sensitive fields from state when the dialog unmounts.
   useEffect(() => {
@@ -795,6 +852,29 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
           </button>
           <button type="button" className="dialog-btn" onClick={handleDbImport}>
             {t("settings.dbImport")}
+          </button>
+        </div>
+
+        {/* ── Import from External Tools ──────────────────────────── */}
+        <h4 className="settings-section-title">{t("settings.importExternal")}</h4>
+        <div className="dialog-field dialog-field-row">
+          <button
+            type="button"
+            className="dialog-btn"
+            onClick={() => {
+              handleImportExternal("import_mremoteng", ".xml");
+            }}
+          >
+            {t("settings.importMremoteng")}
+          </button>
+          <button
+            type="button"
+            className="dialog-btn"
+            onClick={() => {
+              handleImportExternal("import_securecrt", ".xml");
+            }}
+          >
+            {t("settings.importSecurecrt")}
           </button>
         </div>
 

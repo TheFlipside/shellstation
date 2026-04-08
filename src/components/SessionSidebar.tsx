@@ -786,7 +786,6 @@ export function SessionSidebar(): React.JSX.Element {
 
       {credentialFolder && (
         <FolderCredentialDialog
-          folderId={credentialFolder.id}
           folderName={credentialFolder.name}
           sessions={sessions}
           onSubmit={(username, authMethod, credential, jumpHostId) => {

@@ -5,7 +5,6 @@ import { useEscapeKey } from "../hooks/useEscapeKey";
 import type { Session } from "../stores/sessionStore";
 
 interface FolderCredentialDialogProps {
-  folderId: string;
   folderName: string;
   sessions: Session[];
   onSubmit: (
@@ -18,7 +17,6 @@ interface FolderCredentialDialogProps {
 }
 
 export function FolderCredentialDialog({
-  folderId,
   folderName,
   sessions,
   onSubmit,
@@ -40,10 +38,10 @@ export function FolderCredentialDialog({
     };
   }, []);
 
-  // Filter jump host candidates: only SSH sessions not in the target folder.
-  const jumpHostCandidates = sessions.filter(
-    (s) => s.protocol === "ssh" && s.folder_id !== folderId,
-  );
+  // All SSH sessions are valid jump host candidates. When the selected jump
+  // host happens to be one of the sessions being updated, the backend silently
+  // skips setting it as its own jump host.
+  const jumpHostCandidates = sessions.filter((s) => s.protocol === "ssh");
 
   const handleSubmit = (e: React.SyntheticEvent): void => {
     e.preventDefault();

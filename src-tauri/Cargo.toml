@@ -44,6 +44,7 @@ dirs = "6"
 sha2 = "0.10"
 zeroize = { version = "1", features = ["serde"] }
 tauri-plugin-dialog = "2.6.0"
+quick-xml = "0.37"
 
 [profile.release]
 strip = true        # Strip debug symbols

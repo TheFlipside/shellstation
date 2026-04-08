@@ -5,6 +5,7 @@ mod config;
 #[allow(dead_code)]
 mod credentials;
 mod db;
+mod import;
 mod pty;
 mod ssh;
 mod telnet;
@@ -520,6 +521,9 @@ pub fn run() {
             commands::db_save_config,
             commands::db_export,
             commands::db_import,
+            // Import from external tools
+            import::import_mremoteng,
+            import::import_securecrt,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

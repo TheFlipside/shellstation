@@ -539,9 +539,14 @@ pub async fn folder_apply_credentials(
         }
 
         // Update auth_method (and optionally jump_host_id) on the session.
+        // Silently skip setting a session as its own jump host.
+        let effective_jump = match jump_host_uuid {
+            Some(Some(jid)) if jid == session.id => Some(None),
+            other => other,
+        };
         let update = UpdateSession {
             auth_method: Some(auth_method.clone()),
-            jump_host_id: jump_host_uuid,
+            jump_host_id: effective_jump,
             ..Default::default()
         };
         if let Err(e) = db.0.update_session(session.id, update).await {
