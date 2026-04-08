@@ -217,6 +217,55 @@ export function SessionSidebar(): React.JSX.Element {
         return;
       }
 
+      // F2: rename folder or edit session
+      if (key === "F2" && selectedItemId) {
+        e.preventDefault();
+        if (selectedItemType === "folder") {
+          const folder = folders.find((f) => f.id === selectedItemId);
+          setFolderDialog({
+            mode: "rename",
+            parentId: null,
+            folderId: selectedItemId,
+            initialName: folder?.name,
+          });
+        } else if (selectedItemType === "session") {
+          const session = sessions.find((s) => s.id === selectedItemId);
+          if (session) {
+            invoke<{ username: string; secret: string } | null>("credential_get", {
+              sessionId: session.id,
+            })
+              .then((cred) => {
+                const secret = cred?.secret ?? "";
+                prefillCredRef.current = {
+                  password: session.auth_method === "password" ? secret : "",
+                  keyPath: session.auth_method === "publickey" ? secret : "",
+                };
+                setSessionDialog({
+                  mode: "edit",
+                  folderId: session.folder_id,
+                  sessionId: session.id,
+                  initial: {
+                    folderId: session.folder_id,
+                    name: session.name,
+                    hostname: session.hostname,
+                    port: session.port,
+                    protocol: session.protocol,
+                    username: cred?.username ?? "",
+                    authMethod: session.auth_method,
+                    tags: tagsToDisplay(session.tags),
+                    icon: session.icon,
+                    jumpHostId: session.jump_host_id,
+                    password: session.auth_method === "password" ? secret : "",
+                    keyPath: session.auth_method === "publickey" ? secret : "",
+                  },
+                });
+              })
+              .catch(noop);
+          }
+        }
+        return;
+      }
+
       if (!["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(key)) return;
       e.preventDefault();
 
