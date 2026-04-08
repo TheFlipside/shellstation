@@ -306,6 +306,7 @@ def generate_sessions(
                 {
                     "id": cred_id,
                     "session_id": sid,
+                    "username": session["username"],
                     "auth_type": auth,
                     "keychain_ref": f"session-{sid}",
                     "secret": secret,

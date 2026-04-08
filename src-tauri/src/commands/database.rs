@@ -80,11 +80,7 @@ pub async fn db_test_connection(
             // "server unreachable / bad credentials" from "database missing".
             // Not all servers have "postgres" — some only have "template1" or
             // default to a database named after the user.
-            let fallback_dbs = [
-                "postgres",
-                "template1",
-                pg_config.username.as_str(),
-            ];
+            let fallback_dbs = ["postgres", "template1", pg_config.username.as_str()];
 
             for db_name in fallback_dbs {
                 let fallback_opts = PostgresConfig {
@@ -153,11 +149,7 @@ pub async fn db_create_database(
         ssl_mode: ssl,
     };
 
-    let fallback_dbs = [
-        "postgres",
-        "template1",
-        pg_config.username.as_str(),
-    ];
+    let fallback_dbs = ["postgres", "template1", pg_config.username.as_str()];
 
     let mut pool = None;
     for db_name in fallback_dbs {
@@ -178,9 +170,8 @@ pub async fn db_create_database(
         }
     }
 
-    let pool = pool.ok_or_else(|| {
-        "Connection failed: unable to connect to PostgreSQL server".to_string()
-    })?;
+    let pool = pool
+        .ok_or_else(|| "Connection failed: unable to connect to PostgreSQL server".to_string())?;
 
     // Use PG's quote_ident equivalent: double-quote the identifier and
     // escape any embedded double-quotes.

@@ -78,11 +78,30 @@ impl DatabaseProvider for PostgresProvider {
         let id_str = id.to_string();
         let parent_str = folder.parent_id.map(|u| u.to_string());
 
-        let sort_order: i32 = sqlx::query_scalar(
-            "SELECT COALESCE(MAX(sort_order), -1) + 1 FROM folders WHERE parent_id IS NOT DISTINCT FROM $1",
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| format!("Failed to begin transaction: {e}"))?;
+
+        // Lock sibling rows to prevent concurrent sort_order races.
+        // FOR UPDATE cannot be combined with aggregates, so we lock first
+        // and then compute the max in a separate query.
+        sqlx::query(
+            "SELECT id FROM folders \
+             WHERE parent_id IS NOT DISTINCT FROM $1 FOR UPDATE",
         )
         .bind(&parent_str)
-        .fetch_one(&self.pool)
+        .fetch_all(&mut *tx)
+        .await
+        .map_err(|e| format!("Failed to lock sibling folders: {e}"))?;
+
+        let sort_order: i32 = sqlx::query_scalar(
+            "SELECT COALESCE(MAX(sort_order), -1) + 1 FROM folders \
+             WHERE parent_id IS NOT DISTINCT FROM $1",
+        )
+        .bind(&parent_str)
+        .fetch_one(&mut *tx)
         .await
         .map_err(|e| format!("Failed to compute sort_order: {e}"))?;
 
@@ -93,9 +112,13 @@ impl DatabaseProvider for PostgresProvider {
         .bind(&folder.name)
         .bind(&parent_str)
         .bind(sort_order)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await
         .map_err(|e| format!("Failed to create folder: {e}"))?;
+
+        tx.commit()
+            .await
+            .map_err(|e| format!("Failed to commit: {e}"))?;
 
         Ok(Folder {
             id,
@@ -133,11 +156,28 @@ impl DatabaseProvider for PostgresProvider {
     async fn move_folder(&self, id: Uuid, new_parent_id: Option<Uuid>) -> DbResult<()> {
         let parent_str = new_parent_id.map(|u| u.to_string());
 
-        let sort_order: i32 = sqlx::query_scalar(
-            "SELECT COALESCE(MAX(sort_order), -1) + 1 FROM folders WHERE parent_id IS NOT DISTINCT FROM $1",
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| format!("Failed to begin transaction: {e}"))?;
+
+        // Lock siblings in the target parent to prevent sort_order races.
+        sqlx::query(
+            "SELECT id FROM folders \
+             WHERE parent_id IS NOT DISTINCT FROM $1 FOR UPDATE",
         )
         .bind(&parent_str)
-        .fetch_one(&self.pool)
+        .fetch_all(&mut *tx)
+        .await
+        .map_err(|e| format!("Failed to lock sibling folders: {e}"))?;
+
+        let sort_order: i32 = sqlx::query_scalar(
+            "SELECT COALESCE(MAX(sort_order), -1) + 1 FROM folders \
+             WHERE parent_id IS NOT DISTINCT FROM $1",
+        )
+        .bind(&parent_str)
+        .fetch_one(&mut *tx)
         .await
         .map_err(|e| format!("Failed to compute sort_order: {e}"))?;
 
@@ -146,13 +186,17 @@ impl DatabaseProvider for PostgresProvider {
                 .bind(&parent_str)
                 .bind(sort_order)
                 .bind(id.to_string())
-                .execute(&self.pool)
+                .execute(&mut *tx)
                 .await
                 .map_err(|e| format!("Failed to move folder: {e}"))?;
 
         if result.rows_affected() == 0 {
             return Err(format!("Folder {id} not found"));
         }
+
+        tx.commit()
+            .await
+            .map_err(|e| format!("Failed to commit: {e}"))?;
         Ok(())
     }
 
@@ -177,11 +221,24 @@ impl DatabaseProvider for PostgresProvider {
         let folder_str = session.folder_id.to_string();
         let jump_str = session.jump_host_id.map(|u| u.to_string());
 
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| format!("Failed to begin transaction: {e}"))?;
+
+        // Lock sibling sessions to prevent concurrent sort_order races.
+        sqlx::query("SELECT id FROM sessions WHERE folder_id = $1 FOR UPDATE")
+            .bind(&folder_str)
+            .fetch_all(&mut *tx)
+            .await
+            .map_err(|e| format!("Failed to lock sibling sessions: {e}"))?;
+
         let sort_order: i32 = sqlx::query_scalar(
             "SELECT COALESCE(MAX(sort_order), -1) + 1 FROM sessions WHERE folder_id = $1",
         )
         .bind(&folder_str)
-        .fetch_one(&self.pool)
+        .fetch_one(&mut *tx)
         .await
         .map_err(|e| format!("Failed to compute sort_order: {e}"))?;
 
@@ -201,9 +258,13 @@ impl DatabaseProvider for PostgresProvider {
         .bind(&session.tags)
         .bind(&session.icon)
         .bind(sort_order)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await
         .map_err(|e| format!("Failed to create session: {e}"))?;
+
+        tx.commit()
+            .await
+            .map_err(|e| format!("Failed to commit: {e}"))?;
 
         Ok(Session {
             id,
@@ -335,11 +396,24 @@ impl DatabaseProvider for PostgresProvider {
     async fn move_session(&self, id: Uuid, new_folder_id: Uuid) -> DbResult<()> {
         let folder_str = new_folder_id.to_string();
 
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| format!("Failed to begin transaction: {e}"))?;
+
+        // Lock sibling sessions in the target folder to prevent sort_order races.
+        sqlx::query("SELECT id FROM sessions WHERE folder_id = $1 FOR UPDATE")
+            .bind(&folder_str)
+            .fetch_all(&mut *tx)
+            .await
+            .map_err(|e| format!("Failed to lock sibling sessions: {e}"))?;
+
         let sort_order: i32 = sqlx::query_scalar(
             "SELECT COALESCE(MAX(sort_order), -1) + 1 FROM sessions WHERE folder_id = $1",
         )
         .bind(&folder_str)
-        .fetch_one(&self.pool)
+        .fetch_one(&mut *tx)
         .await
         .map_err(|e| format!("Failed to compute sort_order: {e}"))?;
 
@@ -348,13 +422,17 @@ impl DatabaseProvider for PostgresProvider {
                 .bind(&folder_str)
                 .bind(sort_order)
                 .bind(id.to_string())
-                .execute(&self.pool)
+                .execute(&mut *tx)
                 .await
                 .map_err(|e| format!("Failed to move session: {e}"))?;
 
         if result.rows_affected() == 0 {
             return Err(format!("Session {id} not found"));
         }
+
+        tx.commit()
+            .await
+            .map_err(|e| format!("Failed to commit: {e}"))?;
         Ok(())
     }
 
@@ -399,6 +477,23 @@ impl DatabaseProvider for PostgresProvider {
         ordered_ids: Vec<Uuid>,
     ) -> DbResult<()> {
         let parent_str = parent_id.map(|u| u.to_string());
+
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| format!("Failed to begin transaction: {e}"))?;
+
+        // Lock all affected rows before updating to prevent interleaved reorders.
+        sqlx::query(
+            "SELECT id FROM folders \
+             WHERE parent_id IS NOT DISTINCT FROM $1 FOR UPDATE",
+        )
+        .bind(&parent_str)
+        .fetch_all(&mut *tx)
+        .await
+        .map_err(|e| format!("Failed to lock folders for reorder: {e}"))?;
+
         for (i, id) in ordered_ids.iter().enumerate() {
             sqlx::query(
                 "UPDATE folders SET sort_order = $1 WHERE id = $2 AND parent_id IS NOT DISTINCT FROM $3",
@@ -406,34 +501,66 @@ impl DatabaseProvider for PostgresProvider {
             .bind(i as i32)
             .bind(id.to_string())
             .bind(&parent_str)
-            .execute(&self.pool)
+            .execute(&mut *tx)
             .await
             .map_err(|e| format!("Failed to reorder folders: {e}"))?;
         }
+
+        tx.commit()
+            .await
+            .map_err(|e| format!("Failed to commit: {e}"))?;
         Ok(())
     }
 
     async fn reorder_sessions(&self, folder_id: Uuid, ordered_ids: Vec<Uuid>) -> DbResult<()> {
         let folder_str = folder_id.to_string();
+
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| format!("Failed to begin transaction: {e}"))?;
+
+        // Lock all affected rows before updating to prevent interleaved reorders.
+        sqlx::query("SELECT id FROM sessions WHERE folder_id = $1 FOR UPDATE")
+            .bind(&folder_str)
+            .fetch_all(&mut *tx)
+            .await
+            .map_err(|e| format!("Failed to lock sessions for reorder: {e}"))?;
+
         for (i, id) in ordered_ids.iter().enumerate() {
             sqlx::query("UPDATE sessions SET sort_order = $1 WHERE id = $2 AND folder_id = $3")
                 .bind(i as i32)
                 .bind(id.to_string())
                 .bind(&folder_str)
-                .execute(&self.pool)
+                .execute(&mut *tx)
                 .await
                 .map_err(|e| format!("Failed to reorder sessions: {e}"))?;
         }
+
+        tx.commit()
+            .await
+            .map_err(|e| format!("Failed to commit: {e}"))?;
         Ok(())
     }
 
     async fn sort_folders_alphabetically(&self, parent_id: Option<Uuid>) -> DbResult<()> {
         let parent_str = parent_id.map(|u| u.to_string());
+
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| format!("Failed to begin transaction: {e}"))?;
+
+        // Lock and read in one step — FOR UPDATE prevents concurrent modifications.
         let rows = sqlx::query(
-            "SELECT id FROM folders WHERE parent_id IS NOT DISTINCT FROM $1 ORDER BY name ASC",
+            "SELECT id FROM folders \
+             WHERE parent_id IS NOT DISTINCT FROM $1 \
+             ORDER BY name ASC FOR UPDATE",
         )
         .bind(&parent_str)
-        .fetch_all(&self.pool)
+        .fetch_all(&mut *tx)
         .await
         .map_err(|e| format!("Failed to sort folders: {e}"))?;
 
@@ -442,30 +569,49 @@ impl DatabaseProvider for PostgresProvider {
             sqlx::query("UPDATE folders SET sort_order = $1 WHERE id = $2")
                 .bind(i as i32)
                 .bind(&id)
-                .execute(&self.pool)
+                .execute(&mut *tx)
                 .await
                 .map_err(|e| format!("Failed to sort folders: {e}"))?;
         }
+
+        tx.commit()
+            .await
+            .map_err(|e| format!("Failed to commit: {e}"))?;
         Ok(())
     }
 
     async fn sort_sessions_alphabetically(&self, folder_id: Uuid) -> DbResult<()> {
         let folder_str = folder_id.to_string();
-        let rows = sqlx::query("SELECT id FROM sessions WHERE folder_id = $1 ORDER BY name ASC")
-            .bind(&folder_str)
-            .fetch_all(&self.pool)
+
+        let mut tx = self
+            .pool
+            .begin()
             .await
-            .map_err(|e| format!("Failed to sort sessions: {e}"))?;
+            .map_err(|e| format!("Failed to begin transaction: {e}"))?;
+
+        // Lock and read in one step — FOR UPDATE prevents concurrent modifications.
+        let rows = sqlx::query(
+            "SELECT id FROM sessions WHERE folder_id = $1 \
+             ORDER BY name ASC FOR UPDATE",
+        )
+        .bind(&folder_str)
+        .fetch_all(&mut *tx)
+        .await
+        .map_err(|e| format!("Failed to sort sessions: {e}"))?;
 
         for (i, row) in rows.iter().enumerate() {
             let id: String = row.get("id");
             sqlx::query("UPDATE sessions SET sort_order = $1 WHERE id = $2")
                 .bind(i as i32)
                 .bind(&id)
-                .execute(&self.pool)
+                .execute(&mut *tx)
                 .await
                 .map_err(|e| format!("Failed to sort sessions: {e}"))?;
         }
+
+        tx.commit()
+            .await
+            .map_err(|e| format!("Failed to commit: {e}"))?;
         Ok(())
     }
 
