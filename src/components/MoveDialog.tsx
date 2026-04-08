@@ -1,5 +1,6 @@
-import React, { useRef } from "react";
+import React, { useCallback, useRef } from "react";
 import { useTranslation } from "react-i18next";
+import { useEnterKey } from "../hooks/useEnterKey";
 import { useEscapeKey } from "../hooks/useEscapeKey";
 import type { Folder } from "../stores/sessionStore";
 
@@ -21,6 +22,11 @@ export function MoveDialog({
   const { t } = useTranslation();
   useEscapeKey(onCancel);
   const selectRef = useRef<HTMLSelectElement>(null);
+  const handleSubmit = useCallback(() => {
+    const val = selectRef.current?.value;
+    if (val) onSubmit(val);
+  }, [onSubmit]);
+  useEnterKey(handleSubmit);
 
   return (
     <div className="dialog-overlay" onClick={onCancel} role="presentation">
@@ -53,14 +59,7 @@ export function MoveDialog({
           <button type="button" className="dialog-btn dialog-btn-cancel" onClick={onCancel}>
             {t("dialog.cancel")}
           </button>
-          <button
-            type="button"
-            className="dialog-btn dialog-btn-primary"
-            onClick={() => {
-              const val = selectRef.current?.value;
-              if (val) onSubmit(val);
-            }}
-          >
+          <button type="button" className="dialog-btn dialog-btn-primary" onClick={handleSubmit}>
             {t("dialog.move")}
           </button>
         </div>

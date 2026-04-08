@@ -262,8 +262,6 @@ The repository follows standard Tauri 2.x conventions with a clear separation of
 3. Implement mRemoteNG and SecureCRT XML importers.
 4. Add CSV import/export for generic session data.
 5. Session logging with configurable format and rotation.
-6. Theming system: built-in dark/light themes, custom JSON theme loading.
-7. Keyboard shortcut system with customizable bindings.
 
 ### 7.6 Phase 6 — Packaging & Release (Weeks 21–24)
 

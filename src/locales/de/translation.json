@@ -117,6 +117,36 @@
     "hostLabel": "Host",
     "connect": "Verbinden"
   },
+  "commandBar": {
+    "dialogTitle": "Befehlsschaltfl\u00e4che",
+    "nameLabel": "Name der Schaltfl\u00e4che",
+    "namePlaceholder": "z.\u00a0B. Konfig anzeigen",
+    "commandLabel": "Befehl",
+    "commandPlaceholder": "z.\u00a0B. show running-config\\r",
+    "escapeHintTitle": "Escape-Sequenzen:",
+    "escapeHintItems": [
+      "\\r \u2014 Wagenr\u00fccklauf (CR)",
+      "\\n \u2014 Zeilenumbruch (LF)",
+      "\\t \u2014 Tabulator",
+      "\\b \u2014 R\u00fccktaste",
+      "\\e \u2014 Escape (ESC)",
+      "\\\\ \u2014 Backslash",
+      "\\p \u2014 1\u00a0Sekunde Pause",
+      "\\v \u2014 Aus Zwischenablage einf\u00fcgen"
+    ],
+    "colorLabel": "Farbe",
+    "clear": "Leeren",
+    "ok": "OK",
+    "addButton": "Befehlsschaltfl\u00e4che hinzuf\u00fcgen",
+    "edit": "Bearbeiten",
+    "copy": "Kopieren",
+    "moveLeft": "Nach links",
+    "moveRight": "Nach rechts",
+    "delete": "L\u00f6schen",
+    "deleteConfirm": "Diese Befehlsschaltfl\u00e4che l\u00f6schen?",
+    "show": "Befehlsleiste einblenden",
+    "hide": "Befehlsleiste ausblenden"
+  },
   "settings": {
     "title": "Einstellungen",
     "general": "Allgemein",

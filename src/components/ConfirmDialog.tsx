@@ -1,5 +1,6 @@
 import React from "react";
 import { useTranslation } from "react-i18next";
+import { useEnterKey } from "../hooks/useEnterKey";
 import { useEscapeKey } from "../hooks/useEscapeKey";
 
 interface ConfirmDialogProps {
@@ -17,6 +18,7 @@ export function ConfirmDialog({
 }: ConfirmDialogProps): React.JSX.Element {
   const { t } = useTranslation();
   useEscapeKey(onCancel);
+  useEnterKey(onConfirm);
 
   return (
     <div className="dialog-overlay" onClick={onCancel} role="presentation">

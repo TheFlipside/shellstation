@@ -1,5 +1,6 @@
 import React, { useCallback } from "react";
 import { Trans, useTranslation } from "react-i18next";
+import { useEnterKey } from "../hooks/useEnterKey";
 import { useEscapeKey } from "../hooks/useEscapeKey";
 
 export interface HostVerifyRequest {
@@ -21,6 +22,10 @@ export function HostVerifyDialog({ request, onRespond }: HostVerifyDialogProps):
     onRespond(request.sessionId, false);
   }, [onRespond, request.sessionId]);
   useEscapeKey(handleReject);
+  const handleAccept = useCallback(() => {
+    onRespond(request.sessionId, true);
+  }, [onRespond, request.sessionId]);
+  useEnterKey(handleAccept);
 
   return (
     <div className="dialog-overlay" role="presentation">
@@ -39,22 +44,10 @@ export function HostVerifyDialog({ request, onRespond }: HostVerifyDialogProps):
         <code className="dialog-fingerprint">{request.fingerprint}</code>
         <p className="dialog-text">{t("hostVerify.confirmConnect")}</p>
         <div className="dialog-actions">
-          <button
-            type="button"
-            className="dialog-btn dialog-btn-cancel"
-            onClick={() => {
-              onRespond(request.sessionId, false);
-            }}
-          >
+          <button type="button" className="dialog-btn dialog-btn-cancel" onClick={handleReject}>
             {t("hostVerify.reject")}
           </button>
-          <button
-            type="button"
-            className="dialog-btn dialog-btn-primary"
-            onClick={() => {
-              onRespond(request.sessionId, true);
-            }}
-          >
+          <button type="button" className="dialog-btn dialog-btn-primary" onClick={handleAccept}>
             {t("hostVerify.accept")}
           </button>
         </div>

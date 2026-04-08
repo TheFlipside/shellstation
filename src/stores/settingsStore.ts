@@ -4,6 +4,13 @@ import i18n from "../i18n";
 
 export type ThemeMode = "dark" | "light" | "system";
 
+export interface CommandButton {
+  id: string;
+  name: string;
+  command: string;
+  color: string;
+}
+
 interface SettingsState {
   language: string;
   uiScale: number;
@@ -21,6 +28,12 @@ interface SettingsState {
   connectTimeout: number;
   toastAutoDismiss: boolean;
   toastDismissSeconds: number;
+  commandButtons: CommandButton[];
+  addCommandButton: (button: CommandButton) => void;
+  updateCommandButton: (id: string, button: Partial<Omit<CommandButton, "id">>) => void;
+  removeCommandButton: (id: string) => void;
+  duplicateCommandButton: (id: string) => void;
+  reorderCommandButtons: (fromIndex: number, toIndex: number) => void;
   setLanguage: (lang: string) => void;
   setUiScale: (scale: number) => void;
   setThemeMode: (mode: ThemeMode) => void;
@@ -58,6 +71,41 @@ export const useSettingsStore = create<SettingsState>()(
       connectTimeout: 10,
       toastAutoDismiss: true,
       toastDismissSeconds: 5,
+      commandButtons: [],
+      addCommandButton: (button: CommandButton) => {
+        set((state) => ({ commandButtons: [...state.commandButtons, button] }));
+      },
+      updateCommandButton: (id: string, updates: Partial<Omit<CommandButton, "id">>) => {
+        set((state) => ({
+          commandButtons: state.commandButtons.map((b) => (b.id === id ? { ...b, ...updates } : b)),
+        }));
+      },
+      removeCommandButton: (id: string) => {
+        set((state) => ({
+          commandButtons: state.commandButtons.filter((b) => b.id !== id),
+        }));
+      },
+      duplicateCommandButton: (id: string) => {
+        set((state) => {
+          const source = state.commandButtons.find((b) => b.id === id);
+          if (!source) return state;
+          const copy: CommandButton = {
+            ...source,
+            id: crypto.randomUUID(),
+            name: source.name + " (copy)",
+          };
+          return { commandButtons: [...state.commandButtons, copy] };
+        });
+      },
+      reorderCommandButtons: (fromIndex: number, toIndex: number) => {
+        set((state) => {
+          if (fromIndex === toIndex) return state;
+          const next = [...state.commandButtons];
+          const [moved] = next.splice(fromIndex, 1);
+          next.splice(toIndex, 0, moved);
+          return { commandButtons: next };
+        });
+      },
       setLanguage: (lang: string) => {
         void i18n.changeLanguage(lang);
         set({ language: lang });
@@ -114,6 +162,19 @@ export const useSettingsStore = create<SettingsState>()(
         return (state?: SettingsState) => {
           if (state?.language) {
             void i18n.changeLanguage(state.language);
+          }
+          // Sanitize persisted commandButtons: drop entries with invalid color
+          // values to guard against corrupted localStorage data.
+          if (state && Array.isArray(state.commandButtons)) {
+            const hexColor = /^#[\da-f]{6}$/i;
+            state.commandButtons = state.commandButtons.filter(
+              (b) =>
+                typeof b.id === "string" &&
+                typeof b.name === "string" &&
+                typeof b.command === "string" &&
+                typeof b.color === "string" &&
+                hexColor.test(b.color),
+            );
           }
         };
       },

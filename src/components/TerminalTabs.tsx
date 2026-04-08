@@ -11,6 +11,7 @@ import { ConfirmDialog } from "./ConfirmDialog";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { useSettingsStore } from "../stores/settingsStore";
 import { useToastStore } from "../stores/toastStore";
+import { CommandBar } from "./CommandBar";
 
 // eslint-disable-next-line @typescript-eslint/no-empty-function
 const noop = (): void => {};
@@ -434,6 +435,7 @@ export function TerminalTabs({ uiScale }: TerminalTabsProps): React.JSX.Element 
           );
         })}
       </div>
+      <CommandBar uiScale={uiScale} />
       {showQuickConnect && (
         <QuickConnect
           onConnect={(params) => {

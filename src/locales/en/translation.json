@@ -117,6 +117,36 @@
     "hostLabel": "Host",
     "connect": "Connect"
   },
+  "commandBar": {
+    "dialogTitle": "Command Button",
+    "nameLabel": "Button Name",
+    "namePlaceholder": "e.g. Show Config",
+    "commandLabel": "Command",
+    "commandPlaceholder": "e.g. show running-config\\r",
+    "escapeHintTitle": "Escape sequences:",
+    "escapeHintItems": [
+      "\\r \u2014 Carriage return (CR)",
+      "\\n \u2014 Newline (LF)",
+      "\\t \u2014 Tab",
+      "\\b \u2014 Backspace",
+      "\\e \u2014 Escape (ESC)",
+      "\\\\ \u2014 Literal backslash",
+      "\\p \u2014 Pause for 1 second",
+      "\\v \u2014 Paste from clipboard"
+    ],
+    "colorLabel": "Color",
+    "clear": "Clear",
+    "ok": "OK",
+    "addButton": "Add command button",
+    "edit": "Edit Button",
+    "copy": "Copy Button",
+    "moveLeft": "Move Left",
+    "moveRight": "Move Right",
+    "delete": "Delete Button",
+    "deleteConfirm": "Delete this command button?",
+    "show": "Show command bar",
+    "hide": "Hide command bar"
+  },
   "settings": {
     "title": "Settings",
     "general": "General",
