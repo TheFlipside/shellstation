@@ -389,11 +389,10 @@ fn validate_key_path(path: &str) -> Result<String, String> {
 }
 
 /// Return the path to the user's known_hosts file.
-fn known_hosts_path() -> PathBuf {
-    dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".ssh")
-        .join("known_hosts")
+fn known_hosts_path() -> Result<PathBuf, String> {
+    let home = dirs::home_dir()
+        .ok_or_else(|| "Could not determine home directory for known_hosts".to_string())?;
+    Ok(home.join(".ssh").join("known_hosts"))
 }
 
 /// Ensure the `~/.ssh` directory (mode 700) and `known_hosts` file (mode 600)
@@ -797,25 +796,29 @@ impl client::Handler for SshHandler {
         &mut self,
         server_public_key: &key::PublicKey,
     ) -> Result<bool, Self::Error> {
-        let kh_path = known_hosts_path();
+        let kh_path = match known_hosts_path() {
+            Ok(p) => Some(p),
+            Err(e) => {
+                warn!(session_id = %self.session_id, error = %e, "Cannot resolve known_hosts path");
+                None
+            }
+        };
 
         // Check if we already know this host.
-        match russh::keys::check_known_hosts_path(
-            &self.host,
-            self.port,
-            server_public_key,
-            &kh_path,
-        ) {
-            Ok(true) => return Ok(true),
-            Ok(false) => {
-                warn!(
-                    session_id = %self.session_id,
-                    host = %self.host,
-                    "Server key CHANGED — possible MITM"
-                );
-            }
-            Err(_) => {
-                // Key not in known_hosts or file doesn't exist yet.
+        if let Some(ref kh) = kh_path {
+            match russh::keys::check_known_hosts_path(&self.host, self.port, server_public_key, kh)
+            {
+                Ok(true) => return Ok(true),
+                Ok(false) => {
+                    warn!(
+                        session_id = %self.session_id,
+                        host = %self.host,
+                        "Server key CHANGED — possible MITM"
+                    );
+                }
+                Err(_) => {
+                    // Key not in known_hosts or file doesn't exist yet.
+                }
             }
         }
 
@@ -860,22 +863,26 @@ impl client::Handler for SshHandler {
         };
 
         if accepted {
-            // Ensure ~/.ssh dir and known_hosts file exist with correct
-            // permissions (0o700 / 0o600) before russh writes to them.
-            ensure_known_hosts_file(&kh_path);
+            if let Some(ref kh) = kh_path {
+                // Ensure ~/.ssh dir and known_hosts file exist with correct
+                // permissions (0o700 / 0o600) before russh writes to them.
+                ensure_known_hosts_file(kh);
 
-            if let Err(e) = russh::keys::learn_known_hosts_path(
-                &self.host,
-                self.port,
-                server_public_key,
-                &kh_path,
-            ) {
-                warn!(session_id = %self.session_id, error = %e, "Failed to save known host");
+                if let Err(e) = russh::keys::learn_known_hosts_path(
+                    &self.host,
+                    self.port,
+                    server_public_key,
+                    kh,
+                ) {
+                    warn!(session_id = %self.session_id, error = %e, "Failed to save known host");
+                }
+
+                // russh inserts blank lines between entries; strip them to match
+                // the format OpenSSH produces.
+                strip_blank_lines(kh);
+            } else {
+                warn!(session_id = %self.session_id, "Skipping known_hosts save — home directory unknown");
             }
-
-            // russh inserts blank lines between entries; strip them to match
-            // the format OpenSSH produces.
-            strip_blank_lines(&kh_path);
         }
 
         Ok(accepted)
