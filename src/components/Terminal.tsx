@@ -321,8 +321,12 @@ export function Terminal({
 
     setupListeners().catch(noop);
 
-    // Handle window resize.
-    const resizeObserver = new ResizeObserver(() => {
+    // Handle window resize.  Skip when the container is hidden
+    // (display: none → 0×0) to prevent xterm.js from reflowing
+    // content to a tiny column count and mangling the display.
+    const resizeObserver = new ResizeObserver((entries) => {
+      const { width, height } = entries[0].contentRect;
+      if (width === 0 || height === 0) return;
       fitAddon.fit();
       invoke(resizeCmd, {
         id: sessionId,
