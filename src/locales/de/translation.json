@@ -104,6 +104,8 @@
     "tabContextCloseRight": "Tabs rechts schlie\u00dfen",
     "tabContextCloseAll": "Alle Tabs schlie\u00dfen",
     "tabContextClone": "Tab duplizieren",
+    "scrollLeft": "Tabs nach links scrollen",
+    "scrollRight": "Tabs nach rechts scrollen",
     "processExited": "[Prozess beendet]",
     "connectionFailed": "Verbindung fehlgeschlagen: {{message}}",
     "sshConnectionFailed": "SSH-Verbindung fehlgeschlagen: {{message}}"

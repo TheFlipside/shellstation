@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
@@ -29,7 +29,43 @@ export function TerminalTabs({ uiScale }: TerminalTabsProps): React.JSX.Element 
   const dragStartXRef = useRef(0);
   const isDraggingRef = useRef(false);
   const tabBarRef = useRef<HTMLDivElement>(null);
+  const tabScrollRef = useRef<HTMLDivElement>(null);
   const [dropTargetIndex, setDropTargetIndex] = useState<number | null>(null);
+  const [isOverflowing, setIsOverflowing] = useState(false);
+
+  // Detect whether the tab scroll area overflows (needs arrows).
+  const checkOverflow = useCallback(() => {
+    const el = tabScrollRef.current;
+    if (!el) return;
+    setIsOverflowing(el.scrollWidth > el.clientWidth);
+  }, []);
+
+  useLayoutEffect(() => {
+    checkOverflow();
+  }, [tabs.length, checkOverflow]);
+
+  useEffect(() => {
+    const el = tabScrollRef.current;
+    if (!el) return;
+    const observer = new ResizeObserver(() => {
+      checkOverflow();
+    });
+    observer.observe(el);
+    return () => {
+      observer.disconnect();
+    };
+  }, [checkOverflow]);
+
+  const SCROLL_AMOUNT = 150;
+
+  const scrollTabs = useCallback((direction: "left" | "right") => {
+    const el = tabScrollRef.current;
+    if (!el) return;
+    el.scrollBy({
+      left: direction === "left" ? -SCROLL_AMOUNT : SCROLL_AMOUNT,
+      behavior: "smooth",
+    });
+  }, []);
 
   // Stable insertion-order list of tab IDs for rendering Terminal components.
   // Reordering tabs in the store must NOT reorder DOM nodes, because xterm.js
@@ -348,72 +384,96 @@ export function TerminalTabs({ uiScale }: TerminalTabsProps): React.JSX.Element 
   return (
     <div className="terminal-container">
       <div
-        className="tab-bar"
+        className={`tab-bar${isOverflowing ? " tab-bar-overflowing" : ""}`}
         ref={tabBarRef}
         style={{ "--ui-scale": uiScale / 100 } as React.CSSProperties}
       >
-        {tabs.map((tab, index) => (
-          <button
-            key={tab.id}
-            className={`tab ${tab.id === activeTabId ? "tab-active" : ""}${dropTargetIndex === index && dragIndexRef.current !== null && dragIndexRef.current !== index ? " tab-drop-target" : ""}`}
-            onClick={() => {
-              setActiveTab(tab.id);
-            }}
-            type="button"
-            title={tab.title}
-            onPointerDown={(e) => {
-              handlePointerDown(e, index);
-            }}
-            onPointerMove={handlePointerMove}
-            onPointerUp={handlePointerUp}
-            onContextMenu={(e) => {
-              e.preventDefault();
-              setTabCtx({ x: e.clientX, y: e.clientY, tabId: tab.id });
-            }}
-          >
-            <span className="tab-title">
-              {tab.type === "ssh" ? "\u{1F310} " : tab.type === "telnet" ? "\u{1F4E1} " : ""}
-              {tab.title}
-            </span>
-            <span
-              className="tab-close"
-              onClick={(e) => {
-                e.stopPropagation();
-                requestCloseTab(tab.id);
+        <button
+          type="button"
+          className="tab-bar-scroll-btn"
+          onClick={() => {
+            scrollTabs("left");
+          }}
+          title={t("terminal.scrollLeft")}
+        >
+          &#9664;
+        </button>
+        <button
+          type="button"
+          className="tab-bar-scroll-btn"
+          onClick={() => {
+            scrollTabs("right");
+          }}
+          title={t("terminal.scrollRight")}
+        >
+          &#9654;
+        </button>
+        <div className="tab-bar-tabs" ref={tabScrollRef}>
+          {tabs.map((tab, index) => (
+            <button
+              key={tab.id}
+              className={`tab ${tab.id === activeTabId ? "tab-active" : ""}${dropTargetIndex === index && dragIndexRef.current !== null && dragIndexRef.current !== index ? " tab-drop-target" : ""}`}
+              onClick={() => {
+                setActiveTab(tab.id);
               }}
-              role="button"
-              tabIndex={0}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") {
-                  e.stopPropagation();
-                  requestCloseTab(tab.id);
-                }
+              type="button"
+              title={tab.title}
+              onPointerDown={(e) => {
+                handlePointerDown(e, index);
+              }}
+              onPointerMove={handlePointerMove}
+              onPointerUp={handlePointerUp}
+              onContextMenu={(e) => {
+                e.preventDefault();
+                setTabCtx({ x: e.clientX, y: e.clientY, tabId: tab.id });
               }}
             >
-              &times;
-            </span>
+              <span className="tab-title">
+                {tab.type === "ssh" ? "\u{1F310} " : tab.type === "telnet" ? "\u{1F4E1} " : ""}
+                {tab.title}
+              </span>
+              <span
+                className="tab-close"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  requestCloseTab(tab.id);
+                }}
+                role="button"
+                tabIndex={0}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.stopPropagation();
+                    requestCloseTab(tab.id);
+                  }
+                }}
+              >
+                &times;
+              </span>
+            </button>
+          ))}
+        </div>
+        <div className="tab-bar-actions">
+          <button
+            className="tab tab-new"
+            onClick={() => {
+              createLocalTab().catch(noop);
+            }}
+            type="button"
+            title={t("terminal.newLocalTerminal")}
+          >
+            +
           </button>
-        ))}
-        <button
-          className="tab tab-new"
-          onClick={() => {
-            createLocalTab().catch(noop);
-          }}
-          type="button"
-          title={t("terminal.newLocalTerminal")}
-        >
-          +
-        </button>
-        <button
-          className="tab tab-new tab-ssh"
-          onClick={() => {
-            setShowQuickConnect(true);
-          }}
-          type="button"
-          title={t("terminal.quickConnect")}
-        >
-          {t("terminal.connect")}
-        </button>
+          <button
+            className="tab tab-new tab-ssh"
+            onClick={() => {
+              setShowQuickConnect(true);
+            }}
+            type="button"
+            title={t("terminal.quickConnect")}
+          >
+            {t("terminal.connect")}
+          </button>
+        </div>
       </div>
       <div className="terminal-pane">
         {stableTabIdsRef.current.map((id) => {

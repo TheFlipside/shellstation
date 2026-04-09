@@ -104,6 +104,8 @@
     "tabContextCloseRight": "Close Tabs to the Right",
     "tabContextCloseAll": "Close All Tabs",
     "tabContextClone": "Clone Tab",
+    "scrollLeft": "Scroll tabs left",
+    "scrollRight": "Scroll tabs right",
     "processExited": "[Process exited]",
     "connectionFailed": "Connection failed: {{message}}",
     "sshConnectionFailed": "SSH connection failed: {{message}}"

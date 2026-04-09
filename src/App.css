@@ -90,12 +90,60 @@ body,
   align-items: center;
   background-color: var(--color-mantle);
   border-bottom: 1px solid var(--color-surface0);
-  padding: 0 4px;
   height: 36px;
   zoom: var(--ui-scale, 1);
   flex-shrink: 0;
   -webkit-app-region: drag;
+  overflow: hidden;
+}
+
+.tab-bar-scroll-btn {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 28px;
+  background: transparent;
+  border: none;
+  color: var(--color-overlay0);
+  font-size: 14px;
+  cursor: pointer;
+  flex-shrink: 0;
+  -webkit-app-region: no-drag;
+  padding: 0;
+  z-index: 1;
+}
+
+.tab-bar-scroll-btn:hover {
+  color: var(--color-text);
+  background-color: var(--color-surface0);
+}
+
+.tab-bar.tab-bar-overflowing .tab-bar-scroll-btn {
+  display: flex;
+}
+
+.tab-bar-tabs {
+  display: flex;
+  align-items: center;
+  flex: 1;
+  min-width: 0;
   overflow-x: auto;
+  scrollbar-width: none;
+  padding: 0 2px;
+}
+
+.tab-bar-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.tab-bar-actions {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  padding: 0 4px;
+  gap: 2px;
+  background-color: var(--color-mantle);
 }
 
 .tab {
