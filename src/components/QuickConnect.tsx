@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useEscapeKey } from "../hooks/useEscapeKey";
+import { CustomSelect } from "./CustomSelect";
 
 export interface QuickConnectParams {
   protocol: "ssh" | "telnet";
@@ -66,11 +67,11 @@ export function QuickConnect({ onConnect, onCancel }: QuickConnectProps): React.
         <form onSubmit={handleSubmit}>
           <div className="dialog-field">
             <label htmlFor="qc-protocol">{t("session.protocolLabel")}</label>
-            <select
+            <CustomSelect
               id="qc-protocol"
               value={protocol}
-              onChange={(e) => {
-                const p = e.target.value as "ssh" | "telnet";
+              onChange={(v) => {
+                const p = v as "ssh" | "telnet";
                 setProtocol(p);
                 setPort((prev) =>
                   (prev === "22" && p === "telnet") || (prev === "23" && p === "ssh")
@@ -80,10 +81,11 @@ export function QuickConnect({ onConnect, onCancel }: QuickConnectProps): React.
                     : prev,
                 );
               }}
-            >
-              <option value="ssh">SSH</option>
-              <option value="telnet">Telnet</option>
-            </select>
+              options={[
+                { value: "ssh", label: "SSH" },
+                { value: "telnet", label: "Telnet" },
+              ]}
+            />
           </div>
           <div className="dialog-field">
             <label htmlFor="qc-host">{t("quickConnect.hostLabel")}</label>
@@ -127,16 +129,17 @@ export function QuickConnect({ onConnect, onCancel }: QuickConnectProps): React.
               </div>
               <div className="dialog-field">
                 <label htmlFor="qc-auth">{t("session.authMethodLabel")}</label>
-                <select
+                <CustomSelect
                   id="qc-auth"
                   value={authMethod}
-                  onChange={(e) => {
-                    setAuthMethod(e.target.value as "password" | "publickey");
+                  onChange={(v) => {
+                    setAuthMethod(v as "password" | "publickey");
                   }}
-                >
-                  <option value="password">{t("session.authPassword")}</option>
-                  <option value="publickey">{t("session.authPublicKey")}</option>
-                </select>
+                  options={[
+                    { value: "password", label: t("session.authPassword") },
+                    { value: "publickey", label: t("session.authPublicKey") },
+                  ]}
+                />
               </div>
               <div className="dialog-field">
                 <label htmlFor="qc-credential">

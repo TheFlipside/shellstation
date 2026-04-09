@@ -1,8 +1,9 @@
-import React, { useCallback, useRef } from "react";
+import React, { useCallback, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useEnterKey } from "../hooks/useEnterKey";
 import { useEscapeKey } from "../hooks/useEscapeKey";
 import type { Folder } from "../stores/sessionStore";
+import { CustomSelect } from "./CustomSelect";
 
 interface MoveDialogProps {
   folders: Folder[];
@@ -21,11 +22,17 @@ export function MoveDialog({
 }: MoveDialogProps): React.JSX.Element {
   const { t } = useTranslation();
   useEscapeKey(onCancel);
-  const selectRef = useRef<HTMLSelectElement>(null);
+  const options = useMemo(() => {
+    const opts = folders
+      .filter((f) => f.id !== excludeId)
+      .map((f) => ({ value: f.id, label: f.name }));
+    if (showRoot) opts.unshift({ value: "__root__", label: t("dialog.root") });
+    return opts;
+  }, [folders, excludeId, showRoot, t]);
+  const [selected, setSelected] = useState(options[0]?.value ?? "");
   const handleSubmit = useCallback(() => {
-    const val = selectRef.current?.value;
-    if (val) onSubmit(val);
-  }, [onSubmit]);
+    if (selected) onSubmit(selected);
+  }, [onSubmit, selected]);
   useEnterKey(handleSubmit);
 
   return (
@@ -44,16 +51,7 @@ export function MoveDialog({
         </h3>
         <div className="dialog-field">
           <label htmlFor="mv-folder">{t("dialog.targetFolder")}</label>
-          <select id="mv-folder" ref={selectRef} defaultValue="">
-            {showRoot && <option value="__root__">{t("dialog.root")}</option>}
-            {folders
-              .filter((f) => f.id !== excludeId)
-              .map((f) => (
-                <option key={f.id} value={f.id}>
-                  {f.name}
-                </option>
-              ))}
-          </select>
+          <CustomSelect id="mv-folder" value={selected} onChange={setSelected} options={options} />
         </div>
         <div className="dialog-actions">
           <button type="button" className="dialog-btn dialog-btn-cancel" onClick={onCancel}>

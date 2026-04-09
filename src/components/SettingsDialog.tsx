@@ -13,6 +13,7 @@ import {
 } from "../stores/highlightStore";
 import { useToastStore } from "../stores/toastStore";
 import { HighlightProfileDialog } from "./HighlightProfileDialog";
+import { CustomSelect } from "./CustomSelect";
 import { ConfirmDialog } from "./ConfirmDialog";
 
 // eslint-disable-next-line @typescript-eslint/no-empty-function
@@ -440,49 +441,44 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
         <h4 className="settings-section-title">{t("settings.general")}</h4>
         <div className="dialog-field">
           <label htmlFor="settings-language">{t("settings.languageLabel")}</label>
-          <select
+          <CustomSelect
             id="settings-language"
             value={currentLang}
-            onChange={(e) => {
-              setLanguage(e.target.value);
-            }}
-          >
-            {AVAILABLE_LANGUAGES.map((lang) => (
-              <option key={lang.code} value={lang.code}>
-                {lang.label}
-              </option>
-            ))}
-          </select>
+            onChange={setLanguage}
+            options={AVAILABLE_LANGUAGES.map((lang) => ({
+              value: lang.code,
+              label: lang.label,
+            }))}
+          />
         </div>
         <div className="dialog-field">
           <label htmlFor="settings-ui-scale">{t("settings.uiScaleLabel")}</label>
-          <select
+          <CustomSelect
             id="settings-ui-scale"
-            value={uiScale}
-            onChange={(e) => {
-              setUiScale(Number(e.target.value));
+            value={String(uiScale)}
+            onChange={(v) => {
+              setUiScale(Number(v));
             }}
-          >
-            {UI_SCALE_OPTIONS.map((scale) => (
-              <option key={scale} value={scale}>
-                {String(scale)}%
-              </option>
-            ))}
-          </select>
+            options={UI_SCALE_OPTIONS.map((scale) => ({
+              value: String(scale),
+              label: `${String(scale)}%`,
+            }))}
+          />
         </div>
         <div className="dialog-field">
           <label htmlFor="settings-theme">{t("settings.themeLabel")}</label>
-          <select
+          <CustomSelect
             id="settings-theme"
             value={themeMode}
-            onChange={(e) => {
-              setThemeMode(e.target.value as "dark" | "light" | "system");
+            onChange={(v) => {
+              setThemeMode(v as "dark" | "light" | "system");
             }}
-          >
-            <option value="dark">{t("settings.themeDark")}</option>
-            <option value="light">{t("settings.themeLight")}</option>
-            <option value="system">{t("settings.themeSystem")}</option>
-          </select>
+            options={[
+              { value: "dark", label: t("settings.themeDark") },
+              { value: "light", label: t("settings.themeLight") },
+              { value: "system", label: t("settings.themeSystem") },
+            ]}
+          />
         </div>
         <h4 className="settings-section-title">{t("settings.sessions")}</h4>
         <div className="dialog-field dialog-field-row">
@@ -550,20 +546,21 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
 
         <div className="dialog-field">
           <label htmlFor="settings-auto-refresh">{t("settings.autoRefreshLabel")}</label>
-          <select
+          <CustomSelect
             id="settings-auto-refresh"
             value={String(autoRefreshInterval)}
-            onChange={(e) => {
-              setAutoRefreshInterval(Number(e.target.value));
+            onChange={(v) => {
+              setAutoRefreshInterval(Number(v));
             }}
-          >
-            <option value="0">{t("settings.autoRefreshOff")}</option>
-            <option value="10">10s</option>
-            <option value="30">30s</option>
-            <option value="60">60s</option>
-            <option value="120">120s</option>
-            <option value="300">300s</option>
-          </select>
+            options={[
+              { value: "0", label: t("settings.autoRefreshOff") },
+              { value: "10", label: "10s" },
+              { value: "30", label: "30s" },
+              { value: "60", label: "60s" },
+              { value: "120", label: "120s" },
+              { value: "300", label: "300s" },
+            ]}
+          />
           <span className="settings-help" title={t("settings.autoRefreshHint")}>
             ?
           </span>
@@ -571,20 +568,21 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
 
         <div className="dialog-field">
           <label htmlFor="settings-connect-timeout">{t("settings.connectTimeoutLabel")}</label>
-          <select
+          <CustomSelect
             id="settings-connect-timeout"
             value={String(connectTimeout)}
-            onChange={(e) => {
-              setConnectTimeout(Number(e.target.value));
+            onChange={(v) => {
+              setConnectTimeout(Number(v));
             }}
-          >
-            <option value="5">5s</option>
-            <option value="10">10s</option>
-            <option value="15">15s</option>
-            <option value="30">30s</option>
-            <option value="60">60s</option>
-            <option value="120">120s</option>
-          </select>
+            options={[
+              { value: "5", label: "5s" },
+              { value: "10", label: "10s" },
+              { value: "15", label: "15s" },
+              { value: "30", label: "30s" },
+              { value: "60", label: "60s" },
+              { value: "120", label: "120s" },
+            ]}
+          />
           <span className="settings-help" title={t("settings.connectTimeoutHint")}>
             ?
           </span>
@@ -609,19 +607,20 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
             <label htmlFor="settings-toast-dismiss-seconds">
               {t("settings.toastDismissSecondsLabel")}
             </label>
-            <select
+            <CustomSelect
               id="settings-toast-dismiss-seconds"
               value={String(toastDismissSeconds)}
-              onChange={(e) => {
-                setToastDismissSeconds(Number(e.target.value));
+              onChange={(v) => {
+                setToastDismissSeconds(Number(v));
               }}
-            >
-              <option value="3">3s</option>
-              <option value="5">5s</option>
-              <option value="10">10s</option>
-              <option value="15">15s</option>
-              <option value="30">30s</option>
-            </select>
+              options={[
+                { value: "3", label: "3s" },
+                { value: "5", label: "5s" },
+                { value: "10", label: "10s" },
+                { value: "15", label: "15s" },
+                { value: "30", label: "30s" },
+              ]}
+            />
           </div>
         )}
 
@@ -629,19 +628,12 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
         <h4 className="settings-section-title">{t("settings.terminal")}</h4>
         <div className="dialog-field">
           <label htmlFor="settings-font-family">{t("settings.fontFamilyLabel")}</label>
-          <select
+          <CustomSelect
             id="settings-font-family"
             value={terminalFontFamily}
-            onChange={(e) => {
-              setTerminalFontFamily(e.target.value);
-            }}
-          >
-            {FONT_OPTIONS.map((font) => (
-              <option key={font} value={font}>
-                {font}
-              </option>
-            ))}
-          </select>
+            onChange={setTerminalFontFamily}
+            options={FONT_OPTIONS.map((font) => ({ value: font, label: font }))}
+          />
         </div>
         <div className="dialog-field">
           <label htmlFor="settings-font-size">{t("settings.fontSizeLabel")}</label>
@@ -817,16 +809,17 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
         <h4 className="settings-section-title">{t("settings.database")}</h4>
         <div className="dialog-field">
           <label htmlFor="settings-db-backend">{t("settings.dbBackendLabel")}</label>
-          <select
+          <CustomSelect
             id="settings-db-backend"
             value={dbBackend}
-            onChange={(e) => {
-              handleDbBackendChange(e.target.value as "sqlite" | "postgres");
+            onChange={(v) => {
+              handleDbBackendChange(v as "sqlite" | "postgres");
             }}
-          >
-            <option value="sqlite">{t("settings.dbSqlite")}</option>
-            <option value="postgres">{t("settings.dbPostgres")}</option>
-          </select>
+            options={[
+              { value: "sqlite", label: t("settings.dbSqlite") },
+              { value: "postgres", label: t("settings.dbPostgres") },
+            ]}
+          />
         </div>
         {dbBackend === "sqlite" && (
           <div className="dialog-field">
@@ -988,18 +981,19 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
             </div>
             <div className="dialog-field">
               <label htmlFor="settings-pg-sslmode">{t("settings.dbSslModeLabel")}</label>
-              <select
+              <CustomSelect
                 id="settings-pg-sslmode"
                 value={pgSslMode}
-                onChange={(e) => {
-                  setPgSslMode(e.target.value);
+                onChange={(v) => {
+                  setPgSslMode(v);
                   handlePgFieldChange();
                 }}
-              >
-                <option value="disable">{t("settings.dbSslModeDisable")}</option>
-                <option value="prefer">{t("settings.dbSslModePrefer")}</option>
-                <option value="require">{t("settings.dbSslModeRequire")}</option>
-              </select>
+                options={[
+                  { value: "disable", label: t("settings.dbSslModeDisable") },
+                  { value: "prefer", label: t("settings.dbSslModePrefer") },
+                  { value: "require", label: t("settings.dbSslModeRequire") },
+                ]}
+              />
             </div>
             <div className="dialog-field">
               <button

@@ -4,6 +4,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { useEscapeKey } from "../hooks/useEscapeKey";
 import type { Session } from "../stores/sessionStore";
 import { useHighlightStore } from "../stores/highlightStore";
+import { CustomSelect } from "./CustomSelect";
 
 interface FolderCredentialDialogProps {
   folderName: string;
@@ -92,16 +93,15 @@ export function FolderCredentialDialog({
           </div>
           <div className="dialog-field">
             <label htmlFor="fcd-auth">{t("session.authMethodLabel")}</label>
-            <select
+            <CustomSelect
               id="fcd-auth"
               value={authMethod}
-              onChange={(e) => {
-                setAuthMethod(e.target.value);
-              }}
-            >
-              <option value="password">{t("session.authPassword")}</option>
-              <option value="publickey">{t("session.authPublicKey")}</option>
-            </select>
+              onChange={setAuthMethod}
+              options={[
+                { value: "password", label: t("session.authPassword") },
+                { value: "publickey", label: t("session.authPublicKey") },
+              ]}
+            />
           </div>
           <div className="dialog-field">
             <label htmlFor="fcd-credential">
@@ -154,37 +154,33 @@ export function FolderCredentialDialog({
           </div>
           <div className="dialog-field">
             <label htmlFor="fcd-jump">{t("folderCredential.jumpHostLabel")}</label>
-            <select
+            <CustomSelect
               id="fcd-jump"
               value={jumpHostId}
-              onChange={(e) => {
-                setJumpHostId(e.target.value);
-              }}
-            >
-              <option value="">{t("session.jumpHostNone")}</option>
-              {jumpHostCandidates.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.name} ({s.hostname})
-                </option>
-              ))}
-            </select>
+              onChange={setJumpHostId}
+              options={[
+                { value: "", label: t("session.jumpHostNone") },
+                ...jumpHostCandidates.map((s) => ({
+                  value: s.id,
+                  label: `${s.name} (${s.hostname})`,
+                })),
+              ]}
+            />
           </div>
           <div className="dialog-field">
             <label htmlFor="fcd-highlight">{t("folderCredential.highlightProfileLabel")}</label>
-            <select
+            <CustomSelect
               id="fcd-highlight"
               value={highlightProfileId}
-              onChange={(e) => {
-                setHighlightProfileId(e.target.value);
-              }}
-            >
-              <option value="">{t("session.highlightProfileNone")}</option>
-              {highlightProfiles.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name}
-                </option>
-              ))}
-            </select>
+              onChange={setHighlightProfileId}
+              options={[
+                { value: "", label: t("session.highlightProfileNone") },
+                ...highlightProfiles.map((p) => ({
+                  value: p.id,
+                  label: p.name,
+                })),
+              ]}
+            />
           </div>
           <div className="dialog-actions">
             <button type="button" className="dialog-btn dialog-btn-cancel" onClick={onCancel}>

@@ -5,6 +5,7 @@ import { useEscapeKey } from "../hooks/useEscapeKey";
 import type { Folder, Session } from "../stores/sessionStore";
 import { useHighlightStore } from "../stores/highlightStore";
 import { SESSION_ICON_KEYS, SessionIconComponent } from "./SessionIcons";
+import { CustomSelect } from "./CustomSelect";
 
 export interface SessionFormData {
   folderId: string;
@@ -113,19 +114,12 @@ export function SessionDialog({
         <form onSubmit={handleSubmit}>
           <div className="dialog-field">
             <label htmlFor="sd-folder">{t("session.folderLabel")}</label>
-            <select
+            <CustomSelect
               id="sd-folder"
               value={folderId}
-              onChange={(e) => {
-                setFolderId(e.target.value);
-              }}
-            >
-              {folders.map((f) => (
-                <option key={f.id} value={f.id}>
-                  {f.name}
-                </option>
-              ))}
-            </select>
+              onChange={setFolderId}
+              options={folders.map((f) => ({ value: f.id, label: f.name }))}
+            />
           </div>
           <div className="dialog-field">
             <label htmlFor="sd-name">{t("session.nameLabel")}</label>
@@ -160,12 +154,12 @@ export function SessionDialog({
           </div>
           <div className="dialog-field">
             <label htmlFor="sd-protocol">{t("session.protocolLabel")}</label>
-            <select
+            <CustomSelect
               id="sd-protocol"
               value={protocol}
-              onChange={(e) => {
-                setProtocol(e.target.value);
-                if (e.target.value === "telnet") {
+              onChange={(v) => {
+                setProtocol(v);
+                if (v === "telnet") {
                   setPort((prev) => (prev === "22" ? "23" : prev));
                   setAuthMethod("none");
                 } else {
@@ -173,10 +167,11 @@ export function SessionDialog({
                   if (authMethod === "none") setAuthMethod("password");
                 }
               }}
-            >
-              <option value="ssh">SSH</option>
-              <option value="telnet">Telnet</option>
-            </select>
+              options={[
+                { value: "ssh", label: "SSH" },
+                { value: "telnet", label: "Telnet" },
+              ]}
+            />
           </div>
           <div className="dialog-row">
             <div className="dialog-field dialog-field-grow">
@@ -220,16 +215,15 @@ export function SessionDialog({
             <>
               <div className="dialog-field">
                 <label htmlFor="sd-auth">{t("session.authMethodLabel")}</label>
-                <select
+                <CustomSelect
                   id="sd-auth"
                   value={authMethod}
-                  onChange={(e) => {
-                    setAuthMethod(e.target.value);
-                  }}
-                >
-                  <option value="password">{t("session.authPassword")}</option>
-                  <option value="publickey">{t("session.authPublicKey")}</option>
-                </select>
+                  onChange={setAuthMethod}
+                  options={[
+                    { value: "password", label: t("session.authPassword") },
+                    { value: "publickey", label: t("session.authPublicKey") },
+                  ]}
+                />
               </div>
               <div className="dialog-field">
                 <label htmlFor="sd-credential">
@@ -285,39 +279,35 @@ export function SessionDialog({
               </div>
               <div className="dialog-field">
                 <label htmlFor="sd-jump">{t("session.jumpHostLabel")}</label>
-                <select
+                <CustomSelect
                   id="sd-jump"
                   value={jumpHostId}
-                  onChange={(e) => {
-                    setJumpHostId(e.target.value);
-                  }}
-                >
-                  <option value="">{t("session.jumpHostNone")}</option>
-                  {sessions.map((s) => (
-                    <option key={s.id} value={s.id}>
-                      {s.name} ({s.hostname})
-                    </option>
-                  ))}
-                </select>
+                  onChange={setJumpHostId}
+                  options={[
+                    { value: "", label: t("session.jumpHostNone") },
+                    ...sessions.map((s) => ({
+                      value: s.id,
+                      label: `${s.name} (${s.hostname})`,
+                    })),
+                  ]}
+                />
               </div>
             </>
           )}
           <div className="dialog-field">
             <label htmlFor="sd-highlight">{t("session.highlightProfileLabel")}</label>
-            <select
+            <CustomSelect
               id="sd-highlight"
               value={highlightProfileId}
-              onChange={(e) => {
-                setHighlightProfileId(e.target.value);
-              }}
-            >
-              <option value="">{t("session.highlightProfileNone")}</option>
-              {highlightProfiles.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name}
-                </option>
-              ))}
-            </select>
+              onChange={setHighlightProfileId}
+              options={[
+                { value: "", label: t("session.highlightProfileNone") },
+                ...highlightProfiles.map((p) => ({
+                  value: p.id,
+                  label: p.name,
+                })),
+              ]}
+            />
           </div>
           <div className="dialog-field">
             <label htmlFor="sd-tags">{t("session.tagsLabel")}</label>
