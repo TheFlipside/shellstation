@@ -21,6 +21,7 @@ managers, ProxyJump workflows, and authentication methods.
 
 - **jumphost** — exposed on `127.0.0.1:2222`, TCP forwarding enabled.
 - **target** — no published ports, reachable only through the jumphost.
+- **cisco-sim** — exposed on `127.0.0.1:2223`, fake Cisco IOS CLI for testing keyword highlighting.
 - **telnet-target** — exposed on `127.0.0.1:2323`, busybox telnetd with login.
 
 ## Quick Start
@@ -64,6 +65,35 @@ ssh -p 2222 -o PreferredAuthentications=password testuser@127.0.0.1
 # Force key only (no password fallback)
 ssh -p 2222 -o PreferredAuthentications=publickey -i keys/id_ed25519 testuser@127.0.0.1
 ```
+
+## Testing Keyword Highlighting (Cisco Simulator)
+
+```bash
+# SSH into the fake Cisco IOS CLI
+ssh -p 2223 testuser@127.0.0.1
+# Password: testpass
+```
+
+The cisco-sim container drops you directly into a simulated Cisco IOS CLI.
+Supported commands:
+
+- `show version` / `sh ver` — IOS version, uptime
+- `show interfaces` / `sh int` — Interface states (up/down/errors)
+- `show ip interface brief` / `sh ip int br` — Interface summary table
+- `show ip route` / `sh ip ro` — Routing table (C/S/O/B/D prefixes)
+- `show ip bgp summary` / `sh ip bgp sum` — BGP neighbor states
+- `show ip bgp` — BGP table entries
+- `show ip ospf neighbor` / `sh ip ospf ne` — OSPF adjacency states
+- `show access-lists` / `sh access` — ACLs with permit/deny
+- `show logging` / `sh log` — Syslog with severity levels
+- `show running-config` / `sh run` — Full running configuration
+- `show environment` / `sh env` — Temperature/power/fan status
+- `show cdp neighbors` / `sh cdp ne` — CDP neighbor table
+- `show spanning-tree` / `sh span` — STP topology
+- `ping <host>` — Simulated ICMP echo
+- `traceroute <host>` — Simulated traceroute
+- `enable` / `disable` — Toggle privileged mode prompt
+- `?` or `help` — Command list
 
 ## Testing Telnet
 

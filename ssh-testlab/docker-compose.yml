@@ -48,6 +48,24 @@ services:
     networks:
       - sshlab
 
+  cisco-sim:
+    build:
+      context: .
+      dockerfile: Dockerfile.cisco
+      args:
+        TEST_USER: testuser
+        TEST_PASSWORD: testpass
+    container_name: cisco-sim
+    hostname: Router1
+    ports:
+      - "2223:22"
+    volumes:
+      - ./keys/id_ed25519.pub:/tmp/ssh-pubkey/id_ed25519.pub:ro
+    environment:
+      TEST_USER: testuser
+    networks:
+      - sshlab
+
   telnet-target:
     build:
       context: .
