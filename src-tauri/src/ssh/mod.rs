@@ -377,13 +377,18 @@ fn validate_key_path(path: &str) -> Result<String, String> {
 
     let canonical =
         std::fs::canonicalize(path).map_err(|e| format!("Key file not accessible: {e}"))?;
-    if !canonical.starts_with(&home) {
+    // Canonicalize the home directory too so both paths use the same prefix.
+    // On Windows, `canonicalize` returns UNC paths (`\\?\C:\...`) while
+    // `dirs::home_dir` returns regular paths (`C:\Users\...`), which makes
+    // `starts_with` fail even for paths that are genuinely under $HOME.
+    let canonical_home = std::fs::canonicalize(&home).unwrap_or_else(|_| home.clone());
+    if !canonical.starts_with(&canonical_home) {
         return Err("Key path must be within your home directory".to_string());
     }
 
     // Block known sensitive files that are not SSH keys.
     let rel = canonical
-        .strip_prefix(&home)
+        .strip_prefix(&canonical_home)
         .unwrap_or(&canonical)
         .to_string_lossy();
     let blocked = [

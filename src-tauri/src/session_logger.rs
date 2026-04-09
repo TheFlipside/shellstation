@@ -17,10 +17,32 @@ enum LogEntry {
     Active(File),
 }
 
+/// Per-connection state for the ANSI escape sequence stripper.
+///
+/// Stored alongside each log entry so that escape sequences split across
+/// consecutive `write_log` calls are handled correctly.  Without this,
+/// Windows ConPTY output — which frequently splits sequences across read
+/// boundaries — causes the parser to lose track of in-progress sequences
+/// and either drop text or emit garbage.
+#[derive(Clone, Copy, Default)]
+struct AnsiStripperState {
+    state: StripState,
+    /// Bytes consumed in a non-Normal state without seeing a terminator.
+    /// Used as a safety valve: if we exceed [`Self::MAX_STUCK_BYTES`] we
+    /// reset to Normal to avoid silently swallowing all subsequent output.
+    stuck_bytes: usize,
+}
+
+impl AnsiStripperState {
+    /// Maximum bytes we'll consume in a single non-Normal run before
+    /// assuming the sequence is malformed and resetting.
+    const MAX_STUCK_BYTES: usize = 4096;
+}
+
 /// Manages log file handles for active terminal sessions.
 pub struct SessionLogManager {
-    /// Map of connection_id -> log entry (pending or active file handle).
-    entries: HashMap<String, LogEntry>,
+    /// Map of connection_id -> (log entry, ANSI stripper state).
+    entries: HashMap<String, (LogEntry, AnsiStripperState)>,
     pub enabled: bool,
     pub log_dir: PathBuf,
     pub filename_format: String,
@@ -79,8 +101,10 @@ impl SessionLogManager {
             path = %path.display(),
             "Session log prepared (file created on first write)"
         );
-        self.entries
-            .insert(connection_id.to_string(), LogEntry::Pending(path));
+        self.entries.insert(
+            connection_id.to_string(),
+            (LogEntry::Pending(path), AnsiStripperState::default()),
+        );
         Ok(())
     }
 
@@ -88,7 +112,7 @@ impl SessionLogManager {
     /// file on disk.  Returns a mutable reference to the opened file.
     fn activate_log(&mut self, connection_id: &str) -> Result<&mut File, String> {
         // Take the entry out so we can replace it.
-        let entry = self
+        let (entry, stripper) = self
             .entries
             .remove(connection_id)
             .ok_or_else(|| format!("No log entry for {connection_id}"))?;
@@ -97,9 +121,12 @@ impl SessionLogManager {
             LogEntry::Pending(p) => p,
             LogEntry::Active(file) => {
                 // Already active — put it back and return.
-                self.entries
-                    .insert(connection_id.to_string(), LogEntry::Active(file));
-                if let Some(LogEntry::Active(ref mut f)) = self.entries.get_mut(connection_id) {
+                self.entries.insert(
+                    connection_id.to_string(),
+                    (LogEntry::Active(file), stripper),
+                );
+                if let Some((LogEntry::Active(ref mut f), _)) = self.entries.get_mut(connection_id)
+                {
                     return Ok(f);
                 }
                 unreachable!();
@@ -112,8 +139,10 @@ impl SessionLogManager {
             .open(&path)
             .map_err(|e| {
                 // Re-insert as Pending so close_log can still clean up.
-                self.entries
-                    .insert(connection_id.to_string(), LogEntry::Pending(path.clone()));
+                self.entries.insert(
+                    connection_id.to_string(),
+                    (LogEntry::Pending(path.clone()), stripper),
+                );
                 format!("Failed to open log file {}: {e}", path.display())
             })?;
 
@@ -132,11 +161,13 @@ impl SessionLogManager {
             path = %path.display(),
             "Session log file created"
         );
-        self.entries
-            .insert(connection_id.to_string(), LogEntry::Active(file));
+        self.entries.insert(
+            connection_id.to_string(),
+            (LogEntry::Active(file), stripper),
+        );
 
         match self.entries.get_mut(connection_id) {
-            Some(LogEntry::Active(ref mut f)) => Ok(f),
+            Some((LogEntry::Active(ref mut f), _)) => Ok(f),
             _ => unreachable!(),
         }
     }
@@ -144,13 +175,21 @@ impl SessionLogManager {
     /// Write terminal output to the log file, stripping ANSI escape sequences
     /// so the log contains only readable text.
     ///
-    /// Creates the log file on the first call (lazy open).
+    /// Creates the log file on the first call (lazy open).  The ANSI stripper
+    /// state is preserved across calls so that escape sequences split across
+    /// read boundaries (common with Windows ConPTY) are handled correctly.
     pub fn write_log(&mut self, connection_id: &str, data: &[u8]) {
         if !self.entries.contains_key(connection_id) {
             return;
         }
 
-        let clean = strip_ansi(data);
+        // Run the stripper with per-connection persistent state.
+        let stripper = &mut self
+            .entries
+            .get_mut(connection_id)
+            .expect("checked above")
+            .1;
+        let clean = strip_ansi_stateful(stripper, data);
         if clean.is_empty() {
             return;
         }
@@ -191,7 +230,7 @@ impl SessionLogManager {
     /// no file exists on disk and nothing needs to be cleaned up.
     pub fn close_log(&mut self, connection_id: &str) {
         match self.entries.remove(connection_id) {
-            Some(LogEntry::Active(mut file)) => {
+            Some((LogEntry::Active(mut file), _)) => {
                 if let Err(e) = file.flush() {
                     warn!(
                         connection_id = %connection_id,
@@ -201,7 +240,7 @@ impl SessionLogManager {
                 }
                 info!(connection_id = %connection_id, "Session log closed");
             }
-            Some(LogEntry::Pending(_)) => {
+            Some((LogEntry::Pending(_), _)) => {
                 info!(
                     connection_id = %connection_id,
                     "Session log closed (no data written, no file created)"
@@ -275,9 +314,10 @@ pub struct SessionLogState(pub Arc<Mutex<SessionLogManager>>);
 // ── ANSI escape sequence stripping ─────────────────────────────────
 
 /// Parser states for stripping ANSI/VT escape sequences from terminal output.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, Default)]
 enum StripState {
     /// Normal text — pass through.
+    #[default]
     Normal,
     /// Saw ESC (0x1B), waiting for sequence type.
     Escape,
@@ -290,22 +330,45 @@ enum StripState {
     OscEscape,
 }
 
-/// Strip ANSI escape sequences, leaving only printable text + whitespace.
+/// Strip ANSI escape sequences using persistent parser state.
+///
+/// The caller-owned [`AnsiStripperState`] preserves the parser position
+/// across calls so that escape sequences split across read boundaries
+/// (common with Windows ConPTY) are handled correctly.
 ///
 /// Handles:
 /// - CSI sequences: `ESC [` ... final byte
 /// - OSC sequences: `ESC ]` ... `BEL` or `ESC \`
 /// - Two-character escapes: `ESC` + single byte (0x40-0x7E)
 /// - Common C0 controls that xterm renders: CR, LF, TAB, BS
-fn strip_ansi(data: &[u8]) -> Vec<u8> {
+fn strip_ansi_stateful(ctx: &mut AnsiStripperState, data: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(data.len());
-    let mut state = StripState::Normal;
 
     for &byte in data {
-        match state {
+        // Safety valve: if we have consumed too many bytes inside an escape
+        // sequence without finding a terminator, assume the sequence is
+        // malformed and reset.  This prevents a single broken sequence from
+        // silently swallowing all subsequent output.  The check runs before
+        // incrementing so the triggering byte is re-processed in Normal state.
+        if !matches!(ctx.state, StripState::Normal) {
+            if ctx.stuck_bytes >= AnsiStripperState::MAX_STUCK_BYTES {
+                warn!(
+                    "ANSI stripper: reset after {} bytes in {:?} state",
+                    ctx.stuck_bytes, ctx.state
+                );
+                ctx.state = StripState::Normal;
+                ctx.stuck_bytes = 0;
+                // Fall through to the Normal arm below for this byte.
+            } else {
+                ctx.stuck_bytes += 1;
+            }
+        }
+
+        match ctx.state {
             StripState::Normal => {
+                ctx.stuck_bytes = 0;
                 if byte == 0x1B {
-                    state = StripState::Escape;
+                    ctx.state = StripState::Escape;
                 } else if byte == b'\n' || byte == b'\r' || byte == b'\t' {
                     out.push(byte);
                 } else if byte == 0x08 {
@@ -318,13 +381,17 @@ fn strip_ansi(data: &[u8]) -> Vec<u8> {
                 // Drop other C0 controls (BEL, etc.) silently.
             }
             StripState::Escape => match byte {
-                b'[' => state = StripState::Csi,
-                b']' => state = StripState::Osc,
+                b'[' => ctx.state = StripState::Csi,
+                b']' => ctx.state = StripState::Osc,
                 // Two-character escape: ESC + final byte — discard both.
-                0x40..=0x7E => state = StripState::Normal,
+                0x40..=0x7E => {
+                    ctx.state = StripState::Normal;
+                    ctx.stuck_bytes = 0;
+                }
                 // Unexpected byte after ESC — drop the ESC, re-process byte.
                 _ => {
-                    state = StripState::Normal;
+                    ctx.state = StripState::Normal;
+                    ctx.stuck_bytes = 0;
                     if byte >= 0x20 {
                         out.push(byte);
                     }
@@ -333,13 +400,14 @@ fn strip_ansi(data: &[u8]) -> Vec<u8> {
             StripState::Csi => {
                 if byte == 0x1B {
                     // ESC interrupts the current CSI sequence (ECMA-48 §5.4).
-                    state = StripState::Escape;
+                    ctx.state = StripState::Escape;
                 } else if byte == b'\n' || byte == b'\r' || byte == b'\t' {
                     // C0 controls are "executed" even mid-sequence (ECMA-48).
                     out.push(byte);
                 } else if (0x40..=0x7E).contains(&byte) {
                     // Final byte ends the CSI sequence.
-                    state = StripState::Normal;
+                    ctx.state = StripState::Normal;
+                    ctx.stuck_bytes = 0;
                 }
                 // Parameter bytes (0x30-0x3F) and intermediate bytes (0x20-0x2F)
                 // are consumed silently.
@@ -347,24 +415,34 @@ fn strip_ansi(data: &[u8]) -> Vec<u8> {
             StripState::Osc => {
                 if byte == 0x07 {
                     // BEL terminates OSC.
-                    state = StripState::Normal;
+                    ctx.state = StripState::Normal;
+                    ctx.stuck_bytes = 0;
                 } else if byte == 0x1B {
-                    state = StripState::OscEscape;
+                    ctx.state = StripState::OscEscape;
                 } else if byte == b'\n' {
                     // Newline in an unterminated OSC — reset parser.
-                    state = StripState::Normal;
+                    ctx.state = StripState::Normal;
+                    ctx.stuck_bytes = 0;
                     out.push(byte);
                 }
                 // All other bytes inside OSC are consumed.
             }
             StripState::OscEscape => {
                 // Expect '\' for ST (String Terminator).
-                state = StripState::Normal;
+                ctx.state = StripState::Normal;
+                ctx.stuck_bytes = 0;
             }
         }
     }
 
     out
+}
+
+/// Convenience wrapper that strips ANSI sequences in a single pass (no
+/// persistent state).  Used only by unit tests.
+#[cfg(test)]
+fn strip_ansi(data: &[u8]) -> Vec<u8> {
+    strip_ansi_stateful(&mut AnsiStripperState::default(), data)
 }
 
 #[cfg(test)]
@@ -429,5 +507,35 @@ mod tests {
         // ESC[K (erase to end of line), ESC[J (erase display)
         let input = b"prompt\x1b[K\x1b[Jtext";
         assert_eq!(strip_ansi(input), b"prompttext");
+    }
+
+    #[test]
+    fn stateful_csi_split_across_calls() {
+        // Simulate a CSI sequence split across two read chunks.
+        let mut ctx = AnsiStripperState::default();
+        let out1 = strip_ansi_stateful(&mut ctx, b"hello\x1b[1;34");
+        let out2 = strip_ansi_stateful(&mut ctx, b"mblue\x1b[0m");
+        assert_eq!(out1, b"hello");
+        assert_eq!(out2, b"blue");
+    }
+
+    #[test]
+    fn stateful_osc_split_across_calls() {
+        // OSC title change split: first chunk has ESC], second has the rest.
+        let mut ctx = AnsiStripperState::default();
+        let out1 = strip_ansi_stateful(&mut ctx, b"before\x1b]0;my ti");
+        let out2 = strip_ansi_stateful(&mut ctx, b"tle\x07after");
+        assert_eq!(out1, b"before");
+        assert_eq!(out2, b"after");
+    }
+
+    #[test]
+    fn stateful_esc_at_chunk_boundary() {
+        // ESC is the very last byte of a chunk.
+        let mut ctx = AnsiStripperState::default();
+        let out1 = strip_ansi_stateful(&mut ctx, b"text\x1b");
+        let out2 = strip_ansi_stateful(&mut ctx, b"[0mmore");
+        assert_eq!(out1, b"text");
+        assert_eq!(out2, b"more");
     }
 }
