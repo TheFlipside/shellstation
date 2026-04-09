@@ -429,7 +429,8 @@ export function TerminalTabs({ uiScale }: TerminalTabsProps): React.JSX.Element 
               }}
             >
               <span className="tab-title">
-                {tab.type === "ssh" ? "\u{1F310} " : tab.type === "telnet" ? "\u{1F4E1} " : ""}
+                {tab.type === "ssh" && <span className="tab-icon-terminal">&gt;_</span>}
+                {tab.type === "telnet" && "\u{1F4E1} "}
                 {tab.title}
               </span>
               <span

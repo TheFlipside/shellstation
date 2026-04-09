@@ -22,6 +22,18 @@ const noop = (): void => {};
 const AVAILABLE_LANGUAGES = [
   { code: "en", label: "English" },
   { code: "de", label: "Deutsch" },
+  { code: "es", label: "Espa\u00f1ol" },
+  { code: "fr", label: "Fran\u00e7ais" },
+  { code: "it", label: "Italiano" },
+  { code: "ja", label: "\u65e5\u672c\u8a9e" },
+  { code: "ko", label: "\ud55c\uad6d\uc5b4" },
+  { code: "nl", label: "Nederlands" },
+  { code: "pl", label: "Polski" },
+  { code: "pt", label: "Portugu\u00eas" },
+  { code: "ru", label: "\u0420\u0443\u0441\u0441\u043a\u0438\u0439" },
+  { code: "sv", label: "Svenska" },
+  { code: "tr", label: "T\u00fcrk\u00e7e" },
+  { code: "zh", label: "\u4e2d\u6587" },
 ];
 
 const UI_SCALE_OPTIONS = [75, 80, 90, 100, 110, 120, 125, 150];
@@ -440,7 +452,7 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
         </h3>
         <h4 className="settings-section-title">{t("settings.general")}</h4>
         <div className="dialog-field">
-          <label htmlFor="settings-language">{t("settings.languageLabel")}</label>
+          <label htmlFor="settings-language">🌐 {t("settings.languageLabel")}</label>
           <CustomSelect
             id="settings-language"
             value={currentLang}
