@@ -992,3 +992,80 @@ body,
 .context-menu-item-disabled:hover {
   background: transparent;
 }
+
+/* ── Highlight Profiles ────────────────────────────────────── */
+
+.highlight-profiles-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+
+.highlight-profile-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  border-radius: 4px;
+  background: var(--color-surface0);
+}
+
+.highlight-profile-name {
+  flex: 1;
+  font-weight: 500;
+}
+
+.highlight-profile-count {
+  font-size: 0.85em;
+  color: var(--color-subtext0);
+}
+
+.highlight-rules-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 8px;
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+.highlight-rule-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.highlight-rule-pattern {
+  flex: 1;
+  min-width: 0;
+}
+
+.highlight-rule-color {
+  width: 32px;
+  height: 28px;
+  padding: 1px;
+  border: 1px solid var(--color-surface2);
+  border-radius: 4px;
+  background: none;
+  cursor: pointer;
+}
+
+.highlight-rule-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  font-size: 0.85em;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.highlight-rule-remove {
+  background: none;
+  border: none;
+  color: var(--color-red, #f38ba8);
+  font-size: 1.1em;
+  cursor: pointer;
+  padding: 2px 4px;
+  line-height: 1;
+}

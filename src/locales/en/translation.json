@@ -19,7 +19,8 @@
     "edit": "Edit",
     "clone": "Clone Session",
     "sortAlphabetically": "Sort Alphabetically",
-    "setCredentials": "Set Credentials\u2026"
+    "setCredentials": "Set Credentials\u2026",
+    "editSessions": "Edit Sessions\u2026"
   },
   "folder": {
     "deleteWithSessions": "Delete folder and its {{count}} session(s)?",
@@ -30,10 +31,11 @@
     "namePlaceholder": "Folder name"
   },
   "folderCredential": {
-    "title": "Set Credentials \u2014 {{name}}",
+    "title": "Edit Sessions \u2014 {{name}}",
     "info": "Applies to all SSH sessions in this folder and subfolders. Telnet sessions are excluded.",
     "jumpHostLabel": "Jump Host (optional)",
-    "success": "Updated credentials for {{count}} session(s)"
+    "highlightProfileLabel": "Highlight Profile (optional)",
+    "success": "Updated {{count}} session(s)"
   },
   "session": {
     "deleteConfirm": "Delete session \"{{name}}\"?",
@@ -76,7 +78,9 @@
     "icon_printer": "Printer",
     "icon_lock": "VPN / Secure",
     "tagsLabel": "Tags",
-    "tagsPlaceholder": "prod, eu, web (comma-separated)"
+    "tagsPlaceholder": "prod, eu, web (comma-separated)",
+    "highlightProfileLabel": "Highlight Profile",
+    "highlightProfileNone": "None"
   },
   "dialog": {
     "cancel": "Cancel",
@@ -242,5 +246,29 @@
     "loggingFilenameHint": "Placeholders: {name} = session name, {mm} = minute, {hh} = hour, {dd} = day, {MM} = month, {yy} = year",
     "loggingSave": "Save Logging Settings",
     "loggingSaved": "Logging settings saved."
+  },
+  "highlighting": {
+    "sectionTitle": "Keyword Highlighting",
+    "addProfile": "Add Profile",
+    "editProfile": "Edit Profile",
+    "noProfiles": "No highlight profiles defined.",
+    "deleteConfirm": "Delete highlight profile \"{{name}}\"?",
+    "profileNameLabel": "Profile Name",
+    "profileNamePlaceholder": "e.g. Cisco IOS",
+    "rulesLabel": "Rules",
+    "patternLabel": "Regex pattern",
+    "colorLabel": "Color",
+    "caseSensitiveLabel": "Case sensitive",
+    "boldLabel": "Bold",
+    "addRule": "Add Rule",
+    "importSecurecrt": "Import SecureCRT Highlights",
+    "importProfile": "Import Profile",
+    "importSuccess": "Imported {{count}} profile(s) with {{rules}} rule(s)."
+  },
+  "common": {
+    "edit": "Edit",
+    "delete": "Delete",
+    "cancel": "Cancel",
+    "save": "Save"
   }
 }

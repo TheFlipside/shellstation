@@ -7,7 +7,8 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
 use super::models::{
-    Credential, DataFingerprint, Folder, NewFolder, NewSession, Session, UpdateSession,
+    Credential, DataFingerprint, Folder, HighlightProfile, NewFolder, NewHighlightProfile,
+    NewSession, Session, UpdateHighlightProfile, UpdateSession,
 };
 use super::{DatabaseProvider, DbResult};
 
@@ -54,6 +55,16 @@ fn row_to_session(row: &SqliteRow) -> DbResult<Session> {
         jump_host_id: parse_optional_uuid(row.get("jump_host_id"))?,
         tags: row.get("tags"),
         icon: row.get("icon"),
+        sort_order: row.get("sort_order"),
+        highlight_profile_id: parse_optional_uuid(row.get("highlight_profile_id"))?,
+    })
+}
+
+fn row_to_highlight_profile(row: &SqliteRow) -> DbResult<HighlightProfile> {
+    Ok(HighlightProfile {
+        id: parse_uuid(row.get("id"))?,
+        name: row.get("name"),
+        rules: row.get("rules"),
         sort_order: row.get("sort_order"),
     })
 }
@@ -186,8 +197,8 @@ impl DatabaseProvider for SqliteProvider {
         .map_err(|e| format!("Failed to compute sort_order: {e}"))?;
 
         sqlx::query(
-            "INSERT INTO sessions (id, folder_id, name, hostname, port, protocol, username, auth_method, jump_host_id, tags, icon, sort_order) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO sessions (id, folder_id, name, hostname, port, protocol, username, auth_method, jump_host_id, tags, icon, sort_order, highlight_profile_id) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&id_str)
         .bind(&folder_str)
@@ -201,6 +212,7 @@ impl DatabaseProvider for SqliteProvider {
         .bind(&session.tags)
         .bind(&session.icon)
         .bind(sort_order)
+        .bind(session.highlight_profile_id.map(|u| u.to_string()))
         .execute(&self.pool)
         .await
         .map_err(|e| format!("Failed to create session: {e}"))?;
@@ -218,12 +230,13 @@ impl DatabaseProvider for SqliteProvider {
             tags: session.tags,
             icon: session.icon,
             sort_order,
+            highlight_profile_id: session.highlight_profile_id,
         })
     }
 
     async fn get_session(&self, id: Uuid) -> DbResult<Option<Session>> {
         let row = sqlx::query(
-            "SELECT id, folder_id, name, hostname, port, protocol, username, auth_method, jump_host_id, tags, icon, sort_order \
+            "SELECT id, folder_id, name, hostname, port, protocol, username, auth_method, jump_host_id, tags, icon, sort_order, highlight_profile_id \
              FROM sessions WHERE id = ?",
         )
         .bind(id.to_string())
@@ -239,7 +252,7 @@ impl DatabaseProvider for SqliteProvider {
 
     async fn list_all_sessions(&self) -> DbResult<Vec<Session>> {
         let rows = sqlx::query(
-            "SELECT id, folder_id, name, hostname, port, protocol, username, auth_method, jump_host_id, tags, icon, sort_order \
+            "SELECT id, folder_id, name, hostname, port, protocol, username, auth_method, jump_host_id, tags, icon, sort_order, highlight_profile_id \
              FROM sessions ORDER BY sort_order ASC, name ASC",
         )
         .fetch_all(&self.pool)
@@ -295,6 +308,13 @@ impl DatabaseProvider for SqliteProvider {
         if let Some(ref icon) = update.icon {
             sets.push("icon = ?");
             values.push(BindVal::Text(icon.clone()));
+        }
+        if let Some(ref highlight_profile_id) = update.highlight_profile_id {
+            sets.push("highlight_profile_id = ?");
+            match highlight_profile_id {
+                Some(u) => values.push(BindVal::Text(u.to_string())),
+                None => values.push(BindVal::Null),
+            }
         }
 
         if sets.is_empty() {
@@ -366,7 +386,7 @@ impl DatabaseProvider for SqliteProvider {
         let escaped = query.replace('%', "\\%").replace('_', "\\_");
         let pattern = format!("%{escaped}%");
         let rows = sqlx::query(
-            "SELECT id, folder_id, name, hostname, port, protocol, username, auth_method, jump_host_id, tags, icon, sort_order \
+            "SELECT id, folder_id, name, hostname, port, protocol, username, auth_method, jump_host_id, tags, icon, sort_order, highlight_profile_id \
              FROM sessions \
              WHERE name LIKE ? ESCAPE '\\' \
                 OR hostname LIKE ? ESCAPE '\\' \
@@ -518,6 +538,120 @@ impl DatabaseProvider for SqliteProvider {
         .map_err(|e| format!("Failed to list credentials: {e}"))?;
 
         rows.iter().map(row_to_credential).collect()
+    }
+
+    // ── Highlight Profiles ────────────────────────────────────────────────
+
+    async fn create_highlight_profile(
+        &self,
+        profile: NewHighlightProfile,
+    ) -> DbResult<HighlightProfile> {
+        let id = Uuid::new_v4();
+        let id_str = id.to_string();
+
+        let sort_order: i32 =
+            sqlx::query_scalar("SELECT COALESCE(MAX(sort_order), -1) + 1 FROM highlight_profiles")
+                .fetch_one(&self.pool)
+                .await
+                .map_err(|e| format!("Failed to compute sort_order: {e}"))?;
+
+        sqlx::query(
+            "INSERT INTO highlight_profiles (id, name, rules, sort_order) VALUES (?, ?, ?, ?)",
+        )
+        .bind(&id_str)
+        .bind(&profile.name)
+        .bind(&profile.rules)
+        .bind(sort_order)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| format!("Failed to create highlight profile: {e}"))?;
+
+        Ok(HighlightProfile {
+            id,
+            name: profile.name,
+            rules: profile.rules,
+            sort_order,
+        })
+    }
+
+    async fn list_highlight_profiles(&self) -> DbResult<Vec<HighlightProfile>> {
+        let rows = sqlx::query(
+            "SELECT id, name, rules, sort_order FROM highlight_profiles ORDER BY sort_order ASC, name ASC",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| format!("Failed to list highlight profiles: {e}"))?;
+
+        rows.iter().map(row_to_highlight_profile).collect()
+    }
+
+    async fn get_highlight_profile(&self, id: Uuid) -> DbResult<Option<HighlightProfile>> {
+        let row =
+            sqlx::query("SELECT id, name, rules, sort_order FROM highlight_profiles WHERE id = ?")
+                .bind(id.to_string())
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(|e| format!("Failed to get highlight profile: {e}"))?;
+
+        match row {
+            Some(r) => Ok(Some(row_to_highlight_profile(&r)?)),
+            None => Ok(None),
+        }
+    }
+
+    async fn update_highlight_profile(
+        &self,
+        id: Uuid,
+        update: UpdateHighlightProfile,
+    ) -> DbResult<()> {
+        let mut sets = Vec::new();
+        let mut values: Vec<String> = Vec::new();
+
+        if let Some(ref name) = update.name {
+            sets.push("name = ?");
+            values.push(name.clone());
+        }
+        if let Some(ref rules) = update.rules {
+            sets.push("rules = ?");
+            values.push(rules.clone());
+        }
+
+        if sets.is_empty() {
+            return Ok(());
+        }
+
+        let sql = format!(
+            "UPDATE highlight_profiles SET {} WHERE id = ?",
+            sets.join(", ")
+        );
+        let mut query = sqlx::query(&sql);
+        for val in &values {
+            query = query.bind(val.as_str());
+        }
+        query = query.bind(id.to_string());
+
+        let result = query
+            .execute(&self.pool)
+            .await
+            .map_err(|e| format!("Failed to update highlight profile: {e}"))?;
+
+        if result.rows_affected() == 0 {
+            return Err(format!("Highlight profile {id} not found"));
+        }
+        Ok(())
+    }
+
+    async fn delete_highlight_profile(&self, id: Uuid) -> DbResult<()> {
+        let result = sqlx::query("DELETE FROM highlight_profiles WHERE id = ?")
+            .bind(id.to_string())
+            .execute(&self.pool)
+            .await
+            .map_err(|e| format!("Failed to delete highlight profile: {e}"))?;
+
+        if result.rows_affected() == 0 {
+            return Err(format!("Highlight profile {id} not found"));
+        }
+        Ok(())
     }
 
     async fn data_fingerprint(&self) -> DbResult<DataFingerprint> {

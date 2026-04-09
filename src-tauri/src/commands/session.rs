@@ -80,6 +80,7 @@ pub async fn session_create(
     tags: String,
     icon: String,
     jump_host_id: Option<String>,
+    highlight_profile_id: Option<String>,
     password: Option<String>,
     key_path: Option<String>,
 ) -> Result<Session, String> {
@@ -99,6 +100,8 @@ pub async fn session_create(
         return Err(format!("Unsupported protocol: {effective_protocol}"));
     }
 
+    let highlight = highlight_profile_id.map(|s| parse_uuid(&s)).transpose()?;
+
     let session = state
         .0
         .create_session(NewSession {
@@ -111,6 +114,7 @@ pub async fn session_create(
             jump_host_id: jump,
             tags,
             icon,
+            highlight_profile_id: highlight,
         })
         .await?;
 
@@ -174,6 +178,7 @@ pub async fn session_update(
     tags: Option<String>,
     icon: Option<String>,
     jump_host_id: Option<Option<String>>,
+    highlight_profile_id: Option<Option<String>>,
     password: Option<String>,
     key_path: Option<String>,
 ) -> Result<(), String> {
@@ -198,6 +203,9 @@ pub async fn session_update(
     let jump = jump_host_id
         .map(|opt| opt.map(|s| parse_uuid(&s)).transpose())
         .transpose()?;
+    let highlight = highlight_profile_id
+        .map(|opt| opt.map(|s| parse_uuid(&s)).transpose())
+        .transpose()?;
 
     state
         .0
@@ -212,6 +220,7 @@ pub async fn session_update(
                 jump_host_id: jump,
                 tags,
                 icon,
+                highlight_profile_id: highlight,
             },
         )
         .await?;
@@ -556,6 +565,7 @@ pub async fn session_connect(
 /// Apply credentials (and optionally a jump host) to all SSH sessions
 /// in a folder and its subfolders. Telnet sessions are skipped.
 /// Returns the number of sessions updated.
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
 pub async fn folder_apply_credentials(
     db: State<'_, DbState>,
@@ -564,7 +574,8 @@ pub async fn folder_apply_credentials(
     username: String,
     auth_method: String,
     credential: String,
-    jump_host_id: Option<Option<String>>,
+    jump_host_id: Option<String>,
+    highlight_profile_id: Option<String>,
 ) -> Result<u32, String> {
     if auth_method != "password" && auth_method != "publickey" {
         return Err(format!("Unsupported auth method: {auth_method}"));
@@ -573,9 +584,10 @@ pub async fn folder_apply_credentials(
     let target_folder = parse_uuid(&folder_id)?;
 
     // Resolve the optional jump host ID once.
-    let jump_host_uuid = jump_host_id
-        .map(|opt| opt.map(|s| parse_uuid(&s)).transpose())
-        .transpose()?;
+    let jump_host_uuid = jump_host_id.map(|s| parse_uuid(&s)).transpose()?;
+
+    // Resolve the optional highlight profile ID once.
+    let highlight_uuid = highlight_profile_id.map(|s| parse_uuid(&s)).transpose()?;
 
     // Collect all folder IDs under the target (inclusive, recursive).
     let all_folders = db.0.list_folders().await?;
@@ -610,15 +622,17 @@ pub async fn folder_apply_credentials(
             continue;
         }
 
-        // Update auth_method (and optionally jump_host_id) on the session.
+        // Update auth_method, jump_host_id, and highlight_profile_id on the
+        // session.  All fields are always applied (this is a bulk-set dialog).
         // Silently skip setting a session as its own jump host.
         let effective_jump = match jump_host_uuid {
-            Some(Some(jid)) if jid == session.id => Some(None),
+            Some(jid) if jid == session.id => None,
             other => other,
         };
         let update = UpdateSession {
             auth_method: Some(auth_method.clone()),
-            jump_host_id: effective_jump,
+            jump_host_id: Some(effective_jump),
+            highlight_profile_id: Some(highlight_uuid),
             ..Default::default()
         };
         if let Err(e) = db.0.update_session(session.id, update).await {

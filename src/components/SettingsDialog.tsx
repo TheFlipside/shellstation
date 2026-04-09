@@ -6,7 +6,17 @@ import { open, save } from "@tauri-apps/plugin-dialog";
 import { useEscapeKey } from "../hooks/useEscapeKey";
 import { useSessionStore } from "../stores/sessionStore";
 import { useSettingsStore } from "../stores/settingsStore";
+import {
+  useHighlightStore,
+  type HighlightProfile,
+  type HighlightRule,
+} from "../stores/highlightStore";
 import { useToastStore } from "../stores/toastStore";
+import { HighlightProfileDialog } from "./HighlightProfileDialog";
+import { ConfirmDialog } from "./ConfirmDialog";
+
+// eslint-disable-next-line @typescript-eslint/no-empty-function
+const noop = (): void => {};
 
 const AVAILABLE_LANGUAGES = [
   { code: "en", label: "English" },
@@ -116,6 +126,65 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
   const [loggingDirty, setLoggingDirty] = useState(false);
   const [loggingSaved, setLoggingSaved] = useState(false);
   const [loggingError, setLoggingError] = useState<string | null>(null);
+
+  // Highlight profiles
+  const highlightProfiles = useHighlightStore((s) => s.profiles);
+  const loadHighlightProfiles = useHighlightStore((s) => s.loadProfiles);
+  const createHighlightProfile = useHighlightStore((s) => s.createProfile);
+  const updateHighlightProfile = useHighlightStore((s) => s.updateProfile);
+  const deleteHighlightProfile = useHighlightStore((s) => s.deleteProfile);
+  const [highlightDialog, setHighlightDialog] = useState<{
+    mode: "create" | "edit";
+    profile?: HighlightProfile;
+  } | null>(null);
+  const [highlightDeleteConfirm, setHighlightDeleteConfirm] = useState<HighlightProfile | null>(
+    null,
+  );
+
+  useEffect(() => {
+    loadHighlightProfiles().catch(noop);
+  }, [loadHighlightProfiles]);
+
+  const handleHighlightSubmit = (name: string, rules: HighlightRule[]): void => {
+    if (highlightDialog?.mode === "create") {
+      createHighlightProfile(name, rules).catch(noop);
+    } else if (highlightDialog?.mode === "edit" && highlightDialog.profile) {
+      updateHighlightProfile(highlightDialog.profile.id, name, rules).catch(noop);
+    }
+    setHighlightDialog(null);
+  };
+
+  const handleImportHighlights = (): void => {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = ".ini";
+    input.style.display = "none";
+    document.body.appendChild(input);
+    input.onchange = async (): Promise<void> => {
+      const file = input.files?.[0];
+      if (!file) return;
+      try {
+        const text = await file.text();
+        const result = await invoke<{ profiles_created: number; total_rules: number }>(
+          "import_securecrt_highlights",
+          { content: text },
+        );
+        await loadHighlightProfiles();
+        useToastStore.getState().addToast(
+          t("highlighting.importSuccess", {
+            count: String(result.profiles_created),
+            rules: String(result.total_rules),
+          }),
+          "success",
+        );
+      } catch (e) {
+        useToastStore.getState().addToast(String(e), "error");
+      } finally {
+        document.body.removeChild(input);
+      }
+    };
+    input.click();
+  };
 
   useEffect(() => {
     invoke<AppConfig>("db_get_config")
@@ -994,6 +1063,57 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
         </div>
         {dbOpResult && <span className="settings-db-success">{dbOpResult}</span>}
 
+        {/* ── Keyword Highlighting ──────────────────────────── */}
+        <h4 className="settings-section-title">{t("highlighting.sectionTitle")}</h4>
+        {highlightProfiles.length === 0 ? (
+          <p className="settings-hint">{t("highlighting.noProfiles")}</p>
+        ) : (
+          <div className="highlight-profiles-list">
+            {highlightProfiles.map((p) => (
+              <div key={p.id} className="highlight-profile-item">
+                <span className="highlight-profile-name">{p.name}</span>
+                <span className="highlight-profile-count">
+                  {p.rules.length} {p.rules.length === 1 ? "rule" : "rules"}
+                </span>
+                <button
+                  type="button"
+                  className="btn-icon"
+                  title={t("common.edit")}
+                  onClick={() => {
+                    setHighlightDialog({ mode: "edit", profile: p });
+                  }}
+                >
+                  {"\u270E"}
+                </button>
+                <button
+                  type="button"
+                  className="btn-icon btn-icon-danger"
+                  title={t("common.delete")}
+                  onClick={() => {
+                    setHighlightDeleteConfirm(p);
+                  }}
+                >
+                  {"\u2715"}
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+        <div className="dialog-field dialog-field-row">
+          <button
+            type="button"
+            className="dialog-btn"
+            onClick={() => {
+              setHighlightDialog({ mode: "create" });
+            }}
+          >
+            {t("highlighting.addProfile")}
+          </button>
+          <button type="button" className="dialog-btn" onClick={handleImportHighlights}>
+            {t("highlighting.importProfile")}
+          </button>
+        </div>
+
         {/* ── Import from External Tools ──────────────────────────── */}
         <h4 className="settings-section-title">{t("settings.importExternal")}</h4>
         <div className="dialog-field dialog-field-row">
@@ -1033,6 +1153,33 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
           </button>
         </div>
       </div>
+      {highlightDialog && (
+        <HighlightProfileDialog
+          title={
+            highlightDialog.mode === "create"
+              ? t("highlighting.addProfile")
+              : t("highlighting.editProfile")
+          }
+          initialName={highlightDialog.profile?.name ?? ""}
+          initialRules={highlightDialog.profile?.rules ?? []}
+          onSubmit={handleHighlightSubmit}
+          onCancel={() => {
+            setHighlightDialog(null);
+          }}
+        />
+      )}
+      {highlightDeleteConfirm && (
+        <ConfirmDialog
+          message={t("highlighting.deleteConfirm", { name: highlightDeleteConfirm.name })}
+          onConfirm={() => {
+            deleteHighlightProfile(highlightDeleteConfirm.id).catch(noop);
+            setHighlightDeleteConfirm(null);
+          }}
+          onCancel={() => {
+            setHighlightDeleteConfirm(null);
+          }}
+        />
+      )}
     </div>
   );
 }

@@ -29,6 +29,7 @@ pub struct Session {
     pub tags: String,
     pub icon: String,
     pub sort_order: i32,
+    pub highlight_profile_id: Option<Uuid>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -42,6 +43,7 @@ pub struct NewSession {
     pub jump_host_id: Option<Uuid>,
     pub tags: String,
     pub icon: String,
+    pub highlight_profile_id: Option<Uuid>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -54,6 +56,7 @@ pub struct UpdateSession {
     pub jump_host_id: Option<Option<Uuid>>,
     pub tags: Option<String>,
     pub icon: Option<String>,
+    pub highlight_profile_id: Option<Option<Uuid>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -106,6 +109,28 @@ impl From<ExportCredential> for Credential {
     }
 }
 
+// ── Highlight Profiles ──────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HighlightProfile {
+    pub id: Uuid,
+    pub name: String,
+    pub rules: String,
+    pub sort_order: i32,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct NewHighlightProfile {
+    pub name: String,
+    pub rules: String,
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub struct UpdateHighlightProfile {
+    pub name: Option<String>,
+    pub rules: Option<String>,
+}
+
 /// Lightweight fingerprint for polling-based change detection.
 /// The frontend compares this string across polls — if it changes,
 /// a full `loadAll()` is triggered.
@@ -120,4 +145,6 @@ pub struct ExportData {
     pub folders: Vec<Folder>,
     pub sessions: Vec<Session>,
     pub credentials: Vec<ExportCredential>,
+    #[serde(default)]
+    pub highlight_profiles: Vec<HighlightProfile>,
 }

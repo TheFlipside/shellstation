@@ -166,6 +166,7 @@ async fn persist_import(
                 jump_host_id: None,
                 tags: String::new(),
                 icon: String::new(),
+                highlight_profile_id: None,
             })
             .await
         {

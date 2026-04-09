@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useEscapeKey } from "../hooks/useEscapeKey";
 import type { Session } from "../stores/sessionStore";
+import { useHighlightStore } from "../stores/highlightStore";
 
 interface FolderCredentialDialogProps {
   folderName: string;
@@ -12,6 +13,7 @@ interface FolderCredentialDialogProps {
     authMethod: string,
     credential: string,
     jumpHostId: string | null,
+    highlightProfileId: string | null,
   ) => void;
   onCancel: () => void;
 }
@@ -29,6 +31,8 @@ export function FolderCredentialDialog({
   const [password, setPassword] = useState("");
   const [keyPath, setKeyPath] = useState("");
   const [jumpHostId, setJumpHostId] = useState("");
+  const [highlightProfileId, setHighlightProfileId] = useState("");
+  const highlightProfiles = useHighlightStore((s) => s.profiles);
 
   // Clear credentials from state when the dialog unmounts.
   useEffect(() => {
@@ -48,7 +52,13 @@ export function FolderCredentialDialog({
     if (!username.trim()) return;
     const credential = authMethod === "password" ? password : keyPath;
     if (!credential.trim()) return;
-    onSubmit(username.trim(), authMethod, credential, jumpHostId || null);
+    onSubmit(
+      username.trim(),
+      authMethod,
+      credential,
+      jumpHostId || null,
+      highlightProfileId || null,
+    );
   };
 
   return (
@@ -155,6 +165,23 @@ export function FolderCredentialDialog({
               {jumpHostCandidates.map((s) => (
                 <option key={s.id} value={s.id}>
                   {s.name} ({s.hostname})
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="dialog-field">
+            <label htmlFor="fcd-highlight">{t("folderCredential.highlightProfileLabel")}</label>
+            <select
+              id="fcd-highlight"
+              value={highlightProfileId}
+              onChange={(e) => {
+                setHighlightProfileId(e.target.value);
+              }}
+            >
+              <option value="">{t("session.highlightProfileNone")}</option>
+              {highlightProfiles.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}
                 </option>
               ))}
             </select>

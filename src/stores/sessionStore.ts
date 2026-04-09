@@ -23,6 +23,7 @@ export interface Session {
   tags: string;
   icon: string;
   sort_order: number;
+  highlight_profile_id: string | null;
 }
 
 interface SessionState {
@@ -59,6 +60,7 @@ interface SessionState {
     authMethod: string,
     credential: string,
     jumpHostId?: string | null,
+    highlightProfileId?: string | null,
   ) => Promise<number>;
 
   // Reordering
@@ -89,6 +91,7 @@ export interface CreateSessionParams {
   tags: string;
   icon: string;
   jumpHostId?: string;
+  highlightProfileId?: string;
   password?: string;
   keyPath?: string;
 }
@@ -103,6 +106,7 @@ export interface UpdateSessionParams {
   tags?: string;
   icon?: string;
   jumpHostId?: string | null;
+  highlightProfileId?: string | null;
   password?: string;
   keyPath?: string;
 }
@@ -194,6 +198,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       tags: params.tags,
       icon: params.icon,
       jumpHostId: params.jumpHostId ?? null,
+      highlightProfileId: params.highlightProfileId ?? null,
       password: params.password ?? null,
       keyPath: params.keyPath ?? null,
     });
@@ -212,6 +217,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       tags: params.tags ?? null,
       icon: params.icon ?? null,
       jumpHostId: params.jumpHostId !== undefined ? params.jumpHostId : null,
+      highlightProfileId:
+        params.highlightProfileId !== undefined ? params.highlightProfileId : null,
       password: params.password ?? null,
       keyPath: params.keyPath ?? null,
     });
@@ -244,13 +251,21 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
   // ── Bulk operations ─────────────────────────────────────────────────
 
-  folderApplyCredentials: async (folderId, username, authMethod, credential, jumpHostId) => {
+  folderApplyCredentials: async (
+    folderId,
+    username,
+    authMethod,
+    credential,
+    jumpHostId,
+    highlightProfileId,
+  ) => {
     const count = await invoke<number>("folder_apply_credentials", {
       folderId,
       username,
       authMethod,
       credential,
-      jumpHostId: jumpHostId !== undefined ? jumpHostId : null,
+      jumpHostId: jumpHostId ?? null,
+      highlightProfileId: highlightProfileId ?? null,
     });
     await get().loadAll();
     return count;

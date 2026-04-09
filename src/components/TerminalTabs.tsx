@@ -424,6 +424,7 @@ export function TerminalTabs({ uiScale }: TerminalTabsProps): React.JSX.Element 
               key={tab.id}
               sessionId={tab.id}
               sessionType={tab.type}
+              sessionDbId={tab.sessionDbId}
               visible={tab.id === activeTabId}
               onExit={() => {
                 markTabExited(tab.id);

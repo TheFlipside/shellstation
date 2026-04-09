@@ -19,7 +19,8 @@
     "edit": "Bearbeiten",
     "clone": "Sitzung klonen",
     "sortAlphabetically": "Alphabetisch sortieren",
-    "setCredentials": "Zugangsdaten setzen\u2026"
+    "setCredentials": "Zugangsdaten setzen\u2026",
+    "editSessions": "Sitzungen bearbeiten\u2026"
   },
   "folder": {
     "deleteWithSessions": "Ordner und seine {{count}} Sitzung(en) l\u00f6schen?",
@@ -30,10 +31,11 @@
     "namePlaceholder": "Ordnername"
   },
   "folderCredential": {
-    "title": "Zugangsdaten setzen \u2014 {{name}}",
+    "title": "Sitzungen bearbeiten \u2014 {{name}}",
     "info": "Gilt f\u00fcr alle SSH-Sitzungen in diesem Ordner und Unterordnern. Telnet-Sitzungen sind ausgenommen.",
     "jumpHostLabel": "Jump-Host (optional)",
-    "success": "Zugangsdaten f\u00fcr {{count}} Sitzung(en) aktualisiert"
+    "highlightProfileLabel": "Hervorhebungsprofil (optional)",
+    "success": "{{count}} Sitzung(en) aktualisiert"
   },
   "session": {
     "deleteConfirm": "Sitzung \"{{name}}\" l\u00f6schen?",
@@ -76,7 +78,9 @@
     "icon_printer": "Drucker",
     "icon_lock": "VPN / Sicher",
     "tagsLabel": "Tags",
-    "tagsPlaceholder": "prod, eu, web (kommagetrennt)"
+    "tagsPlaceholder": "prod, eu, web (kommagetrennt)",
+    "highlightProfileLabel": "Hervorhebungsprofil",
+    "highlightProfileNone": "Keines"
   },
   "dialog": {
     "cancel": "Abbrechen",
@@ -242,5 +246,29 @@
     "loggingFilenameHint": "Platzhalter: {name} = Sitzungsname, {mm} = Minute, {hh} = Stunde, {dd} = Tag, {MM} = Monat, {yy} = Jahr",
     "loggingSave": "Protokolleinstellungen speichern",
     "loggingSaved": "Protokolleinstellungen gespeichert."
+  },
+  "highlighting": {
+    "sectionTitle": "Schlüsselwort-Hervorhebung",
+    "addProfile": "Profil hinzufügen",
+    "editProfile": "Profil bearbeiten",
+    "noProfiles": "Keine Hervorhebungsprofile vorhanden.",
+    "deleteConfirm": "Hervorhebungsprofil \"{{name}}\" löschen?",
+    "profileNameLabel": "Profilname",
+    "profileNamePlaceholder": "z.\u00a0B. Cisco IOS",
+    "rulesLabel": "Regeln",
+    "patternLabel": "Regex-Muster",
+    "colorLabel": "Farbe",
+    "caseSensitiveLabel": "Groß-/Kleinschreibung",
+    "boldLabel": "Fett",
+    "addRule": "Regel hinzufügen",
+    "importSecurecrt": "SecureCRT-Hervorhebungen importieren",
+    "importProfile": "Profil importieren",
+    "importSuccess": "{{count}} Profil(e) mit {{rules}} Regel(n) importiert."
+  },
+  "common": {
+    "edit": "Bearbeiten",
+    "delete": "Löschen",
+    "cancel": "Abbrechen",
+    "save": "Speichern"
   }
 }

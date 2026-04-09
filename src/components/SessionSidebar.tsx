@@ -24,6 +24,7 @@ import { SessionDialog, type SessionFormData } from "./SessionDialog";
 import { FolderIcon, SessionIconComponent } from "./SessionIcons";
 import { SettingsDialog } from "./SettingsDialog";
 import { useSettingsStore } from "../stores/settingsStore";
+import { useHighlightStore } from "../stores/highlightStore";
 
 // eslint-disable-next-line @typescript-eslint/no-empty-function
 const noop = (): void => {};
@@ -120,9 +121,12 @@ export function SessionSidebar(): React.JSX.Element {
 
   const { autoRefreshInterval } = useSettingsStore();
 
+  const loadHighlightProfiles = useHighlightStore((s) => s.loadProfiles);
+
   useEffect(() => {
     loadAll().catch(noop);
-  }, [loadAll]);
+    loadHighlightProfiles().catch(noop);
+  }, [loadAll, loadHighlightProfiles]);
 
   // Auto-refresh polling when interval is set (for multi-user PostgreSQL setups).
   // Polls a lightweight fingerprint; only fetches full data when it changes.
@@ -161,6 +165,7 @@ export function SessionSidebar(): React.JSX.Element {
             tags: tagsToDisplay(session.tags),
             icon: session.icon,
             jumpHostId: session.jump_host_id,
+            highlightProfileId: session.highlight_profile_id,
             password: session.auth_method === "password" ? secret : "",
             keyPath: session.auth_method === "publickey" ? secret : "",
           },
@@ -462,7 +467,7 @@ export function SessionSidebar(): React.JSX.Element {
           },
         },
         {
-          label: t("contextMenu.setCredentials"),
+          label: t("contextMenu.editSessions"),
           onClick: () => {
             setCredentialFolder({ id: ctx.id, name: folder?.name ?? "" });
           },
@@ -532,6 +537,7 @@ export function SessionSidebar(): React.JSX.Element {
                   tags: tagsToDisplay(session.tags),
                   icon: session.icon,
                   jumpHostId: session.jump_host_id,
+                  highlightProfileId: session.highlight_profile_id,
                   password: session.auth_method === "password" ? secret : "",
                   keyPath: session.auth_method === "publickey" ? secret : "",
                 },
@@ -610,6 +616,7 @@ export function SessionSidebar(): React.JSX.Element {
         tags: tagsJson,
         icon: data.icon,
         jumpHostId: data.jumpHostId ?? undefined,
+        highlightProfileId: data.highlightProfileId ?? undefined,
         password: effectivePassword,
         keyPath: effectiveKeyPath,
       }).catch(noop);
@@ -627,6 +634,7 @@ export function SessionSidebar(): React.JSX.Element {
           tags: tagsJson,
           icon: data.icon,
           jumpHostId: data.jumpHostId,
+          highlightProfileId: data.highlightProfileId,
           password: effectivePassword,
           keyPath: effectiveKeyPath,
         });
@@ -837,7 +845,7 @@ export function SessionSidebar(): React.JSX.Element {
         <FolderCredentialDialog
           folderName={credentialFolder.name}
           sessions={sessions}
-          onSubmit={(username, authMethod, credential, jumpHostId) => {
+          onSubmit={(username, authMethod, credential, jumpHostId, highlightProfileId) => {
             store
               .folderApplyCredentials(
                 credentialFolder.id,
@@ -845,6 +853,7 @@ export function SessionSidebar(): React.JSX.Element {
                 authMethod,
                 credential,
                 jumpHostId,
+                highlightProfileId,
               )
               .then((count) => {
                 useToastStore

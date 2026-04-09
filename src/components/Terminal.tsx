@@ -8,11 +8,15 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { SessionType } from "../stores/terminalStore";
 import { useSettingsStore } from "../stores/settingsStore";
+import { useSessionStore } from "../stores/sessionStore";
+import { useHighlightStore } from "../stores/highlightStore";
+import { HighlightEngine } from "../highlightEngine";
 import { useTheme, type ResolvedTheme } from "../hooks/useTheme";
 
 interface TerminalProps {
   sessionId: string;
   sessionType: SessionType;
+  sessionDbId?: string;
   visible: boolean;
   onExit?: () => void;
 }
@@ -105,12 +109,14 @@ const noop = (): void => {};
 export function Terminal({
   sessionId,
   sessionType,
+  sessionDbId,
   visible,
   onExit,
 }: TerminalProps): React.JSX.Element {
   const containerRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<XTerm | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
+  const highlightRef = useRef<HighlightEngine | null>(null);
   const onExitRef = useRef(onExit);
   onExitRef.current = onExit;
 
@@ -135,6 +141,22 @@ export function Terminal({
   localZoomOffsetRef.current = localZoomOffset;
   const baseFontSizeRef = useRef(terminalFontSize);
   baseFontSizeRef.current = terminalFontSize;
+
+  // Build highlight engine from the session's profile assignment.
+  const session = useSessionStore((s) =>
+    sessionDbId ? s.sessions.find((sess) => sess.id === sessionDbId) : undefined,
+  );
+  const highlightProfileId = session?.highlight_profile_id ?? null;
+  const getProfileById = useHighlightStore((s) => s.getProfileById);
+
+  useEffect(() => {
+    if (highlightProfileId) {
+      const profile = getProfileById(highlightProfileId);
+      highlightRef.current = profile ? new HighlightEngine(profile.rules) : null;
+    } else {
+      highlightRef.current = null;
+    }
+  }, [highlightProfileId, getProfileById]);
 
   const writeCmd =
     sessionType === "ssh" ? "ssh_write" : sessionType === "telnet" ? "telnet_write" : "pty_write";
@@ -285,7 +307,8 @@ export function Terminal({
       outputUnlisten = await listen<string>(`terminal-output-${sessionId}`, (event) => {
         const bytes = base64Decode(event.payload);
         const text = new TextDecoder().decode(bytes);
-        term.write(text);
+        const highlighted = highlightRef.current ? highlightRef.current.process(text) : text;
+        term.write(highlighted);
       });
 
       exitUnlisten = await listen(`terminal-exit-${sessionId}`, () => {

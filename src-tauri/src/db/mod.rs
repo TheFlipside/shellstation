@@ -7,7 +7,10 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use uuid::Uuid;
 
-use models::{Credential, DataFingerprint, Folder, NewFolder, NewSession, Session, UpdateSession};
+use models::{
+    Credential, DataFingerprint, Folder, HighlightProfile, NewFolder, NewHighlightProfile,
+    NewSession, Session, UpdateHighlightProfile, UpdateSession,
+};
 
 pub type DbResult<T> = Result<T, String>;
 
@@ -65,6 +68,21 @@ pub trait DatabaseProvider: Send + Sync {
     #[allow(dead_code)]
     async fn delete_credential(&self, session_id: Uuid) -> DbResult<()>;
     async fn list_all_credentials(&self) -> DbResult<Vec<Credential>>;
+
+    // ── Highlight Profiles ────────────────────────────────────────────────
+
+    async fn create_highlight_profile(
+        &self,
+        profile: NewHighlightProfile,
+    ) -> DbResult<HighlightProfile>;
+    async fn list_highlight_profiles(&self) -> DbResult<Vec<HighlightProfile>>;
+    async fn get_highlight_profile(&self, id: Uuid) -> DbResult<Option<HighlightProfile>>;
+    async fn update_highlight_profile(
+        &self,
+        id: Uuid,
+        update: UpdateHighlightProfile,
+    ) -> DbResult<()>;
+    async fn delete_highlight_profile(&self, id: Uuid) -> DbResult<()>;
 
     /// Return a lightweight fingerprint derived from row counts and a hash of
     /// all folder/session IDs and names.  The frontend polls this to decide

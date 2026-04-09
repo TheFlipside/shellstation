@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useEscapeKey } from "../hooks/useEscapeKey";
 import type { Folder, Session } from "../stores/sessionStore";
+import { useHighlightStore } from "../stores/highlightStore";
 import { SESSION_ICON_KEYS, SessionIconComponent } from "./SessionIcons";
 
 export interface SessionFormData {
@@ -16,6 +17,7 @@ export interface SessionFormData {
   tags: string;
   icon: string;
   jumpHostId: string | null;
+  highlightProfileId: string | null;
   password: string;
   keyPath: string;
 }
@@ -55,6 +57,8 @@ export function SessionDialog({
   const [tags, setTags] = useState(initial?.tags ?? "");
   const [icon, setIcon] = useState(initial?.icon ?? "desktop");
   const [jumpHostId, setJumpHostId] = useState(initial?.jumpHostId ?? "");
+  const [highlightProfileId, setHighlightProfileId] = useState(initial?.highlightProfileId ?? "");
+  const highlightProfiles = useHighlightStore((s) => s.profiles);
   const [error, setError] = useState("");
 
   // Clear credentials from state when the dialog unmounts.
@@ -86,6 +90,7 @@ export function SessionDialog({
       tags,
       icon,
       jumpHostId: protocol === "telnet" ? null : jumpHostId || null,
+      highlightProfileId: highlightProfileId || null,
       password,
       keyPath,
     });
@@ -297,6 +302,23 @@ export function SessionDialog({
               </div>
             </>
           )}
+          <div className="dialog-field">
+            <label htmlFor="sd-highlight">{t("session.highlightProfileLabel")}</label>
+            <select
+              id="sd-highlight"
+              value={highlightProfileId}
+              onChange={(e) => {
+                setHighlightProfileId(e.target.value);
+              }}
+            >
+              <option value="">{t("session.highlightProfileNone")}</option>
+              {highlightProfiles.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}
+                </option>
+              ))}
+            </select>
+          </div>
           <div className="dialog-field">
             <label htmlFor="sd-tags">{t("session.tagsLabel")}</label>
             <input

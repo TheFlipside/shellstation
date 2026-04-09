@@ -1,4 +1,5 @@
 mod database;
+mod highlight;
 mod logging;
 mod pty;
 mod session;
@@ -6,6 +7,7 @@ mod ssh;
 mod telnet;
 
 pub use database::*;
+pub use highlight::*;
 pub use logging::*;
 pub use pty::*;
 pub use session::*;

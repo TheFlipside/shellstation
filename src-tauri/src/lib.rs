@@ -5,6 +5,7 @@ mod config;
 #[allow(dead_code)]
 mod credentials;
 mod db;
+mod highlight;
 mod import;
 mod pty;
 mod session_logger;
@@ -451,10 +452,6 @@ pub fn run() {
                             }));
                         }
                         Err(e) => {
-                            // Log the raw error for debugging (visible only in
-                            // console/log file, not shown to the user).
-                            //tracing::error!("PostgreSQL connection failed (raw): {e}");
-                            //let safe_msg = sanitize_pg_error(&e.to_string());
                             // Sanitize before logging — raw errors may contain
                             // connection strings or credentials.
                             let safe_msg = sanitize_pg_error(&e.to_string());
@@ -540,6 +537,13 @@ pub fn run() {
             // Import from external tools
             import::import_mremoteng,
             import::import_securecrt,
+            // Highlight profiles
+            commands::highlight_profile_create,
+            commands::highlight_profile_list,
+            commands::highlight_profile_get,
+            commands::highlight_profile_update,
+            commands::highlight_profile_delete,
+            commands::import_securecrt_highlights,
             // Session logging
             commands::logging_get_config,
             commands::logging_save_config,
