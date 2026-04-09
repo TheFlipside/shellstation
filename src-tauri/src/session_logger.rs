@@ -7,10 +7,20 @@ use std::sync::{Arc, Mutex};
 use chrono::{Datelike, Local, Timelike};
 use tracing::{info, warn};
 
+/// A log entry is either waiting for its first write (Pending) or actively
+/// writing to a file (Active).  Pending entries never touch the filesystem,
+/// so failed connections leave no empty log files behind.
+enum LogEntry {
+    /// Path validated and generated, but no file created yet.
+    Pending(PathBuf),
+    /// File opened on first write.
+    Active(File),
+}
+
 /// Manages log file handles for active terminal sessions.
 pub struct SessionLogManager {
-    /// Map of connection_id -> open log file handle.
-    handles: HashMap<String, File>,
+    /// Map of connection_id -> log entry (pending or active file handle).
+    entries: HashMap<String, LogEntry>,
     pub enabled: bool,
     pub log_dir: PathBuf,
     pub filename_format: String,
@@ -19,14 +29,18 @@ pub struct SessionLogManager {
 impl SessionLogManager {
     pub fn new(enabled: bool, log_dir: PathBuf, filename_format: String) -> Self {
         Self {
-            handles: HashMap::new(),
+            entries: HashMap::new(),
             enabled,
             log_dir,
             filename_format,
         }
     }
 
-    /// Open a log file for a new session connection.
+    /// Prepare a log for a new session connection.
+    ///
+    /// Validates the path and stores it as [`LogEntry::Pending`].  The actual
+    /// file is created lazily on the first [`write_log`] call, so failed
+    /// connections never leave empty log files on disk.
     pub fn open_log(&mut self, connection_id: &str, session_name: &str) -> Result<(), String> {
         if !self.enabled {
             return Ok(());
@@ -60,18 +74,54 @@ impl SessionLogManager {
             return Err("Log file path escapes the configured log directory".to_string());
         }
 
+        info!(
+            connection_id = %connection_id,
+            path = %path.display(),
+            "Session log prepared (file created on first write)"
+        );
+        self.entries
+            .insert(connection_id.to_string(), LogEntry::Pending(path));
+        Ok(())
+    }
+
+    /// Promote a [`LogEntry::Pending`] to [`LogEntry::Active`] by creating the
+    /// file on disk.  Returns a mutable reference to the opened file.
+    fn activate_log(&mut self, connection_id: &str) -> Result<&mut File, String> {
+        // Take the entry out so we can replace it.
+        let entry = self
+            .entries
+            .remove(connection_id)
+            .ok_or_else(|| format!("No log entry for {connection_id}"))?;
+
+        let path = match entry {
+            LogEntry::Pending(p) => p,
+            LogEntry::Active(file) => {
+                // Already active — put it back and return.
+                self.entries
+                    .insert(connection_id.to_string(), LogEntry::Active(file));
+                if let Some(LogEntry::Active(ref mut f)) = self.entries.get_mut(connection_id) {
+                    return Ok(f);
+                }
+                unreachable!();
+            }
+        };
+
         let file = OpenOptions::new()
             .create(true)
             .append(true)
             .open(&path)
-            .map_err(|e| format!("Failed to open log file {}: {e}", path.display()))?;
+            .map_err(|e| {
+                // Re-insert as Pending so close_log can still clean up.
+                self.entries
+                    .insert(connection_id.to_string(), LogEntry::Pending(path.clone()));
+                format!("Failed to open log file {}: {e}", path.display())
+            })?;
 
         // Set restrictive permissions on Unix (owner read/write only).
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
             fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).map_err(|e| {
-                // Remove the file if we can't secure it.
                 let _ = fs::remove_file(&path);
                 format!("Failed to set log file permissions: {e}")
             })?;
@@ -80,37 +130,84 @@ impl SessionLogManager {
         info!(
             connection_id = %connection_id,
             path = %path.display(),
-            "Session log opened"
+            "Session log file created"
         );
-        self.handles.insert(connection_id.to_string(), file);
-        Ok(())
+        self.entries
+            .insert(connection_id.to_string(), LogEntry::Active(file));
+
+        match self.entries.get_mut(connection_id) {
+            Some(LogEntry::Active(ref mut f)) => Ok(f),
+            _ => unreachable!(),
+        }
     }
 
     /// Write terminal output to the log file, stripping ANSI escape sequences
     /// so the log contains only readable text.
+    ///
+    /// Creates the log file on the first call (lazy open).
     pub fn write_log(&mut self, connection_id: &str, data: &[u8]) {
-        if let Some(file) = self.handles.get_mut(connection_id) {
-            let clean = strip_ansi(data);
-            if clean.is_empty() {
-                return;
-            }
-            if let Err(e) = file.write_all(&clean) {
+        if !self.entries.contains_key(connection_id) {
+            return;
+        }
+
+        let clean = strip_ansi(data);
+        if clean.is_empty() {
+            return;
+        }
+
+        // Promote Pending → Active on first real data.
+        let file = match self.activate_log(connection_id) {
+            Ok(f) => f,
+            Err(e) => {
                 warn!(
                     connection_id = %connection_id,
                     error = %e,
-                    "Failed to write session log"
+                    "Failed to activate session log"
                 );
+                return;
             }
+        };
+
+        if let Err(e) = file.write_all(&clean) {
+            warn!(
+                connection_id = %connection_id,
+                error = %e,
+                "Failed to write session log"
+            );
+        }
+        // Flush immediately so data is visible on disk (important on Windows).
+        if let Err(e) = file.flush() {
+            warn!(
+                connection_id = %connection_id,
+                error = %e,
+                "Failed to flush session log"
+            );
         }
     }
 
     /// Close and flush the log file for a disconnected session.
+    ///
+    /// If the entry was still [`LogEntry::Pending`] (no data ever written),
+    /// no file exists on disk and nothing needs to be cleaned up.
     pub fn close_log(&mut self, connection_id: &str) {
-        if let Some(mut file) = self.handles.remove(connection_id) {
-            if let Err(e) = file.flush() {
-                warn!(connection_id = %connection_id, error = %e, "Failed to flush session log");
+        match self.entries.remove(connection_id) {
+            Some(LogEntry::Active(mut file)) => {
+                if let Err(e) = file.flush() {
+                    warn!(
+                        connection_id = %connection_id,
+                        error = %e,
+                        "Failed to flush session log"
+                    );
+                }
+                info!(connection_id = %connection_id, "Session log closed");
             }
-            info!(connection_id = %connection_id, "Session log closed");
+            Some(LogEntry::Pending(_)) => {
+                info!(
+                    connection_id = %connection_id,
+                    "Session log closed (no data written, no file created)"
+                );
+            }
+            None => {}
         }
     }
 
@@ -234,8 +331,14 @@ fn strip_ansi(data: &[u8]) -> Vec<u8> {
                 }
             },
             StripState::Csi => {
-                // Final byte ends the CSI sequence.
-                if (0x40..=0x7E).contains(&byte) {
+                if byte == 0x1B {
+                    // ESC interrupts the current CSI sequence (ECMA-48 §5.4).
+                    state = StripState::Escape;
+                } else if byte == b'\n' || byte == b'\r' || byte == b'\t' {
+                    // C0 controls are "executed" even mid-sequence (ECMA-48).
+                    out.push(byte);
+                } else if (0x40..=0x7E).contains(&byte) {
+                    // Final byte ends the CSI sequence.
                     state = StripState::Normal;
                 }
                 // Parameter bytes (0x30-0x3F) and intermediate bytes (0x20-0x2F)
@@ -247,6 +350,10 @@ fn strip_ansi(data: &[u8]) -> Vec<u8> {
                     state = StripState::Normal;
                 } else if byte == 0x1B {
                     state = StripState::OscEscape;
+                } else if byte == b'\n' {
+                    // Newline in an unterminated OSC — reset parser.
+                    state = StripState::Normal;
+                    out.push(byte);
                 }
                 // All other bytes inside OSC are consumed.
             }
