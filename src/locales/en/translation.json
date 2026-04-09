@@ -148,6 +148,7 @@
     "moveRight": "Move Right",
     "delete": "Delete Button",
     "deleteConfirm": "Delete this command button?",
+    "sendToAll": "Send to All Sessions",
     "show": "Show command bar",
     "hide": "Hide command bar"
   },

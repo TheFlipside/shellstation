@@ -148,6 +148,7 @@
     "moveRight": "Nach rechts",
     "delete": "L\u00f6schen",
     "deleteConfirm": "Diese Befehlsschaltfl\u00e4che l\u00f6schen?",
+    "sendToAll": "An alle Sitzungen senden",
     "show": "Befehlsleiste einblenden",
     "hide": "Befehlsleiste ausblenden"
   },

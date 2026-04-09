@@ -171,10 +171,33 @@ export function CommandBar({ uiScale }: CommandBarProps): React.JSX.Element {
     [dialogState, addCommandButton, updateCommandButton],
   );
 
+  const handleSendToAll = useCallback((btn: CommandButton) => {
+    const { tabs } = useTerminalStore.getState();
+    const alive = tabs.filter((tb) => !tb.exited);
+    if (alive.length === 0) return;
+    for (const tab of alive) {
+      executeCommand(btn.command, tab.id, tab.type).catch(noop);
+    }
+    const termEl = document.querySelector<HTMLElement>(
+      ".terminal-instance:not(.terminal-instance-hidden) .xterm-helper-textarea",
+    );
+    termEl?.focus();
+  }, []);
+
   const getContextItems = useCallback(
     (buttonId: string): ContextMenuItem[] => {
       const index = commandButtons.findIndex((b) => b.id === buttonId);
+      const { tabs } = useTerminalStore.getState();
+      const aliveCount = tabs.filter((tb) => !tb.exited).length;
       return [
+        {
+          label: t("commandBar.sendToAll"),
+          disabled: aliveCount < 2,
+          onClick: () => {
+            const btn = commandButtons.find((b) => b.id === buttonId);
+            if (btn) handleSendToAll(btn);
+          },
+        },
         {
           label: t("commandBar.edit"),
           onClick: () => {
@@ -227,7 +250,7 @@ export function CommandBar({ uiScale }: CommandBarProps): React.JSX.Element {
         },
       ];
     },
-    [commandButtons, t, reorderCommandButtons],
+    [commandButtons, t, reorderCommandButtons, handleSendToAll],
   );
 
   return (
