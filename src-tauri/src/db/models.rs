@@ -59,6 +59,8 @@ pub struct UpdateSession {
     pub highlight_profile_id: Option<Option<Uuid>>,
 }
 
+/// Credential metadata stored in the database. The actual secret (password or
+/// key path) is stored in the OS keychain via `keychain_ref`, never in the DB.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Credential {
     pub id: Uuid,
@@ -66,47 +68,15 @@ pub struct Credential {
     pub username: String,
     pub auth_type: String,
     pub keychain_ref: String,
-    /// The actual secret (password or key path). Stored in DB for now;
-    /// will migrate to OS keychain once platform backends are sorted.
-    #[serde(skip_serializing)]
-    pub secret: String,
 }
 
-/// Credential with secret included in serialization, for export/import.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ExportCredential {
-    pub id: Uuid,
-    pub session_id: Uuid,
+/// Response sent to the frontend when it needs to display/edit a credential.
+/// Includes the secret retrieved from the OS keychain.
+#[derive(Debug, Clone, Serialize)]
+pub struct CredentialResponse {
     pub username: String,
     pub auth_type: String,
-    pub keychain_ref: String,
     pub secret: String,
-}
-
-impl From<Credential> for ExportCredential {
-    fn from(c: Credential) -> Self {
-        Self {
-            id: c.id,
-            session_id: c.session_id,
-            username: c.username,
-            auth_type: c.auth_type,
-            keychain_ref: c.keychain_ref,
-            secret: c.secret,
-        }
-    }
-}
-
-impl From<ExportCredential> for Credential {
-    fn from(c: ExportCredential) -> Self {
-        Self {
-            id: c.id,
-            session_id: c.session_id,
-            username: c.username,
-            auth_type: c.auth_type,
-            keychain_ref: c.keychain_ref,
-            secret: c.secret,
-        }
-    }
 }
 
 // ── Highlight Profiles ──────────────────────────────────────────────────
@@ -144,7 +114,7 @@ pub struct DataFingerprint {
 pub struct ExportData {
     pub folders: Vec<Folder>,
     pub sessions: Vec<Session>,
-    pub credentials: Vec<ExportCredential>,
+    pub credentials: Vec<Credential>,
     #[serde(default)]
     pub highlight_profiles: Vec<HighlightProfile>,
 }

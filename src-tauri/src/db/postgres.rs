@@ -76,7 +76,6 @@ fn row_to_credential(row: &PgRow) -> DbResult<Credential> {
         username: row.get("username"),
         auth_type: row.get("auth_type"),
         keychain_ref: row.get("keychain_ref"),
-        secret: row.get("secret"),
     })
 }
 
@@ -640,20 +639,18 @@ impl DatabaseProvider for PostgresProvider {
 
     async fn upsert_credential(&self, cred: Credential) -> DbResult<()> {
         sqlx::query(
-            "INSERT INTO credentials (id, session_id, username, auth_type, keychain_ref, secret) \
-             VALUES ($1, $2, $3, $4, $5, $6) \
+            "INSERT INTO credentials (id, session_id, username, auth_type, keychain_ref) \
+             VALUES ($1, $2, $3, $4, $5) \
              ON CONFLICT(session_id) DO UPDATE SET \
                username = EXCLUDED.username, \
                auth_type = EXCLUDED.auth_type, \
-               keychain_ref = EXCLUDED.keychain_ref, \
-               secret = EXCLUDED.secret",
+               keychain_ref = EXCLUDED.keychain_ref",
         )
         .bind(cred.id.to_string())
         .bind(cred.session_id.to_string())
         .bind(&cred.username)
         .bind(&cred.auth_type)
         .bind(&cred.keychain_ref)
-        .bind(&cred.secret)
         .execute(&self.pool)
         .await
         .map_err(|e| format!("Failed to upsert credential: {e}"))?;
@@ -663,7 +660,7 @@ impl DatabaseProvider for PostgresProvider {
 
     async fn get_credential(&self, session_id: Uuid) -> DbResult<Option<Credential>> {
         let row = sqlx::query(
-            "SELECT id, session_id, username, auth_type, keychain_ref, secret FROM credentials WHERE session_id = $1",
+            "SELECT id, session_id, username, auth_type, keychain_ref FROM credentials WHERE session_id = $1",
         )
         .bind(session_id.to_string())
         .fetch_optional(&self.pool)
@@ -688,7 +685,7 @@ impl DatabaseProvider for PostgresProvider {
 
     async fn list_all_credentials(&self) -> DbResult<Vec<Credential>> {
         let rows = sqlx::query(
-            "SELECT id, session_id, username, auth_type, keychain_ref, secret FROM credentials ORDER BY session_id",
+            "SELECT id, session_id, username, auth_type, keychain_ref FROM credentials ORDER BY session_id",
         )
         .fetch_all(&self.pool)
         .await

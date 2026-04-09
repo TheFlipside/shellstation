@@ -6,7 +6,7 @@ use uuid::Uuid;
 use zeroize::Zeroizing;
 
 use crate::db::models::{
-    Credential, DataFingerprint, ExportCredential, Folder, NewFolder, NewSession, Session,
+    Credential, CredentialResponse, DataFingerprint, Folder, NewFolder, NewSession, Session,
     UpdateSession,
 };
 use crate::db::{CredentialDbState, DbState};
@@ -24,6 +24,12 @@ pub async fn folder_create(
     name: String,
     parent_id: Option<String>,
 ) -> Result<Folder, String> {
+    if name.is_empty() || name.len() > super::MAX_NAME_LEN {
+        return Err(format!(
+            "Folder name must be 1–{} characters",
+            super::MAX_NAME_LEN
+        ));
+    }
     let parent = parent_id.map(|s| parse_uuid(&s)).transpose()?;
     state
         .0
@@ -45,6 +51,12 @@ pub async fn folder_rename(
     id: String,
     name: String,
 ) -> Result<(), String> {
+    if name.is_empty() || name.len() > super::MAX_NAME_LEN {
+        return Err(format!(
+            "Folder name must be 1–{} characters",
+            super::MAX_NAME_LEN
+        ));
+    }
     state.0.rename_folder(parse_uuid(&id)?, &name).await
 }
 
@@ -92,6 +104,12 @@ pub async fn session_create(
             super::MAX_USERNAME_LEN
         ));
     }
+    if icon.len() > super::MAX_ICON_LEN {
+        return Err(format!(
+            "Icon too long (max {} characters)",
+            super::MAX_ICON_LEN
+        ));
+    }
     let folder = parse_uuid(&folder_id)?;
     let jump = jump_host_id.map(|s| parse_uuid(&s)).transpose()?;
 
@@ -118,14 +136,14 @@ pub async fn session_create(
         })
         .await?;
 
-    // Store credential (including username) locally — never in the shared
-    // central DB. Credential failure must not block session creation.
+    // Store credential metadata locally, secret in OS keychain.
     let secret = match auth_method.as_str() {
         "password" => password.unwrap_or_default(),
         "publickey" => key_path.unwrap_or_default(),
         _ => String::new(),
     };
     let keychain_ref = format!("session-{}", session.id);
+
     if let Err(e) = cred_db
         .0
         .upsert_credential(Credential {
@@ -133,12 +151,17 @@ pub async fn session_create(
             session_id: session.id,
             username,
             auth_type: auth_method,
-            keychain_ref,
-            secret,
+            keychain_ref: keychain_ref.clone(),
         })
         .await
     {
         tracing::error!(session_id = %session.id, "credential upsert failed: {e}");
+    }
+
+    if !secret.is_empty() {
+        if let Err(e) = crate::credentials::store(&keychain_ref, &secret) {
+            tracing::error!(session_id = %session.id, "keychain store failed: {e}");
+        }
     }
 
     Ok(session)
@@ -153,9 +176,16 @@ pub async fn session_get(state: State<'_, DbState>, id: String) -> Result<Option
 pub async fn credential_get(
     cred_db: State<'_, CredentialDbState>,
     session_id: String,
-) -> Result<Option<ExportCredential>, String> {
+) -> Result<Option<CredentialResponse>, String> {
     let cred = cred_db.0.get_credential(parse_uuid(&session_id)?).await?;
-    Ok(cred.map(ExportCredential::from))
+    Ok(cred.map(|c| {
+        let secret = crate::credentials::retrieve(&c.keychain_ref).unwrap_or_default();
+        CredentialResponse {
+            username: c.username,
+            auth_type: c.auth_type,
+            secret,
+        }
+    }))
 }
 
 #[tauri::command]
@@ -199,6 +229,14 @@ pub async fn session_update(
             ));
         }
     }
+    if let Some(ref i) = icon {
+        if i.len() > super::MAX_ICON_LEN {
+            return Err(format!(
+                "Icon too long (max {} characters)",
+                super::MAX_ICON_LEN
+            ));
+        }
+    }
     let session_id = parse_uuid(&id)?;
     let jump = jump_host_id
         .map(|opt| opt.map(|s| parse_uuid(&s)).transpose())
@@ -236,6 +274,8 @@ pub async fn session_update(
     if username.is_some() || secret.is_some() {
         // Fetch existing credential to merge fields.
         let existing = cred_db.0.get_credential(session_id).await?;
+        let keychain_ref = format!("session-{session_id}");
+
         let effective_username = username.unwrap_or_else(|| {
             existing
                 .as_ref()
@@ -244,7 +284,8 @@ pub async fn session_update(
         let effective_secret = secret.unwrap_or_else(|| {
             existing
                 .as_ref()
-                .map_or(String::new(), |c| c.secret.clone())
+                .and_then(|c| crate::credentials::retrieve(&c.keychain_ref).ok())
+                .unwrap_or_default()
         });
         let effective_auth = effective_method.unwrap_or_else(|| {
             existing
@@ -252,7 +293,6 @@ pub async fn session_update(
                 .map_or(String::new(), |c| c.auth_type.clone())
         });
 
-        let keychain_ref = format!("session-{session_id}");
         if let Err(e) = cred_db
             .0
             .upsert_credential(Credential {
@@ -260,12 +300,15 @@ pub async fn session_update(
                 session_id,
                 username: effective_username,
                 auth_type: effective_auth,
-                keychain_ref,
-                secret: effective_secret,
+                keychain_ref: keychain_ref.clone(),
             })
             .await
         {
             tracing::error!(session_id = %session_id, "credential upsert failed: {e}");
+        }
+
+        if let Err(e) = crate::credentials::store(&keychain_ref, &effective_secret) {
+            tracing::error!(session_id = %session_id, "keychain store failed: {e}");
         }
     }
 
@@ -291,6 +334,12 @@ pub async fn session_delete(
     id: String,
 ) -> Result<(), String> {
     let session_id = parse_uuid(&id)?;
+
+    // Fetch keychain_ref before deleting DB rows so we can clean up the OS keychain.
+    if let Ok(Some(cred)) = cred_db.0.get_credential(session_id).await {
+        let _ = crate::credentials::delete(&cred.keychain_ref);
+    }
+
     state.0.delete_session(session_id).await?;
     // Clean up local credential so it doesn't become orphaned
     // (especially important when sessions live in PostgreSQL).
@@ -482,10 +531,13 @@ pub async fn session_connect(
     }
 
     // SSH path (default).
-    // Retrieve credential (including username) from local store.
+    // Retrieve credential metadata from local store, secret from OS keychain.
     let cred = cred_db.0.get_credential(session_id).await?;
     let (username, auth_credential) = match cred {
-        Some(c) => (c.username, Zeroizing::new(c.secret)),
+        Some(c) => {
+            let secret = crate::credentials::retrieve(&c.keychain_ref).unwrap_or_default();
+            (c.username, Zeroizing::new(secret))
+        }
         None if session.auth_method == "none" => (String::new(), Zeroizing::new(String::new())),
         None => {
             return Err(format!(
@@ -604,7 +656,7 @@ pub async fn folder_apply_credentials(
 
     let mut count: u32 = 0;
     for session in &ssh_sessions {
-        // Upsert credential (includes username — stored locally per user).
+        // Upsert credential metadata (stored locally per user).
         let keychain_ref = format!("session-{}", session.id);
         if let Err(e) = cred_db
             .0
@@ -613,12 +665,17 @@ pub async fn folder_apply_credentials(
                 session_id: session.id,
                 username: username.clone(),
                 auth_type: auth_method.clone(),
-                keychain_ref,
-                secret: credential.clone(),
+                keychain_ref: keychain_ref.clone(),
             })
             .await
         {
             tracing::error!(session_id = %session.id, "bulk credential upsert failed: {e}");
+            continue;
+        }
+
+        // Store secret in OS keychain.
+        if let Err(e) = crate::credentials::store(&keychain_ref, &credential) {
+            tracing::error!(session_id = %session.id, "bulk keychain store failed: {e}");
             continue;
         }
 
@@ -698,12 +755,19 @@ async fn resolve_jump_chain(
             }
         };
 
+        let jump_secret = crate::credentials::retrieve(&jump_cred.keychain_ref).map_err(|e| {
+            format!(
+                "Failed to retrieve credential for jump host \"{}\": {e}",
+                jump_session.name
+            )
+        })?;
+
         hops.push(crate::ssh::JumpHop {
             host: jump_session.hostname.clone(),
             port: jump_session.port as u16,
             username: jump_cred.username,
             auth_method: jump_session.auth_method.clone(),
-            auth_credential: Zeroizing::new(jump_cred.secret),
+            auth_credential: Zeroizing::new(jump_secret),
         });
 
         current_jump_id = jump_session.jump_host_id;

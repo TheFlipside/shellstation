@@ -11,7 +11,7 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 use tokio::sync::{mpsc, oneshot, Mutex};
 use tokio::task::JoinHandle;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 use zeroize::Zeroizing;
 
 /// Pending TOFU verification senders, stored separately from `SshManager`
@@ -381,7 +381,8 @@ fn validate_key_path(path: &str) -> Result<String, String> {
     // On Windows, `canonicalize` returns UNC paths (`\\?\C:\...`) while
     // `dirs::home_dir` returns regular paths (`C:\Users\...`), which makes
     // `starts_with` fail even for paths that are genuinely under $HOME.
-    let canonical_home = std::fs::canonicalize(&home).unwrap_or_else(|_| home.clone());
+    let canonical_home =
+        std::fs::canonicalize(&home).map_err(|e| format!("Cannot resolve home directory: {e}"))?;
     if !canonical.starts_with(&canonical_home) {
         return Err("Key path must be within your home directory".to_string());
     }
@@ -473,7 +474,11 @@ fn set_restricted_file_permissions(path: &std::path::Path) {
 fn restrict_windows_acl(path: &std::path::Path, is_dir: bool) {
     let path_str = path.to_string_lossy().to_string();
     let username = std::env::var("USERNAME").unwrap_or_default();
-    if username.is_empty() {
+    if username.is_empty()
+        || !username
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '_' || c == '-' || c == '.' || c == ' ')
+    {
         return;
     }
     let grant = if is_dir {
@@ -486,15 +491,38 @@ fn restrict_windows_acl(path: &std::path::Path, is_dir: bool) {
         .output();
 }
 
-/// Remove blank lines from a known_hosts file so entries are contiguous,
-/// matching the format OpenSSH produces.
-fn strip_blank_lines(path: &std::path::Path) {
+/// Remove all existing known_hosts entries for the given host+port,
+/// then strip blank lines.  This ensures that `learn_known_hosts_path`
+/// (which only appends) does not create duplicates and that a changed
+/// server key cleanly replaces the old entry.
+fn remove_known_host_entries(path: &std::path::Path, host: &str, port: u16) {
     let content = match std::fs::read_to_string(path) {
         Ok(c) => c,
         Err(_) => return,
     };
-    let cleaned: Vec<&str> = content.lines().filter(|l| !l.trim().is_empty()).collect();
-    let mut out = cleaned.join("\n");
+
+    let host_port = if port == 22 {
+        host.to_string()
+    } else {
+        format!("[{host}]:{port}")
+    };
+
+    let kept: Vec<&str> = content
+        .lines()
+        .filter(|line| {
+            let trimmed = line.trim();
+            if trimmed.is_empty() || trimmed.starts_with('#') {
+                return true;
+            }
+            // The first space-separated field is the host pattern.
+            let entry_host = trimmed.split(' ').next().unwrap_or("");
+            // An entry can list multiple hosts separated by commas.
+            // Remove the entry only if the host matches.
+            !entry_host.split(',').any(|h| h == host_port)
+        })
+        .collect();
+
+    let mut out = kept.join("\n");
     if !out.is_empty() {
         out.push('\n');
     }
@@ -609,7 +637,7 @@ async fn connect_with_hops(
         let (verify_tx, verify_rx) = oneshot::channel::<bool>();
         verify_senders
             .lock()
-            .unwrap()
+            .map_err(|e| format!("Verify sender lock poisoned: {e}"))?
             .insert(session_id.to_string(), verify_tx);
 
         let handler = SshHandler {
@@ -646,7 +674,7 @@ async fn connect_with_hops(
     let (verify_tx, verify_rx) = oneshot::channel::<bool>();
     verify_senders
         .lock()
-        .unwrap()
+        .map_err(|e| format!("Verify sender lock poisoned: {e}"))?
         .insert(hop_id.clone(), verify_tx);
 
     let handler = SshHandler {
@@ -700,7 +728,7 @@ async fn connect_with_hops(
         let (verify_tx, verify_rx) = oneshot::channel::<bool>();
         verify_senders
             .lock()
-            .unwrap()
+            .map_err(|e| format!("Verify sender lock poisoned: {e}"))?
             .insert(hop_id.clone(), verify_tx);
 
         let handler = SshHandler {
@@ -745,7 +773,7 @@ async fn connect_with_hops(
     let (verify_tx, verify_rx) = oneshot::channel::<bool>();
     verify_senders
         .lock()
-        .unwrap()
+        .map_err(|e| format!("Verify sender lock poisoned: {e}"))?
         .insert(session_id.to_string(), verify_tx);
 
     let handler = SshHandler {
@@ -832,14 +860,28 @@ impl client::Handler for SshHandler {
             {
                 Ok(true) => return Ok(true),
                 Ok(false) => {
+                    // No matching key type found — could be a first-time connection
+                    // or a key algorithm change. Fall through to prompt.
+                }
+                Err(russh::keys::Error::KeyChanged { line }) => {
                     warn!(
                         session_id = %self.session_id,
                         host = %self.host,
+                        port = self.port,
+                        line,
                         "Server key CHANGED — possible MITM"
                     );
+                    // Fall through to prompt — if accepted, the old entry
+                    // will be replaced below.
                 }
-                Err(_) => {
-                    // Key not in known_hosts or file doesn't exist yet.
+                Err(e) => {
+                    debug!(
+                        session_id = %self.session_id,
+                        host = %self.host,
+                        port = self.port,
+                        error = %e,
+                        "known_hosts check error — treating as unknown host"
+                    );
                 }
             }
         }
@@ -890,6 +932,10 @@ impl client::Handler for SshHandler {
                 // permissions (0o700 / 0o600) before russh writes to them.
                 ensure_known_hosts_file(kh);
 
+                // Remove any existing entries for this host+port to prevent
+                // duplicates and ensure changed keys replace the old entry.
+                remove_known_host_entries(kh, &self.host, self.port);
+
                 if let Err(e) = russh::keys::learn_known_hosts_path(
                     &self.host,
                     self.port,
@@ -898,10 +944,6 @@ impl client::Handler for SshHandler {
                 ) {
                     warn!(session_id = %self.session_id, error = %e, "Failed to save known host");
                 }
-
-                // russh inserts blank lines between entries; strip them to match
-                // the format OpenSSH produces.
-                strip_blank_lines(kh);
             } else {
                 warn!(session_id = %self.session_id, "Skipping known_hosts save — home directory unknown");
             }

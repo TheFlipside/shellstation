@@ -34,7 +34,7 @@ russh-keys = "0.45"
 # otherwise pulls in the `rsa` crate (see RUSTSEC-2023-0071 above).
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls", "sqlite", "postgres", "uuid", "chrono", "macros", "migrate"] }
 tokio = { version = "1", features = ["full"] }
-keyring = "3"
+keyring = { version = "3", features = ["crypto-rust"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 portable-pty = "0.8"
 tracing = "0.1"
@@ -46,6 +46,15 @@ zeroize = { version = "1", features = ["serde"] }
 tauri-plugin-dialog = "2.6.0"
 quick-xml = "0.37"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+keyring = { version = "3", features = ["linux-native-sync-persistent", "crypto-rust"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+keyring = { version = "3", features = ["apple-native", "crypto-rust"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+keyring = { version = "3", features = ["windows-native"] }
 
 [profile.release]
 strip = true        # Strip debug symbols

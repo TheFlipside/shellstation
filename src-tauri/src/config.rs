@@ -62,6 +62,9 @@ pub struct PostgresConfig {
     pub database: String,
     #[serde(default)]
     pub username: String,
+    /// Password is stored in the OS keychain, not in config.json.
+    /// This field is populated at runtime from the keychain and
+    /// excluded when writing to disk via `save_config`.
     #[serde(default)]
     pub password: String,
     /// SSL mode for the PostgreSQL connection.
@@ -132,11 +135,15 @@ pub struct ConfigState {
     pub config_path: PathBuf,
 }
 
+/// Keychain reference for the PostgreSQL password.
+pub const PG_PASSWORD_KEYCHAIN_REF: &str = "postgres-password";
+
 /// Load the application config from `config_dir/config.json`.
 /// Returns `AppConfig::default()` if the file is missing or unreadable.
+/// The PostgreSQL password is loaded from the OS keychain (not from the file).
 pub fn load_config(config_dir: &Path) -> AppConfig {
     let path = config_dir.join("config.json");
-    match std::fs::read_to_string(&path) {
+    let mut config = match std::fs::read_to_string(&path) {
         Ok(contents) => match serde_json::from_str::<AppConfig>(&contents) {
             Ok(config) => {
                 tracing::info!(
@@ -161,14 +168,32 @@ pub fn load_config(config_dir: &Path) -> AppConfig {
             );
             AppConfig::default()
         }
+    };
+
+    // Populate PostgreSQL password from OS keychain.
+    if config.db_backend == DbBackend::Postgres {
+        match crate::credentials::retrieve(PG_PASSWORD_KEYCHAIN_REF) {
+            Ok(pw) => config.postgres.password = pw,
+            Err(e) => {
+                tracing::warn!(
+                    "Failed to retrieve PostgreSQL password from keychain: {e} \
+                     — connection will likely fail"
+                );
+            }
+        }
     }
+
+    config
 }
 
 /// Save the application config to the given path.
 /// Sets restrictive file permissions (0600 on Unix) since the config may
 /// contain database credentials.
 pub fn save_config(config_path: &Path, config: &AppConfig) -> Result<(), String> {
-    let json = serde_json::to_string_pretty(config)
+    // Clone and strip the password so it never lands on disk.
+    let mut safe = config.clone();
+    safe.postgres.password.clear();
+    let json = serde_json::to_string_pretty(&safe)
         .map_err(|e| format!("Failed to serialize config: {e}"))?;
     std::fs::write(config_path, &json).map_err(|e| format!("Failed to write config: {e}"))?;
     #[cfg(unix)]

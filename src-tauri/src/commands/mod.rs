@@ -45,6 +45,7 @@ const MAX_NAME_LEN: usize = 255;
 const MAX_HOSTNAME_LEN: usize = 255;
 const MAX_USERNAME_LEN: usize = 128;
 const MAX_TAGS_LEN: usize = 1024;
+const MAX_ICON_LEN: usize = 128;
 
 fn validate_session_fields(
     name: Option<&str>,

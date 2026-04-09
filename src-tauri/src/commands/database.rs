@@ -6,7 +6,7 @@ use tauri::State;
 use uuid::Uuid;
 
 use crate::config::{self, AppConfig, ConfigState, DbBackend, PostgresConfig};
-use crate::db::models::{Credential, ExportCredential, ExportData, Folder, NewFolder, NewSession};
+use crate::db::models::{ExportData, Folder, NewFolder, NewSession};
 use crate::db::{CredentialDbState, DbState};
 
 /// Status of the database backend at startup.
@@ -24,11 +24,15 @@ pub struct DbStatusState(pub DbStatus);
 
 #[tauri::command]
 pub async fn db_get_config(state: State<'_, ConfigState>) -> Result<AppConfig, String> {
-    let config = state
+    let mut config = state
         .config
         .lock()
-        .map_err(|e| format!("Config lock poisoned: {e}"))?;
-    Ok(config.clone())
+        .map_err(|e| format!("Config lock poisoned: {e}"))?
+        .clone();
+    // Populate PostgreSQL password from OS keychain for the settings UI.
+    config.postgres.password =
+        crate::credentials::retrieve(config::PG_PASSWORD_KEYCHAIN_REF).unwrap_or_default();
+    Ok(config)
 }
 
 #[tauri::command]
@@ -255,6 +259,14 @@ pub async fn db_save_config(
         .logging
         .clone();
 
+    // Store the PostgreSQL password in the OS keychain, not in config.json.
+    if db_backend == DbBackend::Postgres {
+        if let Err(e) = crate::credentials::store(config::PG_PASSWORD_KEYCHAIN_REF, &password) {
+            tracing::error!("Failed to store PostgreSQL password in keychain: {e}");
+            return Err(format!("Failed to store database password securely: {e}"));
+        }
+    }
+
     let new_config = AppConfig {
         db_backend,
         sqlite_path,
@@ -291,26 +303,12 @@ async fn build_export_data(
     let credentials = cred_db.0.list_all_credentials().await?;
     let highlight_profiles = state.0.list_highlight_profiles().await?;
 
-    // Strip secrets from exported credentials — export only metadata.
-    // Secrets are local-only and must not leave the device.
-    // Username is exported (not secret — needed for other users to know
-    // what format to use when setting their own).
-    let safe_creds: Vec<ExportCredential> = credentials
-        .into_iter()
-        .map(|c| ExportCredential {
-            id: c.id,
-            session_id: c.session_id,
-            username: c.username,
-            auth_type: c.auth_type,
-            keychain_ref: c.keychain_ref,
-            secret: String::new(),
-        })
-        .collect();
-
+    // Credentials contain only metadata (username, auth_type, keychain_ref).
+    // Secrets are stored in the OS keychain and never exported.
     Ok(ExportData {
         folders,
         sessions,
-        credentials: safe_creds,
+        credentials,
         highlight_profiles,
     })
 }
@@ -401,17 +399,17 @@ fn validate_import_data(data: &ExportData) -> Result<(), String> {
     // Validate individual field lengths.
     for folder in &data.folders {
         if folder.name.len() > 255 {
+            let preview: String = folder.name.chars().take(50).collect();
             return Err(format!(
-                "Folder name too long: \"{}...\" (max 255 chars)",
-                &folder.name[..50]
+                "Folder name too long: \"{preview}...\" (max 255 chars)",
             ));
         }
     }
     for session in &data.sessions {
         if session.name.len() > 255 {
+            let preview: String = session.name.chars().take(50).collect();
             return Err(format!(
-                "Session name too long: \"{}...\" (max 255 chars)",
-                &session.name[..50]
+                "Session name too long: \"{preview}...\" (max 255 chars)",
             ));
         }
         if session.hostname.len() > 255 {
@@ -557,20 +555,18 @@ pub async fn db_import(
         }
     }
 
-    // Import credentials into local store (skip entries with empty secrets
-    // since exported data has secrets redacted for safety).
-    // Remap session_id to the newly created session IDs.
+    // Import credential metadata into local store.
+    // Secrets are not included in exports (stored in OS keychain) — users
+    // must re-enter passwords/keys after import.
     for cred in &data.credentials {
-        if cred.secret.is_empty() {
-            continue;
-        }
         let mut remapped_cred = cred.clone();
         if let Some(&new_sid) = session_id_map.get(&cred.session_id) {
             remapped_cred.session_id = new_sid;
+            remapped_cred.keychain_ref = format!("session-{new_sid}");
         }
         cred_db
             .0
-            .upsert_credential(Credential::from(remapped_cred))
+            .upsert_credential(remapped_cred)
             .await
             .map_err(|e| format!("Failed to import credential: {e}"))?;
         credential_count += 1;

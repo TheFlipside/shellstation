@@ -1,8 +1,5 @@
 mod commands;
 mod config;
-// Keychain integration — unused until we switch from DB-stored secrets
-// to OS keychain with a reliable backend (e.g. secret-service on Linux).
-#[allow(dead_code)]
 mod credentials;
 mod db;
 mod highlight;
