@@ -10,6 +10,7 @@ use crate::db::models::{
     UpdateSession,
 };
 use crate::db::{CredentialDbState, DbState};
+use crate::session_logger::SessionLogState;
 use crate::ssh::{establish_ssh_connection, SshConnectParams, SshState};
 use crate::telnet::{establish_telnet_connection, TelnetConnectParams, TelnetState};
 
@@ -400,6 +401,7 @@ pub async fn session_connect(
     cred_db: State<'_, CredentialDbState>,
     ssh: State<'_, SshState>,
     telnet: State<'_, TelnetState>,
+    logger_state: State<'_, SessionLogState>,
     id: String,
     cols: u16,
     rows: u16,
@@ -421,6 +423,16 @@ pub async fn session_connect(
     if session.protocol == "telnet" {
         let conn_id = Uuid::new_v4().to_string();
 
+        // Open session log before connecting.
+        {
+            if let Ok(mut mgr) = logger_state.0.lock() {
+                if let Err(e) = mgr.open_log(&conn_id, &session.name) {
+                    tracing::warn!("Failed to open session log: {e}");
+                }
+            }
+        }
+        let logger = Some(std::sync::Arc::clone(&logger_state.0));
+
         // Brief lock: check capacity only.
         {
             let manager = telnet.0.lock().await;
@@ -428,7 +440,7 @@ pub async fn session_connect(
         }
 
         // Connect WITHOUT holding the lock.
-        let telnet_session = establish_telnet_connection(TelnetConnectParams {
+        let telnet_session = match establish_telnet_connection(TelnetConnectParams {
             id: conn_id.clone(),
             host: session.hostname,
             port: session.port as u16,
@@ -437,8 +449,19 @@ pub async fn session_connect(
             app_handle,
             restrict_private_ips: restrict,
             connect_timeout_secs: timeout_secs,
+            logger,
         })
-        .await?;
+        .await
+        {
+            Ok(s) => s,
+            Err(e) => {
+                // Close orphaned log file on connection failure.
+                if let Ok(mut mgr) = logger_state.0.lock() {
+                    mgr.close_log(&conn_id);
+                }
+                return Err(e);
+            }
+        };
 
         // Brief lock: re-check capacity and register atomically.
         {
@@ -472,6 +495,16 @@ pub async fn session_connect(
 
     let conn_id = Uuid::new_v4().to_string();
 
+    // Open session log before connecting.
+    {
+        if let Ok(mut mgr) = logger_state.0.lock() {
+            if let Err(e) = mgr.open_log(&conn_id, &session.name) {
+                tracing::warn!("Failed to open session log: {e}");
+            }
+        }
+    }
+    let logger = Some(std::sync::Arc::clone(&logger_state.0));
+
     // Brief lock: check capacity only.
     {
         let manager = ssh.manager.lock().await;
@@ -479,7 +512,7 @@ pub async fn session_connect(
     }
 
     // Connect WITHOUT holding the lock.
-    let ssh_session = establish_ssh_connection(
+    let ssh_session = match establish_ssh_connection(
         SshConnectParams {
             id: conn_id.clone(),
             host: session.hostname,
@@ -493,10 +526,21 @@ pub async fn session_connect(
             jump_hops,
             restrict_private_ips: restrict,
             connect_timeout_secs: timeout_secs,
+            logger,
         },
         &ssh.host_verify_senders,
     )
-    .await?;
+    .await
+    {
+        Ok(s) => s,
+        Err(e) => {
+            // Close orphaned log file on connection failure.
+            if let Ok(mut mgr) = logger_state.0.lock() {
+                mgr.close_log(&conn_id);
+            }
+            return Err(e);
+        }
+    };
 
     // Brief lock: re-check capacity and register atomically.
     {

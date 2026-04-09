@@ -36,6 +36,7 @@ pub struct TelnetConnectParams {
     pub app_handle: AppHandle,
     pub restrict_private_ips: bool,
     pub connect_timeout_secs: u64,
+    pub logger: Option<std::sync::Arc<std::sync::Mutex<crate::session_logger::SessionLogManager>>>,
 }
 
 /// Per-connection Telnet session state.
@@ -130,6 +131,7 @@ pub async fn establish_telnet_connection(
         app_handle,
         restrict_private_ips,
         connect_timeout_secs,
+        logger,
     } = params;
 
     // Validate against restricted IP ranges if enabled.
@@ -171,6 +173,7 @@ pub async fn establish_telnet_connection(
             &exit_event,
             &session_id,
             &app,
+            logger,
         )
         .await;
     });
@@ -200,6 +203,7 @@ async fn telnet_io_loop(
     exit_event: &str,
     session_id: &str,
     app: &AppHandle,
+    logger: Option<std::sync::Arc<std::sync::Mutex<crate::session_logger::SessionLogManager>>>,
 ) {
     // Send initial WILL NAWS + window size so the server knows our terminal size.
     let mut init = vec![IAC, WILL, OPT_NAWS];
@@ -221,6 +225,11 @@ async fn telnet_io_loop(
                 match result {
                     Ok(0) => {
                         info!(session_id = %session_id, "Telnet connection closed");
+                        if let Some(ref lg) = logger {
+                            if let Ok(mut mgr) = lg.lock() {
+                                mgr.close_log(session_id);
+                            }
+                        }
                         let _ = app.emit(exit_event, ());
                         break;
                     }
@@ -318,6 +327,11 @@ async fn telnet_io_loop(
 
                         // Emit clean terminal data to frontend.
                         if !out_buf.is_empty() {
+                            if let Some(ref lg) = logger {
+                                if let Ok(mut mgr) = lg.lock() {
+                                    mgr.write_log(session_id, &out_buf);
+                                }
+                            }
                             let payload = base64::prelude::BASE64_STANDARD.encode(&out_buf);
                             if app.emit(event_name, &payload).is_err() {
                                 break;
@@ -326,6 +340,11 @@ async fn telnet_io_loop(
                     }
                     Err(e) => {
                         warn!(session_id = %session_id, error = %e, "Telnet read error");
+                        if let Some(ref lg) = logger {
+                            if let Ok(mut mgr) = lg.lock() {
+                                mgr.close_log(session_id);
+                            }
+                        }
                         let _ = app.emit(exit_event, ());
                         break;
                     }
@@ -333,6 +352,11 @@ async fn telnet_io_loop(
             }
             Some(data) = write_rx.recv() => {
                 if writer.write_all(&data).await.is_err() {
+                    if let Some(ref lg) = logger {
+                        if let Ok(mut mgr) = lg.lock() {
+                            mgr.close_log(session_id);
+                        }
+                    }
                     let _ = app.emit(exit_event, ());
                     break;
                 }

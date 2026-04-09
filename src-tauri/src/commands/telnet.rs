@@ -1,6 +1,7 @@
 use tauri::{AppHandle, State};
 use uuid::Uuid;
 
+use crate::session_logger::SessionLogState;
 use crate::telnet::{establish_telnet_connection, TelnetConnectParams, TelnetState};
 
 use super::{validate_dimensions, MAX_WRITE_SIZE};
@@ -11,6 +12,7 @@ use super::{validate_dimensions, MAX_WRITE_SIZE};
 pub async fn telnet_connect(
     app_handle: AppHandle,
     state: State<'_, TelnetState>,
+    logger_state: State<'_, SessionLogState>,
     host: String,
     port: u16,
     cols: u16,
@@ -21,6 +23,18 @@ pub async fn telnet_connect(
     validate_dimensions(cols, rows)?;
     let id = Uuid::new_v4().to_string();
 
+    // Open session log before connecting so output from the start is captured.
+    {
+        let session_name = format!("{host}:{port}");
+        if let Ok(mut mgr) = logger_state.0.lock() {
+            if let Err(e) = mgr.open_log(&id, &session_name) {
+                tracing::warn!("Failed to open session log: {e}");
+            }
+        }
+    }
+
+    let logger = Some(std::sync::Arc::clone(&logger_state.0));
+
     // Brief lock: check capacity only.
     {
         let manager = state.0.lock().await;
@@ -29,7 +43,7 @@ pub async fn telnet_connect(
 
     // Establish connection WITHOUT holding the manager lock so other
     // sessions remain fully usable during the (potentially slow) handshake.
-    let session = establish_telnet_connection(TelnetConnectParams {
+    let session = match establish_telnet_connection(TelnetConnectParams {
         id: id.clone(),
         host,
         port,
@@ -38,8 +52,18 @@ pub async fn telnet_connect(
         app_handle,
         restrict_private_ips: restrict_private_ips.unwrap_or(false),
         connect_timeout_secs: connect_timeout.unwrap_or(10),
+        logger,
     })
-    .await?;
+    .await
+    {
+        Ok(s) => s,
+        Err(e) => {
+            if let Ok(mut mgr) = logger_state.0.lock() {
+                mgr.close_log(&id);
+            }
+            return Err(e);
+        }
+    };
 
     // Brief lock: re-check capacity and register atomically.
     {
@@ -94,7 +118,15 @@ pub async fn telnet_resize(
 
 /// Disconnect a Telnet session.
 #[tauri::command]
-pub async fn telnet_disconnect(state: State<'_, TelnetState>, id: String) -> Result<(), String> {
+pub async fn telnet_disconnect(
+    state: State<'_, TelnetState>,
+    logger_state: State<'_, SessionLogState>,
+    id: String,
+) -> Result<(), String> {
     let mut manager = state.0.lock().await;
-    manager.disconnect(&id).await
+    manager.disconnect(&id).await?;
+    if let Ok(mut mgr) = logger_state.0.lock() {
+        mgr.close_log(&id);
+    }
+    Ok(())
 }

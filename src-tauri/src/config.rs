@@ -13,6 +13,35 @@ pub struct AppConfig {
     pub sqlite_path: Option<String>,
     #[serde(default)]
     pub postgres: PostgresConfig,
+    #[serde(default)]
+    pub logging: LoggingConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LoggingConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    /// Directory where log files are written. When `None`, defaults to
+    /// `<config_dir>/logs/`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub log_directory: Option<String>,
+    /// Filename format template. Placeholders: {name}, {mm}, {hh}, {dd}, {MM}, {yy}.
+    #[serde(default = "default_log_filename_format")]
+    pub filename_format: String,
+}
+
+fn default_log_filename_format() -> String {
+    "{name}_{mm}-{hh}_{dd}{MM}{yy}.log".to_string()
+}
+
+impl Default for LoggingConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            log_directory: None,
+            filename_format: default_log_filename_format(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]

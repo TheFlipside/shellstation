@@ -231,6 +231,16 @@
     "importMremoteng": "Import mRemoteNG",
     "importSecurecrt": "Import SecureCRT",
     "importSuccess": "Imported {{summary}}.",
-    "importTooLarge": "Import file is too large (max 100 MB)."
+    "importTooLarge": "Import file is too large (max 100 MB).",
+    "logging": "Session Logging",
+    "loggingEnabledLabel": "Enable session logging",
+    "loggingEnabledHint": "When enabled, terminal output is written to log files for each session.",
+    "loggingDirectoryLabel": "Log directory",
+    "loggingDirectoryPlaceholder": "Default (logs/ in config directory)",
+    "loggingDirectoryHint": "Directory where session log files will be stored.",
+    "loggingFilenameLabel": "Filename format",
+    "loggingFilenameHint": "Placeholders: {name} = session name, {mm} = minute, {hh} = hour, {dd} = day, {MM} = month, {yy} = year",
+    "loggingSave": "Save Logging Settings",
+    "loggingSaved": "Logging settings saved."
   }
 }

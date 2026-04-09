@@ -1,10 +1,12 @@
 mod database;
+mod logging;
 mod pty;
 mod session;
 mod ssh;
 mod telnet;
 
 pub use database::*;
+pub use logging::*;
 pub use pty::*;
 pub use session::*;
 pub use ssh::*;

@@ -7,6 +7,7 @@ mod credentials;
 mod db;
 mod import;
 mod pty;
+mod session_logger;
 mod ssh;
 mod telnet;
 
@@ -356,6 +357,20 @@ pub fn run() {
                 config_path,
             });
 
+            // Initialize session logger
+            let log_dir = match &app_config.logging.log_directory {
+                Some(p) if !p.is_empty() => std::path::PathBuf::from(p),
+                _ => config_dir.join("logs"),
+            };
+            let log_manager = session_logger::SessionLogManager::new(
+                app_config.logging.enabled,
+                log_dir,
+                app_config.logging.filename_format.clone(),
+            );
+            app.manage(session_logger::SessionLogState(Arc::new(
+                std::sync::Mutex::new(log_manager),
+            )));
+
             // Initialize the session database provider based on config
             match app_config.db_backend {
                 DbBackend::Sqlite => {
@@ -525,6 +540,9 @@ pub fn run() {
             // Import from external tools
             import::import_mremoteng,
             import::import_securecrt,
+            // Session logging
+            commands::logging_get_config,
+            commands::logging_save_config,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

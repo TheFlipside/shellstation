@@ -33,6 +33,7 @@ impl PtyManager {
         cols: u16,
         rows: u16,
         app_handle: AppHandle,
+        logger: Option<std::sync::Arc<std::sync::Mutex<crate::session_logger::SessionLogManager>>>,
     ) -> Result<(), String> {
         if self.sessions.len() >= Self::MAX_SESSIONS {
             return Err(format!(
@@ -71,11 +72,21 @@ impl PtyManager {
                 match reader.read(&mut buf) {
                     Ok(0) => {
                         info!(session_id = %session_id, "PTY reader EOF");
+                        if let Some(ref lg) = logger {
+                            if let Ok(mut mgr) = lg.lock() {
+                                mgr.close_log(&session_id);
+                            }
+                        }
                         let _ = app_handle.emit(&format!("terminal-exit-{session_id}"), ());
                         break;
                     }
                     Ok(n) => {
                         let data = &buf[..n];
+                        if let Some(ref lg) = logger {
+                            if let Ok(mut mgr) = lg.lock() {
+                                mgr.write_log(&session_id, data);
+                            }
+                        }
                         let payload = base64_encode(data);
                         if app_handle.emit(&event_name, &payload).is_err() {
                             break;
@@ -83,6 +94,11 @@ impl PtyManager {
                     }
                     Err(e) => {
                         error!(session_id = %session_id, error = %e, "PTY read error");
+                        if let Some(ref lg) = logger {
+                            if let Ok(mut mgr) = lg.lock() {
+                                mgr.close_log(&session_id);
+                            }
+                        }
                         let _ = app_handle.emit(&format!("terminal-exit-{session_id}"), ());
                         break;
                     }

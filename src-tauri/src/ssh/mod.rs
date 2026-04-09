@@ -72,6 +72,7 @@ pub struct SshConnectParams {
     pub rows: u16,
     pub app_handle: AppHandle,
     pub jump_hops: Vec<JumpHop>,
+    pub logger: Option<std::sync::Arc<std::sync::Mutex<crate::session_logger::SessionLogManager>>>,
 }
 
 /// Manages all active SSH sessions.
@@ -166,6 +167,7 @@ pub async fn establish_ssh_connection(
         jump_hops,
         restrict_private_ips,
         connect_timeout_secs,
+        logger,
     } = params;
 
     info!(session_id = %id, host = %host, port = %port, hops = jump_hops.len(), "Connecting via SSH");
@@ -231,6 +233,11 @@ pub async fn establish_ssh_connection(
                     match msg {
                         Some(ChannelMsg::Data { ref data })
                         | Some(ChannelMsg::ExtendedData { ref data, ext: 1 }) => {
+                            if let Some(ref lg) = logger {
+                                if let Ok(mut mgr) = lg.lock() {
+                                    mgr.write_log(&session_id, data.as_ref());
+                                }
+                            }
                             let payload = base64::prelude::BASE64_STANDARD.encode(data.as_ref());
                             if app.emit(&event_name, &payload).is_err() {
                                 break;
@@ -241,11 +248,21 @@ pub async fn establish_ssh_connection(
                         }
                         Some(ChannelMsg::Eof | ChannelMsg::Close) => {
                             info!(session_id = %session_id, "SSH channel closed");
+                            if let Some(ref lg) = logger {
+                                if let Ok(mut mgr) = lg.lock() {
+                                    mgr.close_log(&session_id);
+                                }
+                            }
                             let _ = app.emit(&exit_event, ());
                             break;
                         }
                         Some(_) => {}
                         None => {
+                            if let Some(ref lg) = logger {
+                                if let Ok(mut mgr) = lg.lock() {
+                                    mgr.close_log(&session_id);
+                                }
+                            }
                             let _ = app.emit(&exit_event, ());
                             break;
                         }

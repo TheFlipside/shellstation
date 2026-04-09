@@ -231,6 +231,16 @@
     "importMremoteng": "mRemoteNG importieren",
     "importSecurecrt": "SecureCRT importieren",
     "importSuccess": "{{summary}} importiert.",
-    "importTooLarge": "Importdatei ist zu gro\u00df (max. 100 MB)."
+    "importTooLarge": "Importdatei ist zu gro\u00df (max. 100 MB).",
+    "logging": "Sitzungsprotokollierung",
+    "loggingEnabledLabel": "Sitzungsprotokollierung aktivieren",
+    "loggingEnabledHint": "Wenn aktiviert, wird die Terminalausgabe f\u00fcr jede Sitzung in Protokolldateien geschrieben.",
+    "loggingDirectoryLabel": "Protokollverzeichnis",
+    "loggingDirectoryPlaceholder": "Standard (logs/ im Konfigurationsverzeichnis)",
+    "loggingDirectoryHint": "Verzeichnis, in dem die Sitzungsprotokolldateien gespeichert werden.",
+    "loggingFilenameLabel": "Dateinamenformat",
+    "loggingFilenameHint": "Platzhalter: {name} = Sitzungsname, {mm} = Minute, {hh} = Stunde, {dd} = Tag, {MM} = Monat, {yy} = Jahr",
+    "loggingSave": "Protokolleinstellungen speichern",
+    "loggingSaved": "Protokolleinstellungen gespeichert."
   }
 }

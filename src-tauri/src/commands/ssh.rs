@@ -2,6 +2,7 @@ use tauri::{AppHandle, State};
 use uuid::Uuid;
 use zeroize::Zeroizing;
 
+use crate::session_logger::SessionLogState;
 use crate::ssh::{establish_ssh_connection, JumpHop, SshConnectParams, SshState};
 
 use super::{validate_dimensions, MAX_JUMP_HOPS, MAX_WRITE_SIZE};
@@ -12,6 +13,7 @@ use super::{validate_dimensions, MAX_JUMP_HOPS, MAX_WRITE_SIZE};
 pub async fn ssh_connect(
     app_handle: AppHandle,
     state: State<'_, SshState>,
+    logger_state: State<'_, SessionLogState>,
     host: String,
     port: u16,
     username: String,
@@ -36,9 +38,21 @@ pub async fn ssh_connect(
         manager.check_capacity()?;
     }
 
+    let logger = Some(std::sync::Arc::clone(&logger_state.0));
+
+    // Open the log file before connecting so output from the start is captured.
+    {
+        let session_name = format!("{username}@{host}");
+        if let Ok(mut mgr) = logger_state.0.lock() {
+            if let Err(e) = mgr.open_log(&id, &session_name) {
+                tracing::warn!("Failed to open session log: {e}");
+            }
+        }
+    }
+
     // Establish connection WITHOUT holding the manager lock so other
     // sessions remain fully usable during the (potentially slow) handshake.
-    let session = establish_ssh_connection(
+    let session = match establish_ssh_connection(
         SshConnectParams {
             id: id.clone(),
             host,
@@ -52,10 +66,20 @@ pub async fn ssh_connect(
             jump_hops: hops,
             restrict_private_ips: restrict_private_ips.unwrap_or(false),
             connect_timeout_secs: connect_timeout.unwrap_or(10),
+            logger,
         },
         &state.host_verify_senders,
     )
-    .await?;
+    .await
+    {
+        Ok(s) => s,
+        Err(e) => {
+            if let Ok(mut mgr) = logger_state.0.lock() {
+                mgr.close_log(&id);
+            }
+            return Err(e);
+        }
+    };
 
     // Brief lock: re-check capacity and register atomically.
     {
@@ -108,9 +132,17 @@ pub async fn ssh_resize(
 
 /// Disconnect an SSH session.
 #[tauri::command]
-pub async fn ssh_disconnect(state: State<'_, SshState>, id: String) -> Result<(), String> {
+pub async fn ssh_disconnect(
+    state: State<'_, SshState>,
+    logger_state: State<'_, SessionLogState>,
+    id: String,
+) -> Result<(), String> {
     let mut manager = state.manager.lock().await;
-    manager.disconnect(&id).await
+    manager.disconnect(&id).await?;
+    if let Ok(mut mgr) = logger_state.0.lock() {
+        mgr.close_log(&id);
+    }
+    Ok(())
 }
 
 /// Respond to a pending host key verification request.

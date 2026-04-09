@@ -42,6 +42,12 @@ interface AppConfig {
   };
 }
 
+interface LoggingConfig {
+  enabled: boolean;
+  log_directory: string | null;
+  filename_format: string;
+}
+
 interface SettingsDialogProps {
   onClose: () => void;
 }
@@ -103,6 +109,14 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
   const [dbOpResult, setDbOpResult] = useState<string | null>(null);
   const [dbDirty, setDbDirty] = useState(false);
 
+  // Logging config — loaded from backend
+  const [loggingEnabled, setLoggingEnabled] = useState(false);
+  const [logDirectory, setLogDirectory] = useState("");
+  const [logFilenameFormat, setLogFilenameFormat] = useState("{name}_{mm}-{hh}_{dd}{MM}{yy}.log");
+  const [loggingDirty, setLoggingDirty] = useState(false);
+  const [loggingSaved, setLoggingSaved] = useState(false);
+  const [loggingError, setLoggingError] = useState<string | null>(null);
+
   useEffect(() => {
     invoke<AppConfig>("db_get_config")
       .then((config) => {
@@ -119,6 +133,34 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
         // Config load failed — keep defaults
       });
   }, []);
+
+  // Load logging config from backend on mount
+  useEffect(() => {
+    invoke<LoggingConfig>("logging_get_config")
+      .then((cfg) => {
+        setLoggingEnabled(cfg.enabled);
+        setLogDirectory(cfg.log_directory ?? "");
+        setLogFilenameFormat(cfg.filename_format);
+      })
+      .catch(() => {
+        // Config load failed — keep defaults
+      });
+  }, []);
+
+  const handleLoggingSave = useCallback(async () => {
+    setLoggingError(null);
+    try {
+      await invoke("logging_save_config", {
+        enabled: loggingEnabled,
+        logDirectory: logDirectory || null,
+        filenameFormat: logFilenameFormat || null,
+      });
+      setLoggingDirty(false);
+      setLoggingSaved(true);
+    } catch (e) {
+      setLoggingError(String(e));
+    }
+  }, [loggingEnabled, logDirectory, logFilenameFormat]);
 
   const handleDbBackendChange = useCallback((backend: "sqlite" | "postgres") => {
     setDbBackend(backend);
@@ -610,6 +652,98 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
           </span>
         </div>
 
+        {/* ── Session Logging Section ──────────────────────────────── */}
+        <h4 className="settings-section-title">{t("settings.logging")}</h4>
+        <div className="dialog-field dialog-field-row">
+          <input
+            type="checkbox"
+            id="settings-logging-enabled"
+            checked={loggingEnabled}
+            onChange={(e) => {
+              setLoggingEnabled(e.target.checked);
+              setLoggingDirty(true);
+              setLoggingSaved(false);
+            }}
+          />
+          <label htmlFor="settings-logging-enabled">{t("settings.loggingEnabledLabel")}</label>
+          <span className="settings-help" title={t("settings.loggingEnabledHint")}>
+            ?
+          </span>
+        </div>
+        {loggingEnabled && (
+          <>
+            <div className="dialog-field">
+              <label htmlFor="settings-log-directory">{t("settings.loggingDirectoryLabel")}</label>
+              <div className="dialog-row">
+                <div className="dialog-field-grow">
+                  <input
+                    id="settings-log-directory"
+                    type="text"
+                    value={logDirectory}
+                    placeholder={t("settings.loggingDirectoryPlaceholder")}
+                    onChange={(e) => {
+                      setLogDirectory(e.target.value);
+                      setLoggingDirty(true);
+                      setLoggingSaved(false);
+                    }}
+                  />
+                </div>
+                <button
+                  type="button"
+                  className="dialog-btn"
+                  onClick={() => {
+                    void (async () => {
+                      const path = await open({
+                        title: t("settings.loggingDirectoryLabel"),
+                        defaultPath: logDirectory || undefined,
+                        multiple: false,
+                        directory: true,
+                      });
+                      if (path) {
+                        setLogDirectory(path);
+                        setLoggingDirty(true);
+                        setLoggingSaved(false);
+                      }
+                    })();
+                  }}
+                >
+                  {t("settings.dbBrowse")}
+                </button>
+              </div>
+              <span className="settings-help-block">{t("settings.loggingDirectoryHint")}</span>
+            </div>
+            <div className="dialog-field">
+              <label htmlFor="settings-log-filename">{t("settings.loggingFilenameLabel")}</label>
+              <input
+                id="settings-log-filename"
+                type="text"
+                value={logFilenameFormat}
+                onChange={(e) => {
+                  setLogFilenameFormat(e.target.value);
+                  setLoggingDirty(true);
+                  setLoggingSaved(false);
+                }}
+              />
+              <span className="settings-help-block">{t("settings.loggingFilenameHint")}</span>
+            </div>
+          </>
+        )}
+        {loggingDirty && (
+          <div className="dialog-field">
+            <button
+              type="button"
+              className="dialog-btn dialog-btn-primary"
+              onClick={() => {
+                void handleLoggingSave();
+              }}
+            >
+              {t("settings.loggingSave")}
+            </button>
+          </div>
+        )}
+        {loggingSaved && <span className="settings-db-success">{t("settings.loggingSaved")}</span>}
+        {loggingError !== null && <p className="settings-db-error">{loggingError}</p>}
+
         {/* ── Database Section ─────────────────────────────────────── */}
         <h4 className="settings-section-title">{t("settings.database")}</h4>
         <div className="dialog-field">
@@ -858,9 +992,7 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
             {t("settings.dbImport")}
           </button>
         </div>
-        {dbOpResult && (
-          <span className="settings-db-success">{dbOpResult}</span>
-        )}
+        {dbOpResult && <span className="settings-db-success">{dbOpResult}</span>}
 
         {/* ── Import from External Tools ──────────────────────────── */}
         <h4 className="settings-section-title">{t("settings.importExternal")}</h4>

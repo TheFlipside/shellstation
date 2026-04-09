@@ -247,6 +247,14 @@ pub async fn db_save_config(
     let ssl = ssl_mode.unwrap_or_else(|| "prefer".to_string());
     PostgresConfig::validate_ssl_mode(&ssl)?;
 
+    // Preserve existing logging config when saving DB settings.
+    let existing_logging = state
+        .config
+        .lock()
+        .map_err(|e| format!("Config lock poisoned: {e}"))?
+        .logging
+        .clone();
+
     let new_config = AppConfig {
         db_backend,
         sqlite_path,
@@ -258,6 +266,7 @@ pub async fn db_save_config(
             password,
             ssl_mode: ssl,
         },
+        logging: existing_logging,
     };
 
     config::save_config(&state.config_path, &new_config)?;
@@ -336,9 +345,8 @@ pub async fn db_export_file(
         .filter(|p| !p.as_os_str().is_empty())
         .ok_or_else(|| "Export path has no parent directory".to_string())?;
 
-    let canonical_parent = std::fs::canonicalize(parent).map_err(|_| {
-        format!("Parent directory does not exist: {}", parent.display())
-    })?;
+    let canonical_parent = std::fs::canonicalize(parent)
+        .map_err(|_| format!("Parent directory does not exist: {}", parent.display()))?;
     if !canonical_parent.is_dir() {
         return Err(format!(
             "Parent path is not a directory: {}",
@@ -351,8 +359,7 @@ pub async fn db_export_file(
     let data = build_export_data(&state, &cred_db).await?;
     let json = serde_json::to_string_pretty(&data)
         .map_err(|e| format!("Failed to serialize export data: {e}"))?;
-    std::fs::write(&final_path, json)
-        .map_err(|e| format!("Failed to write export file: {e}"))?;
+    std::fs::write(&final_path, json).map_err(|e| format!("Failed to write export file: {e}"))?;
     Ok(format!(
         "Exported {} folders, {} sessions",
         data.folders.len(),
