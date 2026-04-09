@@ -100,6 +100,7 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
   const [dbCreateResult, setDbCreateResult] = useState<string | null>(null);
   const [dbSaved, setDbSaved] = useState(false);
   const [dbError, setDbError] = useState<string | null>(null);
+  const [dbOpResult, setDbOpResult] = useState<string | null>(null);
   const [dbDirty, setDbDirty] = useState(false);
 
   useEffect(() => {
@@ -193,22 +194,25 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
   }, [dbBackend, sqlitePath, pgHost, pgPort, pgDatabase, pgUsername, pgPassword, pgSslMode]);
 
   const handleDbExport = useCallback(async () => {
+    setDbOpResult(null);
+    setDbError(null);
     try {
-      const data = await invoke<unknown>("db_export");
-      const json = JSON.stringify(data, null, 2);
-      const blob = new Blob([json], { type: "application/json" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = "shellstation-export.json";
-      a.click();
-      URL.revokeObjectURL(url);
+      const path = await save({
+        title: t("settings.dbExport"),
+        defaultPath: "shellstation-export.json",
+        filters: [{ name: "JSON", extensions: ["json"] }],
+      });
+      if (!path) return;
+      const result = await invoke<string>("db_export_file", { path });
+      setDbOpResult(result);
     } catch (e) {
       setDbError(String(e));
     }
-  }, []);
+  }, [t]);
 
   const handleDbImport = useCallback(() => {
+    setDbOpResult(null);
+    setDbError(null);
     const input = document.createElement("input");
     input.type = "file";
     input.accept = ".json";
@@ -239,7 +243,7 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
         }
         const result = await invoke<string>("db_import", { data });
         await useSessionStore.getState().loadAll();
-        setDbTestResult(result);
+        setDbOpResult(result);
       } catch (e) {
         setDbError(String(e));
       } finally {
@@ -854,6 +858,9 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
             {t("settings.dbImport")}
           </button>
         </div>
+        {dbOpResult && (
+          <span className="settings-db-success">{dbOpResult}</span>
+        )}
 
         {/* ── Import from External Tools ──────────────────────────── */}
         <h4 className="settings-section-title">{t("settings.importExternal")}</h4>

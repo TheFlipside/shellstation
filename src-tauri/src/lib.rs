@@ -520,6 +520,7 @@ pub fn run() {
             commands::db_create_database,
             commands::db_save_config,
             commands::db_export,
+            commands::db_export_file,
             commands::db_import,
             // Import from external tools
             import::import_mremoteng,

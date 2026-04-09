@@ -260,7 +260,7 @@ The repository follows standard Tauri 2.x conventions with a clear separation of
 1. Implement command set CRUD (create, edit, delete named command groups).
 2. Build broadcast UI: target selection, execution mode toggle, variable substitution.
 3. Implement mRemoteNG and SecureCRT XML importers.
-4. Add CSV import/export for generic session data.
+4. Add JSON import/export for generic session data.
 5. Session logging with configurable format and rotation.
 
 ### 7.6 Phase 6 — Packaging & Release (Weeks 21–24)
