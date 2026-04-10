@@ -73,6 +73,15 @@ fn init_local_sqlite(
 ///
 /// This function detects that specific case and updates the DB checksums
 /// to match the compiled binary, so `sqlx::migrate!().run()` succeeds.
+fn hex_lower(bytes: &[u8]) -> String {
+    use std::fmt::Write;
+    let mut s = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        let _ = write!(s, "{b:02x}");
+    }
+    s
+}
+
 async fn fix_crlf_migration_checksums(
     pool: &sqlx::PgPool,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -119,10 +128,18 @@ async fn fix_crlf_migration_checksums(
 
         // The DB checksum must match one of the two normalized forms.
         if db_checksum != lf_hash && db_checksum != crlf_hash {
-            // Genuine content change — don't touch it.
-            tracing::warn!(
+            // Genuine content change — don't touch it. The migration was
+            // edited in source after this database was initialized, so the
+            // schema in the DB no longer matches what the binary expects.
+            tracing::error!(
                 version = migration.version,
-                "Migration checksum mismatch is NOT a line-ending issue — skipping"
+                description = %migration.description,
+                db_checksum = %hex_lower(&db_checksum),
+                expected_checksum = %hex_lower(compiled_checksum),
+                "Migration content changed since this database was initialized. \
+                 The schema in PostgreSQL is from an older revision of this migration. \
+                 Reset the database (DROP DATABASE / CREATE DATABASE) or manually \
+                 update the checksum row in _sqlx_migrations if the schema is still compatible."
             );
             continue;
         }
@@ -154,18 +171,33 @@ fn sanitize_pg_error(raw: &str) -> String {
     if raw.contains("timeout") || raw.contains("Timed out") {
         return "Connection timed out — check host, port, and firewall rules.".to_string();
     }
-    if raw.contains("does not exist") {
-        return "Database does not exist — check the database name.".to_string();
-    }
-    if raw.contains("previously applied but has been modified") {
-        return "Migration checksum mismatch — the database was set up from a \
-                different platform with different line endings. \
-                Re-checkout the repository with LF line endings or reset the \
-                _sqlx_migrations table."
+    if raw.contains("previously applied but has been modified")
+        || (raw.contains("migration") && raw.contains("checksum"))
+        || raw.contains("VersionMismatch")
+    {
+        return "Database schema is from an older revision of ShellStation. \
+                Reset the PostgreSQL database (DROP DATABASE / CREATE DATABASE) \
+                or update the affected row in _sqlx_migrations. See application \
+                logs for the migration version."
             .to_string();
     }
-    // Fallback: generic message without leaking internals.
-    "Failed to connect to PostgreSQL. Check your settings and try again.".to_string()
+    if raw.contains("VersionMissing") {
+        return "Database migration state is inconsistent with this build — \
+                a previously applied migration is no longer present in the binary. \
+                See application logs for details."
+            .to_string();
+    }
+    if raw.contains("relation") && raw.contains("does not exist") {
+        return "A required table is missing — migrations did not run successfully. \
+                See application logs for details."
+            .to_string();
+    }
+    if raw.contains("database") && raw.contains("does not exist") {
+        return "Database does not exist — check the database name.".to_string();
+    }
+    // Fallback: generic message without leaking internals. Direct the user
+    // to the logs since the real detail is there.
+    "PostgreSQL initialization failed. See application logs for details.".to_string()
 }
 
 /// Build the application menu, mirroring the Tauri default but using a custom
