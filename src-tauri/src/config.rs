@@ -173,11 +173,27 @@ pub fn load_config(config_dir: &Path) -> AppConfig {
     // Populate PostgreSQL password from OS keychain.
     if config.db_backend == DbBackend::Postgres {
         match crate::credentials::retrieve(PG_PASSWORD_KEYCHAIN_REF) {
-            Ok(pw) => config.postgres.password = pw,
+            Ok(pw) if pw.is_empty() => {
+                tracing::error!(
+                    "Keychain returned an empty PostgreSQL password — connection will fail. \
+                     This often indicates the OS keychain was not ready during startup. \
+                     Try opening Settings and re-saving the database configuration."
+                );
+                config.postgres.password = pw;
+            }
+            Ok(pw) => {
+                tracing::info!(
+                    "Retrieved PostgreSQL password from keychain ({} bytes)",
+                    pw.len()
+                );
+                config.postgres.password = pw;
+            }
             Err(e) => {
-                tracing::warn!(
+                tracing::error!(
                     "Failed to retrieve PostgreSQL password from keychain: {e} \
-                     — connection will likely fail"
+                     — connection will fail. This often indicates the OS keychain \
+                     was not ready during startup. Try opening Settings and re-saving \
+                     the database configuration."
                 );
             }
         }
