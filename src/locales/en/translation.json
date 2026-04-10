@@ -248,7 +248,17 @@
     "loggingFilenameLabel": "Filename format",
     "loggingFilenameHint": "Placeholders: {name} = session name, {mm} = minute, {hh} = hour, {dd} = day, {MM} = month, {yy} = year",
     "loggingSave": "Save Logging Settings",
-    "loggingSaved": "Logging settings saved."
+    "loggingSaved": "Logging settings saved.",
+    "appLogging": "Application Logging",
+    "appLoggingEnabledLabel": "Enable application logging",
+    "appLoggingEnabledHint": "When enabled, ShellStation writes its own diagnostic logs (startup, database, SSH, errors) to a daily-rotating file. Restart the application for changes to take effect.",
+    "appLoggingDirectoryLabel": "Log directory",
+    "appLoggingDirectoryPlaceholder": "Default (logs/ in config directory)",
+    "appLoggingDirectoryHint": "Directory where application log files will be stored. Files are rotated daily as shellstation.log.YYYY-MM-DD.",
+    "appLoggingLevelLabel": "Log level",
+    "appLoggingLevelHint": "Verbosity of application logs. INFO is recommended; DEBUG and TRACE are useful when diagnosing problems. The RUST_LOG environment variable, if set, overrides this value.",
+    "appLoggingSave": "Save Application Logging Settings",
+    "appLoggingSaved": "Application logging settings saved. Restart the app for changes to take effect."
   },
   "highlighting": {
     "sectionTitle": "Keyword Highlighting",

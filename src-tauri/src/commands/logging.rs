@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use tauri::State;
 
-use crate::config::{self, ConfigState, LoggingConfig};
+use crate::config::{self, AppLoggingConfig, ConfigState, LoggingConfig};
 use crate::session_logger::SessionLogState;
 
 #[tauri::command]
@@ -75,5 +75,35 @@ pub async fn logging_save_config(
     mgr.log_dir = log_dir;
     mgr.filename_format = config.logging.filename_format.clone();
 
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn app_logging_get_config(
+    state: State<'_, ConfigState>,
+) -> Result<AppLoggingConfig, String> {
+    let config = state.config.lock().map_err(|e| format!("{e}"))?;
+    Ok(config.app_logging.clone())
+}
+
+#[tauri::command]
+pub async fn app_logging_save_config(
+    state: State<'_, ConfigState>,
+    enabled: bool,
+    log_directory: Option<String>,
+    level: String,
+) -> Result<(), String> {
+    AppLoggingConfig::validate_level(&level)?;
+    if let Some(ref dir) = log_directory {
+        if !dir.is_empty() {
+            validate_log_directory(dir)?;
+        }
+    }
+
+    let mut config = state.config.lock().map_err(|e| format!("{e}"))?;
+    config.app_logging.enabled = enabled;
+    config.app_logging.log_directory = log_directory;
+    config.app_logging.level = level;
+    config::save_config(&state.config_path, &config)?;
     Ok(())
 }

@@ -248,7 +248,17 @@
     "loggingFilenameLabel": "Formato del nombre de archivo",
     "loggingFilenameHint": "Marcadores: {name} = nombre de sesi\u00f3n, {mm} = minuto, {hh} = hora, {dd} = d\u00eda, {MM} = mes, {yy} = a\u00f1o",
     "loggingSave": "Guardar ajustes de registro",
-    "loggingSaved": "Ajustes de registro guardados."
+    "loggingSaved": "Ajustes de registro guardados.",
+    "appLogging": "Registro de la aplicaci\u00f3n",
+    "appLoggingEnabledLabel": "Habilitar registro de la aplicaci\u00f3n",
+    "appLoggingEnabledHint": "Cuando est\u00e1 habilitado, ShellStation escribe sus propios registros de diagn\u00f3stico (inicio, base de datos, SSH, errores) en un archivo con rotaci\u00f3n diaria. Reinicie la aplicaci\u00f3n para que los cambios surtan efecto.",
+    "appLoggingDirectoryLabel": "Directorio de registros",
+    "appLoggingDirectoryPlaceholder": "Predeterminado (logs/ en el directorio de configuraci\u00f3n)",
+    "appLoggingDirectoryHint": "Directorio donde se almacenar\u00e1n los archivos de registro de la aplicaci\u00f3n. Los archivos rotan diariamente como shellstation.log.YYYY-MM-DD.",
+    "appLoggingLevelLabel": "Nivel de registro",
+    "appLoggingLevelHint": "Nivel de detalle de los registros de la aplicaci\u00f3n. Se recomienda INFO; DEBUG y TRACE son \u00fatiles para diagnosticar problemas. La variable de entorno RUST_LOG, si est\u00e1 definida, anula este valor.",
+    "appLoggingSave": "Guardar ajustes de registro de la aplicaci\u00f3n",
+    "appLoggingSaved": "Ajustes de registro de la aplicaci\u00f3n guardados. Reinicie la aplicaci\u00f3n para aplicar los cambios."
   },
   "highlighting": {
     "sectionTitle": "Resaltado por palabras clave",

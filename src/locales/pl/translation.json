@@ -248,7 +248,17 @@
     "loggingFilenameLabel": "Format nazwy pliku",
     "loggingFilenameHint": "Symbole zast\u0119pcze: {name} = nazwa sesji, {mm} = minuta, {hh} = godzina, {dd} = dzie\u0144, {MM} = miesi\u0105c, {yy} = rok",
     "loggingSave": "Zapisz ustawienia logowania",
-    "loggingSaved": "Ustawienia logowania zapisane."
+    "loggingSaved": "Ustawienia logowania zapisane.",
+    "appLogging": "Logowanie aplikacji",
+    "appLoggingEnabledLabel": "W\u0142\u0105cz logowanie aplikacji",
+    "appLoggingEnabledHint": "Gdy w\u0142\u0105czone, ShellStation zapisuje w\u0142asne dzienniki diagnostyczne (uruchamianie, baza danych, SSH, b\u0142\u0119dy) do pliku z codzienn\u0105 rotacj\u0105. Uruchom ponownie aplikacj\u0119, aby zmiany zosta\u0142y zastosowane.",
+    "appLoggingDirectoryLabel": "Katalog dziennik\u00f3w",
+    "appLoggingDirectoryPlaceholder": "Domy\u015blnie (logs/ w katalogu konfiguracji)",
+    "appLoggingDirectoryHint": "Katalog, w kt\u00f3rym b\u0119d\u0105 przechowywane pliki dziennik\u00f3w aplikacji. Pliki s\u0105 codziennie rotowane jako shellstation.log.YYYY-MM-DD.",
+    "appLoggingLevelLabel": "Poziom logowania",
+    "appLoggingLevelHint": "Szczeg\u00f3\u0142owo\u015b\u0107 dziennik\u00f3w aplikacji. Zalecany jest INFO; DEBUG i TRACE s\u0105 przydatne podczas diagnozowania problem\u00f3w. Zmienna \u015brodowiskowa RUST_LOG, je\u015bli jest ustawiona, zast\u0119puje t\u0119 warto\u015b\u0107.",
+    "appLoggingSave": "Zapisz ustawienia logowania aplikacji",
+    "appLoggingSaved": "Ustawienia logowania aplikacji zapisane. Uruchom ponownie aplikacj\u0119, aby zastosowa\u0107 zmiany."
   },
   "highlighting": {
     "sectionTitle": "Pod\u015bwietlanie s\u0142\u00f3w kluczowych",

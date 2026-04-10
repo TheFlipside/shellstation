@@ -251,13 +251,14 @@ pub async fn db_save_config(
     let ssl = ssl_mode.unwrap_or_else(|| "prefer".to_string());
     PostgresConfig::validate_ssl_mode(&ssl)?;
 
-    // Preserve existing logging config when saving DB settings.
-    let existing_logging = state
-        .config
-        .lock()
-        .map_err(|e| format!("Config lock poisoned: {e}"))?
-        .logging
-        .clone();
+    // Preserve existing logging configs when saving DB settings.
+    let (existing_logging, existing_app_logging) = {
+        let cfg = state
+            .config
+            .lock()
+            .map_err(|e| format!("Config lock poisoned: {e}"))?;
+        (cfg.logging.clone(), cfg.app_logging.clone())
+    };
 
     // Store the PostgreSQL password in the OS keychain, not in config.json.
     // Verify the round-trip: after storing, immediately retrieve and compare.
@@ -309,6 +310,7 @@ pub async fn db_save_config(
             ssl_mode: ssl,
         },
         logging: existing_logging,
+        app_logging: existing_app_logging,
     };
 
     config::save_config(&state.config_path, &new_config)?;

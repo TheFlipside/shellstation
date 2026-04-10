@@ -26,6 +26,9 @@ use tauri::menu::{Menu, MenuItemBuilder, PredefinedMenuItem, Submenu};
 use tauri::Manager;
 use tauri_plugin_opener::OpenerExt;
 use telnet::TelnetState;
+use tracing_appender::non_blocking::WorkerGuard;
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::EnvFilter;
 
 /// Initialize the local SQLite pool.
@@ -309,11 +312,90 @@ fn build_app_menu(
     Ok(menu)
 }
 
+/// Build the tracing subscriber from the application config.
+///
+/// Always installs a stdout layer. When `cfg.enabled` is true, also installs
+/// a daily-rotating file appender writing to `<log_directory>/shellstation.log`
+/// (default `<config_dir>/logs/`). The returned `WorkerGuard` must be held
+/// for the process lifetime — dropping it flushes pending writes and shuts
+/// down the background writer thread.
+///
+/// `RUST_LOG`, when set, takes precedence over `cfg.level`.
+fn init_tracing(
+    config_dir: &std::path::Path,
+    cfg: &config::AppLoggingConfig,
+) -> Option<WorkerGuard> {
+    use tracing_subscriber::fmt;
+
+    let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+        EnvFilter::new(format!(
+            "shellstation={lvl},shellstation_lib={lvl}",
+            lvl = cfg.level
+        ))
+    });
+
+    let stdout_layer = fmt::layer().with_writer(std::io::stdout);
+
+    if cfg.enabled {
+        let log_dir = match &cfg.log_directory {
+            Some(p) if !p.is_empty() => std::path::PathBuf::from(p),
+            _ => config_dir.join("logs"),
+        };
+        if let Err(e) = std::fs::create_dir_all(&log_dir) {
+            // Fall back to stdout-only — we cannot use tracing yet because the
+            // subscriber is not installed, so this goes straight to stderr.
+            eprintln!(
+                "Failed to create application log directory {}: {e} — \
+                 application logging disabled for this session.",
+                log_dir.display()
+            );
+            tracing_subscriber::registry()
+                .with(env_filter)
+                .with(stdout_layer)
+                .init();
+            return None;
+        }
+        let file_appender = tracing_appender::rolling::daily(&log_dir, "shellstation.log");
+        let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
+        let file_layer = fmt::layer().with_ansi(false).with_writer(non_blocking);
+        tracing_subscriber::registry()
+            .with(env_filter)
+            .with(stdout_layer)
+            .with(file_layer)
+            .init();
+        tracing::info!(
+            log_dir = %log_dir.display(),
+            level = %cfg.level,
+            "Application file logging enabled (daily rotation)"
+        );
+        return Some(guard);
+    }
+
+    tracing_subscriber::registry()
+        .with(env_filter)
+        .with(stdout_layer)
+        .init();
+    None
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::from_default_env())
-        .init();
+    let config_dir = dirs::config_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join("shellstation");
+    let _ = std::fs::create_dir_all(&config_dir);
+
+    // Load config first so the tracing subscriber can be configured from it.
+    // Tracing calls inside load_config itself are no-ops here (no subscriber
+    // yet), but we re-emit a confirmation line right after init_tracing.
+    let app_config = config::load_config(&config_dir);
+    let _log_guard = init_tracing(&config_dir, &app_config.app_logging);
+    tracing::info!(
+        backend = ?app_config.db_backend,
+        pg_host = %app_config.postgres.host,
+        pg_port = app_config.postgres.port,
+        "ShellStation starting"
+    );
 
     tauri::Builder::default()
         .manage(PtyState::default())
@@ -321,7 +403,7 @@ pub fn run() {
         .manage(TelnetState::default())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
-        .setup(|app| {
+        .setup(move |app| {
             // Build custom menu: replicate Tauri defaults but with a
             // functional Help submenu that links to our project pages.
             let app_handle = app.handle();
@@ -368,16 +450,10 @@ pub fn run() {
                 }
             }
 
-            let config_dir = dirs::config_dir()
-                .unwrap_or_else(|| std::path::PathBuf::from("."))
-                .join("shellstation");
-            std::fs::create_dir_all(&config_dir)?;
-
-            // Load application config
-            let app_config = config::load_config(&config_dir);
+            // config_dir and app_config were loaded at the top of run() so
+            // they could drive tracing initialization. They are captured
+            // here via the move closure.
             let config_path = config_dir.join("config.json");
-
-            // Save default config if it doesn't exist yet
             if !config_path.exists() {
                 let _ = config::save_config(&config_path, &app_config);
             }
@@ -585,6 +661,9 @@ pub fn run() {
             // Session logging
             commands::logging_get_config,
             commands::logging_save_config,
+            // Application logging
+            commands::app_logging_get_config,
+            commands::app_logging_save_config,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

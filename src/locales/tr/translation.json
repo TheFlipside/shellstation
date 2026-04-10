@@ -248,7 +248,17 @@
     "loggingFilenameLabel": "Dosya ad\u0131 bi\u00e7imi",
     "loggingFilenameHint": "Yer tutucular: {name} = oturum ad\u0131, {mm} = dakika, {hh} = saat, {dd} = g\u00fcn, {MM} = ay, {yy} = y\u0131l",
     "loggingSave": "G\u00fcnl\u00fck ayarlar\u0131n\u0131 kaydet",
-    "loggingSaved": "G\u00fcnl\u00fck ayarlar\u0131 kaydedildi."
+    "loggingSaved": "G\u00fcnl\u00fck ayarlar\u0131 kaydedildi.",
+    "appLogging": "Uygulama G\u00fcnl\u00fc\u011f\u00fc",
+    "appLoggingEnabledLabel": "Uygulama g\u00fcnl\u00fc\u011f\u00fcn\u00fc etkinle\u015ftir",
+    "appLoggingEnabledHint": "Etkinle\u015ftirildi\u011finde, ShellStation kendi tan\u0131lama g\u00fcnl\u00fcklerini (ba\u015flang\u0131\u00e7, veritaban\u0131, SSH, hatalar) g\u00fcnl\u00fck olarak de\u011fi\u015fen bir dosyaya yazar. De\u011fi\u015fikliklerin etkili olmas\u0131 i\u00e7in uygulamay\u0131 yeniden ba\u015flat\u0131n.",
+    "appLoggingDirectoryLabel": "G\u00fcnl\u00fck dizini",
+    "appLoggingDirectoryPlaceholder": "Varsay\u0131lan (yap\u0131land\u0131rma dizinindeki logs/)",
+    "appLoggingDirectoryHint": "Uygulama g\u00fcnl\u00fck dosyalar\u0131n\u0131n saklanaca\u011f\u0131 dizin. Dosyalar her g\u00fcn shellstation.log.YYYY-MM-DD olarak de\u011fi\u015ftirilir.",
+    "appLoggingLevelLabel": "G\u00fcnl\u00fck d\u00fczeyi",
+    "appLoggingLevelHint": "Uygulama g\u00fcnl\u00fcklerinin ayr\u0131nt\u0131 d\u00fczeyi. INFO \u00f6nerilir; DEBUG ve TRACE sorun gidermek i\u00e7in yararl\u0131d\u0131r. Ayarlanm\u0131\u015fsa, RUST_LOG ortam de\u011fi\u015fkeni bu de\u011feri ge\u00e7ersiz k\u0131lar.",
+    "appLoggingSave": "Uygulama G\u00fcnl\u00fck Ayarlar\u0131n\u0131 Kaydet",
+    "appLoggingSaved": "Uygulama g\u00fcnl\u00fck ayarlar\u0131 kaydedildi. De\u011fi\u015fikliklerin uygulanmas\u0131 i\u00e7in uygulamay\u0131 yeniden ba\u015flat\u0131n."
   },
   "highlighting": {
     "sectionTitle": "Anahtar kelime vurgulama",

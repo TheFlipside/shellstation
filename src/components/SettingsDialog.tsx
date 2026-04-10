@@ -71,6 +71,12 @@ interface LoggingConfig {
   filename_format: string;
 }
 
+interface AppLoggingConfig {
+  enabled: boolean;
+  log_directory: string | null;
+  level: string;
+}
+
 interface SettingsDialogProps {
   onClose: () => void;
 }
@@ -139,6 +145,14 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
   const [loggingDirty, setLoggingDirty] = useState(false);
   const [loggingSaved, setLoggingSaved] = useState(false);
   const [loggingError, setLoggingError] = useState<string | null>(null);
+
+  // Application logging — separate from session logging.
+  const [appLoggingEnabled, setAppLoggingEnabled] = useState(false);
+  const [appLogDirectory, setAppLogDirectory] = useState("");
+  const [appLogLevel, setAppLogLevel] = useState("info");
+  const [appLoggingDirty, setAppLoggingDirty] = useState(false);
+  const [appLoggingSaved, setAppLoggingSaved] = useState(false);
+  const [appLoggingError, setAppLoggingError] = useState<string | null>(null);
 
   // Highlight profiles
   const highlightProfiles = useHighlightStore((s) => s.profiles);
@@ -229,6 +243,18 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
       });
   }, []);
 
+  useEffect(() => {
+    invoke<AppLoggingConfig>("app_logging_get_config")
+      .then((cfg) => {
+        setAppLoggingEnabled(cfg.enabled);
+        setAppLogDirectory(cfg.log_directory ?? "");
+        setAppLogLevel(cfg.level);
+      })
+      .catch(() => {
+        // Config load failed — keep defaults
+      });
+  }, []);
+
   const handleLoggingSave = useCallback(async () => {
     setLoggingError(null);
     try {
@@ -243,6 +269,21 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
       setLoggingError(String(e));
     }
   }, [loggingEnabled, logDirectory, logFilenameFormat]);
+
+  const handleAppLoggingSave = useCallback(async () => {
+    setAppLoggingError(null);
+    try {
+      await invoke("app_logging_save_config", {
+        enabled: appLoggingEnabled,
+        logDirectory: appLogDirectory || null,
+        level: appLogLevel,
+      });
+      setAppLoggingDirty(false);
+      setAppLoggingSaved(true);
+    } catch (e) {
+      setAppLoggingError(String(e));
+    }
+  }, [appLoggingEnabled, appLogDirectory, appLogLevel]);
 
   const handleDbBackendChange = useCallback((backend: "sqlite" | "postgres") => {
     setDbBackend(backend);
@@ -816,6 +857,118 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
         )}
         {loggingSaved && <span className="settings-db-success">{t("settings.loggingSaved")}</span>}
         {loggingError !== null && <p className="settings-db-error">{loggingError}</p>}
+
+        {/* ── Application Logging Section ──────────────────────────── */}
+        <h4 className="settings-section-title">{t("settings.appLogging")}</h4>
+        <div className="dialog-field dialog-field-row">
+          <input
+            type="checkbox"
+            id="settings-app-logging-enabled"
+            checked={appLoggingEnabled}
+            onChange={(e) => {
+              setAppLoggingEnabled(e.target.checked);
+              setAppLoggingDirty(true);
+              setAppLoggingSaved(false);
+            }}
+          />
+          <label htmlFor="settings-app-logging-enabled">
+            {t("settings.appLoggingEnabledLabel")}
+          </label>
+          <span className="settings-help" title={t("settings.appLoggingEnabledHint")}>
+            ?
+          </span>
+        </div>
+        {appLoggingEnabled && (
+          <>
+            <div className="dialog-field">
+              <label htmlFor="settings-app-log-directory">
+                {t("settings.appLoggingDirectoryLabel")}
+              </label>
+              <div className="dialog-row">
+                <div className="dialog-field-grow">
+                  <input
+                    id="settings-app-log-directory"
+                    type="text"
+                    value={appLogDirectory}
+                    placeholder={t("settings.appLoggingDirectoryPlaceholder")}
+                    onChange={(e) => {
+                      setAppLogDirectory(e.target.value);
+                      setAppLoggingDirty(true);
+                      setAppLoggingSaved(false);
+                    }}
+                  />
+                </div>
+                <button
+                  type="button"
+                  className="dialog-btn"
+                  onClick={() => {
+                    void (async () => {
+                      const path = await open({
+                        title: t("settings.appLoggingDirectoryLabel"),
+                        defaultPath: appLogDirectory || undefined,
+                        multiple: false,
+                        directory: true,
+                      });
+                      if (path) {
+                        setAppLogDirectory(path);
+                        setAppLoggingDirty(true);
+                        setAppLoggingSaved(false);
+                      }
+                    })();
+                  }}
+                >
+                  {t("settings.dbBrowse")}
+                </button>
+                <span className="settings-help" title={t("settings.appLoggingDirectoryHint")}>
+                  ?
+                </span>
+              </div>
+            </div>
+            <div className="dialog-field">
+              <label htmlFor="settings-app-log-level">{t("settings.appLoggingLevelLabel")}</label>
+              <div className="dialog-row">
+                <div className="dialog-field-grow">
+                  <CustomSelect
+                    id="settings-app-log-level"
+                    value={appLogLevel}
+                    onChange={(v) => {
+                      setAppLogLevel(v);
+                      setAppLoggingDirty(true);
+                      setAppLoggingSaved(false);
+                    }}
+                    options={[
+                      { value: "error", label: "ERROR" },
+                      { value: "warn", label: "WARN" },
+                      { value: "info", label: "INFO" },
+                      { value: "debug", label: "DEBUG" },
+                      { value: "trace", label: "TRACE" },
+                    ]}
+                  />
+                </div>
+                <span className="settings-help" title={t("settings.appLoggingLevelHint")}>
+                  ?
+                </span>
+              </div>
+            </div>
+          </>
+        )}
+        {appLoggingDirty && (
+          <div className="dialog-field">
+            <button
+              type="button"
+              className="dialog-btn dialog-btn-primary"
+              onClick={() => {
+                void handleAppLoggingSave();
+              }}
+            >
+              {t("settings.appLoggingSave")}
+            </button>
+          </div>
+        )}
+        {appLoggingSaved && (
+          <span className="settings-db-success">{t("settings.appLoggingSaved")}</span>
+        )}
+        {appLoggingError !== null && <p className="settings-db-error">{appLoggingError}</p>}
 
         {/* ── Database Section ─────────────────────────────────────── */}
         <h4 className="settings-section-title">{t("settings.database")}</h4>

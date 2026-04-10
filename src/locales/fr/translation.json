@@ -248,7 +248,17 @@
     "loggingFilenameLabel": "Format du nom de fichier",
     "loggingFilenameHint": "Espaces r\u00e9serv\u00e9s\u00a0: {name} = nom de session, {mm} = minute, {hh} = heure, {dd} = jour, {MM} = mois, {yy} = ann\u00e9e",
     "loggingSave": "Enregistrer les param\u00e8tres de journalisation",
-    "loggingSaved": "Param\u00e8tres de journalisation enregistr\u00e9s."
+    "loggingSaved": "Param\u00e8tres de journalisation enregistr\u00e9s.",
+    "appLogging": "Journalisation de l'application",
+    "appLoggingEnabledLabel": "Activer la journalisation de l'application",
+    "appLoggingEnabledHint": "Lorsqu'elle est activ\u00e9e, ShellStation \u00e9crit ses propres journaux de diagnostic (d\u00e9marrage, base de donn\u00e9es, SSH, erreurs) dans un fichier avec rotation quotidienne. Red\u00e9marrez l'application pour appliquer les modifications.",
+    "appLoggingDirectoryLabel": "R\u00e9pertoire des journaux",
+    "appLoggingDirectoryPlaceholder": "Par d\u00e9faut (logs/ dans le r\u00e9pertoire de configuration)",
+    "appLoggingDirectoryHint": "R\u00e9pertoire o\u00f9 les fichiers de journaux de l'application seront stock\u00e9s. Les fichiers sont renouvel\u00e9s quotidiennement sous la forme shellstation.log.YYYY-MM-DD.",
+    "appLoggingLevelLabel": "Niveau de journalisation",
+    "appLoggingLevelHint": "Verbosit\u00e9 des journaux de l'application. INFO est recommand\u00e9 ; DEBUG et TRACE sont utiles pour diagnostiquer les probl\u00e8mes. La variable d'environnement RUST_LOG, si elle est d\u00e9finie, remplace cette valeur.",
+    "appLoggingSave": "Enregistrer les param\u00e8tres de journalisation",
+    "appLoggingSaved": "Param\u00e8tres de journalisation de l'application enregistr\u00e9s. Red\u00e9marrez l'application pour appliquer les modifications."
   },
   "highlighting": {
     "sectionTitle": "Coloration par mots-cl\u00e9s",

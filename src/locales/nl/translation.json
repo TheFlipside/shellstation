@@ -248,7 +248,17 @@
     "loggingFilenameLabel": "Bestandsnaamformaat",
     "loggingFilenameHint": "Plaatshouders: {name} = sessienaam, {mm} = minuut, {hh} = uur, {dd} = dag, {MM} = maand, {yy} = jaar",
     "loggingSave": "Loginstellingen opslaan",
-    "loggingSaved": "Loginstellingen opgeslagen."
+    "loggingSaved": "Loginstellingen opgeslagen.",
+    "appLogging": "Applicatie-logging",
+    "appLoggingEnabledLabel": "Applicatie-logging inschakelen",
+    "appLoggingEnabledHint": "Wanneer ingeschakeld schrijft ShellStation eigen diagnostische logs (opstart, database, SSH, fouten) naar een dagelijks roterend bestand. Start de applicatie opnieuw om wijzigingen door te voeren.",
+    "appLoggingDirectoryLabel": "Logmap",
+    "appLoggingDirectoryPlaceholder": "Standaard (logs/ in configuratiemap)",
+    "appLoggingDirectoryHint": "Map waar logbestanden van de applicatie worden opgeslagen. Bestanden worden dagelijks geroteerd als shellstation.log.YYYY-MM-DD.",
+    "appLoggingLevelLabel": "Logniveau",
+    "appLoggingLevelHint": "Detailniveau van applicatielogs. INFO wordt aanbevolen; DEBUG en TRACE zijn nuttig bij het diagnosticeren van problemen. De omgevingsvariabele RUST_LOG, indien ingesteld, overschrijft deze waarde.",
+    "appLoggingSave": "Applicatie-logging opslaan",
+    "appLoggingSaved": "Instellingen voor applicatie-logging opgeslagen. Start de app opnieuw om wijzigingen toe te passen."
   },
   "highlighting": {
     "sectionTitle": "Trefwoordmarkering",

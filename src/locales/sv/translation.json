@@ -248,7 +248,17 @@
     "loggingFilenameLabel": "Filnamnsformat",
     "loggingFilenameHint": "Platsh\u00e5llare: {name} = sessionsnamn, {mm} = minut, {hh} = timme, {dd} = dag, {MM} = m\u00e5nad, {yy} = \u00e5r",
     "loggingSave": "Spara logginst\u00e4llningar",
-    "loggingSaved": "Logginst\u00e4llningar sparade."
+    "loggingSaved": "Logginst\u00e4llningar sparade.",
+    "appLogging": "Programloggning",
+    "appLoggingEnabledLabel": "Aktivera programloggning",
+    "appLoggingEnabledHint": "N\u00e4r aktiverat skriver ShellStation egna diagnostiska loggar (uppstart, databas, SSH, fel) till en fil med daglig rotation. Starta om programmet f\u00f6r att \u00e4ndringarna ska tr\u00e4da i kraft.",
+    "appLoggingDirectoryLabel": "Loggkatalog",
+    "appLoggingDirectoryPlaceholder": "Standard (logs/ i konfigurationskatalogen)",
+    "appLoggingDirectoryHint": "Katalog d\u00e4r programmets loggfiler lagras. Filerna roteras dagligen som shellstation.log.YYYY-MM-DD.",
+    "appLoggingLevelLabel": "Loggniv\u00e5",
+    "appLoggingLevelHint": "Detaljniv\u00e5 f\u00f6r programloggar. INFO rekommenderas; DEBUG och TRACE \u00e4r anv\u00e4ndbara vid fels\u00f6kning. Milj\u00f6variabeln RUST_LOG, om angiven, \u00e5sidos\u00e4tter detta v\u00e4rde.",
+    "appLoggingSave": "Spara inst\u00e4llningar f\u00f6r programloggning",
+    "appLoggingSaved": "Inst\u00e4llningar f\u00f6r programloggning sparade. Starta om appen f\u00f6r att \u00e4ndringarna ska tr\u00e4da i kraft."
   },
   "highlighting": {
     "sectionTitle": "Nyckelordsmarkering",

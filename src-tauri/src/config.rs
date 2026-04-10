@@ -15,6 +15,49 @@ pub struct AppConfig {
     pub postgres: PostgresConfig,
     #[serde(default)]
     pub logging: LoggingConfig,
+    #[serde(default)]
+    pub app_logging: AppLoggingConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AppLoggingConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    /// Directory where application log files are written. When `None`,
+    /// defaults to `<config_dir>/logs/`. Files are rotated daily as
+    /// `shellstation.log.YYYY-MM-DD`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub log_directory: Option<String>,
+    /// Log level filter: "error", "warn", "info", "debug", "trace".
+    /// The `RUST_LOG` environment variable, if set, overrides this value.
+    #[serde(default = "default_app_log_level")]
+    pub level: String,
+}
+
+fn default_app_log_level() -> String {
+    "info".to_string()
+}
+
+impl Default for AppLoggingConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            log_directory: None,
+            level: default_app_log_level(),
+        }
+    }
+}
+
+impl AppLoggingConfig {
+    /// Validate the level value.
+    pub fn validate_level(level: &str) -> Result<(), String> {
+        match level {
+            "error" | "warn" | "info" | "debug" | "trace" => Ok(()),
+            other => Err(format!(
+                "Invalid log level: \"{other}\". Must be one of error, warn, info, debug, trace."
+            )),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
