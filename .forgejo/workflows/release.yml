@@ -118,7 +118,7 @@ jobs:
         run: ls -la release-files/
 
       - name: Publish Forgejo release
-        uses: actions/forgejo-release@v2
+        uses: https://code.forgejo.org/actions/forgejo-release@v2
         with:
           direction: upload
           url: https://git.fiedler.live
