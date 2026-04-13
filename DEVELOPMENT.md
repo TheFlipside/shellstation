@@ -1209,6 +1209,8 @@ The pipeline needs two self-hosted runners: one Linux, one Windows. Both run the
 
 Any modern Debian/Ubuntu host works. Recommended: Ubuntu 22.04+ or Debian 12+.
 
+The pipeline runs in **host mode** (no container), so every tool the build needs must be preinstalled on this machine — the workflow deliberately does not run `apt install` or `setup-node` at job time. Steps 1 and 2 below must be completed before the runner will build successfully.
+
 **1. Install the build prerequisites** (matches what the pipeline expects to find):
 
 ```bash

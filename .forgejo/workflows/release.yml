@@ -12,32 +12,10 @@ jobs:
       - name: Checkout
         uses: https://github.com/actions/checkout@v4
 
-      - name: Install system dependencies
+      - name: Verify toolchain
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            libwebkit2gtk-4.1-dev \
-            libssl-dev \
-            libgtk-3-dev \
-            libayatana-appindicator3-dev \
-            librsvg2-dev \
-            patchelf \
-            build-essential \
-            file \
-            wget \
-            curl
-
-      - name: Setup Node.js
-        uses: https://github.com/actions/setup-node@v4
-        with:
-          node-version: "20"
-
-      - name: Setup Rust
-        run: |
-          if ! command -v cargo >/dev/null 2>&1; then
-            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
-            echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
-          fi
+          node --version
+          npm --version
           rustc --version
           cargo --version
 
@@ -77,14 +55,11 @@ jobs:
       - name: Checkout
         uses: https://github.com/actions/checkout@v4
 
-      - name: Setup Node.js
-        uses: https://github.com/actions/setup-node@v4
-        with:
-          node-version: "20"
-
-      - name: Verify Rust toolchain
+      - name: Verify toolchain
         shell: pwsh
         run: |
+          node --version
+          npm --version
           rustc --version
           cargo --version
           rustup target add x86_64-pc-windows-msvc
