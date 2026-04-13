@@ -126,19 +126,48 @@ jobs:
           api="$FORGEJO_URL/api/v1/repos/$REPO"
           auth="Authorization: token $TOKEN"
 
-          # Find existing release by tag, or create one.
-          release_id=$(curl -fsSL -H "$auth" "$api/releases/tags/$TAG" | \
-            sed -n 's/.*"id":\s*\([0-9]*\).*/\1/p' | head -n1 || true)
+          # Helper: perform an API call and capture status + body separately
+          # so failures can be diagnosed instead of silently swallowed.
+          api_call() {
+            local method="$1"
+            local url="$2"
+            shift 2
+            local body_file status
+            body_file=$(mktemp)
+            status=$(curl -sS -o "$body_file" -w '%{http_code}' \
+              -X "$method" -H "$auth" "$@" "$url")
+            printf '%s\n' "$status"
+            cat "$body_file"
+            rm -f "$body_file"
+          }
 
-          if [ -z "${release_id:-}" ]; then
+          # Look up existing release by tag. 404 is expected on first run.
+          lookup=$(api_call GET "$api/releases/tags/$TAG")
+          lookup_status=$(printf '%s' "$lookup" | head -n1)
+          lookup_body=$(printf '%s' "$lookup" | tail -n +2)
+
+          if [ "$lookup_status" = "200" ]; then
+            release_id=$(printf '%s' "$lookup_body" | \
+              sed -n 's/.*"id":\s*\([0-9]*\).*/\1/p' | head -n1)
+            echo "Reusing existing release $TAG (id=$release_id)"
+          elif [ "$lookup_status" = "404" ]; then
             echo "Creating release $TAG"
-            release_id=$(curl -fsSL -X POST -H "$auth" \
+            create=$(api_call POST "$api/releases" \
               -H "Content-Type: application/json" \
-              -d "{\"tag_name\":\"$TAG\",\"name\":\"$TAG\"}" \
-              "$api/releases" | \
+              -d "{\"tag_name\":\"$TAG\",\"name\":\"$TAG\"}")
+            create_status=$(printf '%s' "$create" | head -n1)
+            create_body=$(printf '%s' "$create" | tail -n +2)
+            if [ "$create_status" != "201" ]; then
+              echo "Release creation failed: HTTP $create_status" >&2
+              echo "$create_body" >&2
+              exit 1
+            fi
+            release_id=$(printf '%s' "$create_body" | \
               sed -n 's/.*"id":\s*\([0-9]*\).*/\1/p' | head -n1)
           else
-            echo "Reusing existing release $TAG (id=$release_id)"
+            echo "Release lookup failed: HTTP $lookup_status" >&2
+            echo "$lookup_body" >&2
+            exit 1
           fi
 
           if [ -z "${release_id:-}" ]; then
@@ -147,7 +176,14 @@ jobs:
           fi
 
           # Fetch existing assets so we can overwrite.
-          assets_json=$(curl -fsSL -H "$auth" "$api/releases/$release_id/assets")
+          assets=$(api_call GET "$api/releases/$release_id/assets")
+          assets_status=$(printf '%s' "$assets" | head -n1)
+          assets_json=$(printf '%s' "$assets" | tail -n +2)
+          if [ "$assets_status" != "200" ]; then
+            echo "Asset listing failed: HTTP $assets_status" >&2
+            echo "$assets_json" >&2
+            exit 1
+          fi
 
           for f in release-files/*; do
             [ -f "$f" ] || continue
@@ -163,7 +199,13 @@ jobs:
                 "$api/releases/$release_id/assets/$existing_id"
             fi
             echo "Uploading $name"
-            curl -fsSL -X POST -H "$auth" \
+            upload=$(curl -sS -o /tmp/upload-body -w '%{http_code}' \
+              -X POST -H "$auth" \
               -F "attachment=@$f" \
-              "$api/releases/$release_id/assets?name=$name"
+              "$api/releases/$release_id/assets?name=$name")
+            if [ "$upload" != "201" ]; then
+              echo "Upload of $name failed: HTTP $upload" >&2
+              cat /tmp/upload-body >&2
+              exit 1
+            fi
           done
