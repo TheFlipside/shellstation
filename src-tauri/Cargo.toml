@@ -1,6 +1,6 @@
 [package]
 name = "shellstation"
-version = "0.1.0"
+version = "0.9.0"
 description = "Cross-Platform Terminal Manager & SSH Client"
 authors = ["LuminaApps"]
 edition = "2021"
@@ -36,13 +36,13 @@ sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio",
 tokio = { version = "1", features = ["full"] }
 keyring = { version = "3", features = ["crypto-rust"] }
 uuid = { version = "1", features = ["v4", "serde"] }
-portable-pty = "0.8"
+portable-pty = "0.9.0"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing-appender = "0.2"
 async-trait = "0.1"
 dirs = "6"
-sha2 = "0.10"
+sha2 = "0.11.0"
 zeroize = { version = "1", features = ["serde"] }
 tauri-plugin-dialog = "2.6.0"
 quick-xml = "0.37"

@@ -41,8 +41,8 @@ This guide walks through every step needed to set up a development workstation f
 ### Production Builds
 
 - [Building for Release](#22-building-for-release)
-- [Code Signing](#23-code-signing)
-- [CI/CD Release Pipeline](#24-cicd-release-pipeline)
+- [CI/CD Release Pipeline (Forgejo Actions)](#23-cicd-release-pipeline-forgejo-actions)
+- [Forgejo Runner Setup](#24-forgejo-runner-setup)
 
 ### Maintenance
 
@@ -388,78 +388,15 @@ This configures rust-analyzer to run clippy instead of the default `cargo check`
 
 ## 7. Project Bootstrap
 
-Once all dependencies are installed, initialize the ShellStation project:
-
-### Create the Tauri project
+### Clone and install (Linux)
 
 ```bash
-cargo tauri init
-```
-
-Or, to scaffold with the React + TypeScript + Vite template in one step:
-
-```bash
-npm create tauri-app@latest shellstation -- \
-    --template react-ts \
-    --manager npm
+git clone https://git.fiedler.live/tux/shellstation.git
 cd shellstation
-```
-
-### Install frontend dependencies
-
-```bash
 npm install
 ```
 
-### Install core frontend libraries
-
-```bash
-npm install @tauri-apps/api@latest
-npm install zustand                   # state management
-npm install @xterm/xterm              # terminal emulator
-npm install @xterm/addon-webgl        # GPU-accelerated renderer
-npm install @xterm/addon-fit          # auto-resize terminal to container
-npm install @xterm/addon-search       # search within scrollback
-npm install @xterm/addon-ligatures    # font ligature support
-```
-
-### Install dev dependencies
-
-```bash
-npm install -D \
-    @types/react \
-    @types/react-dom \
-    eslint \
-    @eslint/js \
-    typescript-eslint \
-    eslint-plugin-react \
-    eslint-plugin-react-hooks \
-    eslint-plugin-security \
-    prettier \
-    vitest \
-    @testing-library/react \
-    @testing-library/jest-dom
-```
-
-### Add Rust crate dependencies
-
-Add the following to `src-tauri/Cargo.toml` under `[dependencies]`:
-
-```toml
-[dependencies]
-tauri = { version = "2", features = [] }
-russh = "0.45"
-russh-keys = "0.45"
-sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite", "postgres", "uuid", "chrono"] }
-tokio = { version = "1", features = ["full"] }
-keyring = "3"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-uuid = { version = "1", features = ["v4", "serde"] }
-portable-pty = "0.8"
-tracing = "0.1"
-tracing-subscriber = "0.3"
-```
+`npm install` reads `package.json` and pulls all frontend dependencies including the Tauri CLI wrapper. Rust crates are resolved automatically by Cargo on the first build.
 
 ### Run the initial database migration
 
@@ -468,7 +405,7 @@ sqlx database create
 sqlx migrate run
 ```
 
-(This requires the `DATABASE_URL` environment variable to be set and the `migrations/` directory to contain migration files.)
+(Requires the `DATABASE_URL` environment variable to be set — see [Database Tooling](#5-database-tooling).)
 
 ### First build and run
 
@@ -1211,228 +1148,217 @@ This command:
 
 ### Configuring bundle targets
 
-The `tauri.conf.json` `bundle.targets` field controls which formats are built. The current setting `"all"` builds every format available on the host OS. To build only specific formats:
+The `tauri.conf.json` `bundle.targets` field controls which formats are built. The current setting `"all"` builds every format available on the host OS. To build only specific formats, pass `--bundles` on the command line:
 
-```json
-{
-  "bundle": {
-    "targets": ["msi", "nsis"]
-  }
-}
+```bash
+cargo tauri build -- --bundles deb,appimage    # Linux
+cargo tauri build -- --bundles msi,nsis        # Windows
+cargo tauri build -- --bundles dmg,app         # macOS
 ```
 
 Valid targets: `msi`, `nsis`, `dmg`, `app`, `deb`, `appimage`, `rpm`.
 
-### Version bumping
+### Version bumping and release process
 
-Update the version in three places before a release:
-
-1. `tauri.conf.json` — `"version"` field (drives installer version metadata).
-2. `src-tauri/Cargo.toml` — `version` under `[package]`.
-3. `package.json` — `"version"` field.
-
-All three must match. The Tauri bundler reads the version from `tauri.conf.json` for the installer filename and metadata.
-
-### Release profile optimization
-
-The default Cargo release profile is sufficient for most cases. For maximum binary size reduction, add to `src-tauri/Cargo.toml`:
-
-```toml
-[profile.release]
-strip = true        # Strip debug symbols
-lto = true          # Link-time optimization (slower build, smaller binary)
-codegen-units = 1   # Single codegen unit (slower build, better optimization)
-opt-level = "s"     # Optimize for size over speed
-```
-
-Trade-off: `lto = true` with `codegen-units = 1` increases release build time significantly (10-20 min) but produces binaries 20-40% smaller.
+The version-bumping checklist and end-to-end release flow live in [RELEASING.md](RELEASING.md). The release profile (`strip`, `lto`, `codegen-units`, `opt-level`) is already configured in `src-tauri/Cargo.toml`.
 
 ---
 
-## 23. Code Signing
+## 23. CI/CD Release Pipeline (Forgejo Actions)
 
-Unsigned binaries trigger OS warnings (Windows SmartScreen, macOS Gatekeeper). Code signing is required for a professional release.
+ShellStation is built and released via Forgejo Actions on a self-hosted runner setup. The pipeline lives at [`.forgejo/workflows/release.yml`](.forgejo/workflows/release.yml).
 
-### Windows (Authenticode)
+### Pipeline overview
 
-You need a code signing certificate from a Certificate Authority (e.g., DigiCert, Sectigo, SSL.com) or an EV certificate for immediate SmartScreen trust.
+| Job              | Runner label | Outputs                            |
+| ---------------- | ------------ | ---------------------------------- |
+| `build-linux`    | `linux`      | `.deb`, `.AppImage`                |
+| `build-windows`  | `windows`    | `.msi`, `.exe` (NSIS)              |
+| `publish-release`| `linux`      | Forgejo release with all artifacts |
 
-Configure in `tauri.conf.json`:
+macOS is **not** built by the pipeline. Apple's notarization toolchain is macOS-only and requires Xcode, so macOS artifacts are produced manually on a developer's MacBook and uploaded to the same release page after the pipeline completes. See [RELEASING.md](RELEASING.md) for the manual macOS build steps.
 
-```json
-{
-  "bundle": {
-    "windows": {
-      "certificateThumbprint": "<YOUR_CERT_THUMBPRINT>",
-      "digestAlgorithm": "sha256",
-      "timestampUrl": "http://timestamp.digicert.com"
-    }
-  }
-}
-```
+### Trigger
 
-The certificate must be installed in the Windows Certificate Store. For CI, use `signtool.exe` with a PFX file or Azure Trusted Signing.
-
-Environment variables for CI signing:
-
-```text
-TAURI_SIGNING_PRIVATE_KEY              Base64-encoded private key for Tauri updater
-TAURI_SIGNING_PRIVATE_KEY_PASSWORD     Password for the private key
-```
-
-### macOS (codesign + notarization)
-
-Requires an Apple Developer account ($99/year) and a "Developer ID Application" certificate.
-
-Configure environment variables:
+The pipeline fires on any tag matching `v*`:
 
 ```bash
-export APPLE_CERTIFICATE="<base64-encoded .p12>"
-export APPLE_CERTIFICATE_PASSWORD="<p12 password>"
-export APPLE_SIGNING_IDENTITY="Developer ID Application: Your Name (TEAMID)"
-export APPLE_ID="your@email.com"
-export APPLE_PASSWORD="<app-specific-password>"
-export APPLE_TEAM_ID="TEAMID"
+git tag v0.9.0
+git push origin v0.9.0
 ```
 
-Tauri handles `codesign` and `notarytool submit` automatically when these variables are set during `cargo tauri build`.
+### Required repository secrets
 
-### Linux (GPG signing, optional)
+| Secret name     | Purpose                                                                                                                            |
+| --------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `RELEASE_TOKEN` | Forgejo access token with `write:repository` scope. Used by the `publish-release` job to create the release and upload artifacts. |
 
-Linux packages (`.deb`, `.AppImage`) do not require code signing for distribution. Optional GPG signing of `.deb` packages can be done post-build with `dpkg-sig`.
+Generate the token at <https://git.fiedler.live/user/settings/applications> and add it under repo **Settings → Actions → Secrets**.
+
+### Code signing
+
+Releases are currently **unsigned**. Windows users see a SmartScreen "Unknown publisher" warning on first launch; macOS users must right-click the `.app` and choose **Open** (or run `xattr -d com.apple.quarantine`). This is acceptable for early releases. If signing becomes a requirement later, the recommended path is [SignPath.io's free OSS program](https://signpath.org/foundation) — no hardware token, no business entity, integrates with CI via API.
 
 ---
 
-## 24. CI/CD Release Pipeline
+## 24. Forgejo Runner Setup
 
-A GitHub Actions workflow that builds, signs, and publishes releases for all three platforms.
+The pipeline needs two self-hosted runners: one Linux, one Windows. Both run the `forgejo-runner` daemon and register against `https://git.fiedler.live`.
 
-### Workflow file: `.github/workflows/release.yml`
+### 24.1. Linux runner
 
-```yaml
-name: Release
+Any modern Debian/Ubuntu host works. Recommended: Ubuntu 22.04+ or Debian 12+.
 
-on:
-  push:
-    tags:
-      - "v*"
-
-jobs:
-  build:
-    strategy:
-      matrix:
-        include:
-          - platform: ubuntu-22.04
-            target: linux
-          - platform: windows-latest
-            target: windows
-          - platform: macos-latest
-            target: macos
-
-    runs-on: ${{ matrix.platform }}
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Linux dependencies
-        if: matrix.target == 'linux'
-        run: |
-          sudo apt update
-          sudo apt install -y \
-            libwebkit2gtk-4.1-dev \
-            libgtk-3-dev \
-            libayatana-appindicator3-dev \
-            librsvg2-dev \
-            libssl-dev \
-            libsoup-3.0-dev \
-            libjavascriptcoregtk-4.1-dev
-
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy, rustfmt
-
-      - name: Install Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: npm
-
-      - name: Install frontend dependencies
-        run: npm ci
-
-      - name: Lint (Rust)
-        working-directory: src-tauri
-        run: |
-          cargo clippy -- -D warnings
-          cargo fmt -- --check
-
-      - name: Lint (Frontend)
-        run: |
-          npx eslint src/ --ext .ts,.tsx
-          npx prettier --check "src/**/*.{ts,tsx,css,json}"
-          npx tsc --noEmit
-
-      - name: Run tests
-        run: |
-          cd src-tauri && cargo test && cd ..
-          npx vitest run
-
-      - name: Build Tauri release
-        uses: tauri-apps/tauri-action@v0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Windows signing
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          # macOS signing
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        with:
-          tagName: ${{ github.ref_name }}
-          releaseName: "ShellStation ${{ github.ref_name }}"
-          releaseBody: "See the changelog for details."
-          releaseDraft: true
-          prerelease: false
-
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: shellstation-${{ matrix.target }}
-          path: src-tauri/target/release/bundle/**/*
-```
-
-### Creating a release
+**1. Install the build prerequisites** (matches what the pipeline expects to find):
 
 ```bash
-# Bump versions in tauri.conf.json, Cargo.toml, and package.json
-# Commit the version bump
-git add -A && git commit -m "Bump version to 0.2.0"
-
-# Tag and push
-git tag v0.2.0
-git push origin main --tags
+sudo apt update
+sudo apt install -y \
+    build-essential curl wget file pkg-config \
+    libssl-dev libgtk-3-dev libwebkit2gtk-4.1-dev \
+    libayatana-appindicator3-dev librsvg2-dev \
+    libdbus-1-dev libsoup-3.0-dev libjavascriptcoregtk-4.1-dev
 ```
 
-The workflow triggers on the tag push, builds all three platforms in parallel, runs the full lint and test suite, produces signed installers, and creates a draft GitHub Release with the artifacts attached. Review the draft and publish when ready.
-
-### Manual release build (no CI)
-
-If building locally without CI:
+**2. Install Node.js 20 LTS and Rust stable** as a dedicated runner user:
 
 ```bash
-# Build for the current platform
-cargo tauri build
-
-# Artifacts are in src-tauri/target/release/bundle/
-ls src-tauri/target/release/bundle/
+sudo useradd -m -s /bin/bash forgejo-runner
+sudo -iu forgejo-runner bash -c '
+  curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+  curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
+'
+sudo apt install -y nodejs
 ```
 
-Cross-compilation is not supported by Tauri — each platform must be built on its native OS. For a multi-platform release without CI, build on each target machine and collect the artifacts manually.
+**3. Download the Forgejo runner binary**:
+
+```bash
+sudo -iu forgejo-runner bash -c '
+  cd ~
+  curl -L -o forgejo-runner https://code.forgejo.org/forgejo/runner/releases/download/v6.2.2/forgejo-runner-6.2.2-linux-amd64
+  chmod +x forgejo-runner
+  ./forgejo-runner generate-config > config.yml
+'
+```
+
+(Check <https://code.forgejo.org/forgejo/runner/releases> for the latest version.)
+
+**4. Register against Forgejo**. Get a registration token from <https://git.fiedler.live/-/admin/actions/runners> (instance-wide) or your repo's **Settings → Actions → Runners** (repo-scoped):
+
+```bash
+sudo -iu forgejo-runner bash -c '
+  cd ~
+  ./forgejo-runner register --no-interactive \
+    --instance https://git.fiedler.live \
+    --token <REGISTRATION_TOKEN> \
+    --name linux-builder \
+    --labels linux:host
+'
+```
+
+The `linux` label matches `runs-on: linux` in the workflow. The `:host` suffix is critical — it tells the runner to execute jobs directly on the host OS instead of inside a Docker container. Without it, the runner will fail to start with `daemon Docker Engine socket not found` unless Docker is installed. Host mode is what you want for a Tauri build runner: the host already has Rust, Node, and the GTK dev libs installed, so there's no reason to add a container layer.
+
+**5. Run as a systemd service**:
+
+```bash
+sudo tee /etc/systemd/system/forgejo-runner.service >/dev/null <<'EOF'
+[Unit]
+Description=Forgejo Actions Runner
+After=network.target
+
+[Service]
+Type=simple
+User=forgejo-runner
+WorkingDirectory=/home/forgejo-runner
+ExecStart=/home/forgejo-runner/forgejo-runner daemon
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+sudo systemctl daemon-reload
+sudo systemctl enable --now forgejo-runner
+sudo systemctl status forgejo-runner
+```
+
+Verify the runner is online at <https://git.fiedler.live/-/admin/actions/runners>.
+
+### 24.2. Windows runner
+
+**Recommended OS:** Windows 11 Pro 23H2 or 24H2 (x64). Reasons:
+
+- Matches what end users have, so platform-specific bugs surface during the build
+- WebView2 Runtime is preinstalled (Tauri requires it)
+- Modern PowerShell, winget, and proper symlink support
+- Pro (not Home) gives Remote Desktop, Group Policy, Hyper-V
+
+Avoid Windows Server (different WebView2 story), Windows 10 (EOL October 2025), and Windows 11 LTSC (no WebView2 by default).
+
+**1. Base OS prep**:
+
+- Install Windows 11 Pro, fully patch it, set a static hostname
+- Create a dedicated local user account (admin is simplest initially)
+- Disable sleep and hibernate so the runner stays online: `powercfg /change standby-timeout-ac 0`
+
+**2. Install build prerequisites** (elevated PowerShell):
+
+```powershell
+winget install --id Git.Git -e
+winget install --id OpenJS.NodeJS.LTS -e
+winget install --id Rustlang.Rustup -e
+winget install --id Microsoft.VisualStudio.2022.BuildTools -e --override "--quiet --wait --add Microsoft.VisualStudio.Workload.VCTools --add Microsoft.VisualStudio.Component.Windows11SDK.22621 --includeRecommended"
+winget install --id Microsoft.EdgeWebView2Runtime -e
+```
+
+Open a fresh terminal and verify:
+
+```powershell
+git --version
+node --version
+rustup default stable
+rustc --version
+cargo --version
+```
+
+**3. Install the Forgejo runner binary**:
+
+- Download `forgejo-runner-<ver>-windows-amd64.exe` from <https://code.forgejo.org/forgejo/runner/releases>
+- Place it at `C:\forgejo-runner\forgejo-runner.exe`
+- In PowerShell:
+
+```powershell
+cd C:\forgejo-runner
+.\forgejo-runner.exe generate-config > config.yml
+```
+
+**4. Register against Forgejo** (same token source as the Linux runner):
+
+```powershell
+.\forgejo-runner.exe register --no-interactive `
+  --instance https://git.fiedler.live `
+  --token <REGISTRATION_TOKEN> `
+  --name windows-builder `
+  --labels windows:host
+```
+
+The `windows` label matches `runs-on: windows` in the workflow. The `:host` suffix is critical — it tells the runner to execute jobs directly on Windows instead of inside a Docker container. Without it, the service will fail to start with `daemon Docker Engine socket not found`. If you already registered without `:host` and hit that error, stop the service, delete `C:\forgejo-runner\.runner`, grab a fresh registration token from the Forgejo admin UI, and re-run the register command with the corrected label.
+
+**5. Run as a Windows service** using NSSM so it survives reboots:
+
+```powershell
+winget install --id NSSM.NSSM -e
+nssm install ForgejoRunner "C:\forgejo-runner\forgejo-runner.exe" "daemon"
+nssm set ForgejoRunner AppDirectory "C:\forgejo-runner"
+nssm set ForgejoRunner Start SERVICE_AUTO_START
+nssm start ForgejoRunner
+```
+
+Verify the runner appears as `windows-builder` at <https://git.fiedler.live/-/admin/actions/runners>.
+
+**6. Smoke test**: push a throwaway tag (`git tag v0.9.0-test1 && git push origin v0.9.0-test1`) and watch both runners pick up their jobs in the Actions tab. Delete the tag after the test runs.
 
 ## 25. Updating Dependencies
 
