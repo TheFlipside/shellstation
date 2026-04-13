@@ -1303,7 +1303,15 @@ Avoid Windows Server (different WebView2 story), Windows 10 (EOL October 2025), 
 **1. Base OS prep**:
 
 - Install Windows 11 Pro, fully patch it, set a static hostname
-- Create a dedicated local user account (admin is simplest initially)
+- Create a dedicated **local** account for the runner service (e.g. `forgejo-svc`) with a real password — not a Microsoft account and not PIN-only login. Service logon requires an NTLM password blob that MS-account/PIN accounts do not have, and attempting to use one produces `RUNAS ERROR: Unable to acquire user password` and service start failures with event ID 7000 "Access is denied". Create it via `New-LocalUser` in an elevated PowerShell:
+
+  ```powershell
+  $pw = Read-Host -AsSecureString "Password"
+  New-LocalUser -Name "forgejo-svc" -Password $pw -PasswordNeverExpires -AccountNeverExpires -UserMayNotChangePassword
+  Add-LocalGroupMember -Group "Administrators" -Member "forgejo-svc"
+  ```
+
+- Install the build toolchain (winget steps below) **while logged in as this service account**, so Rust and Node land in that account's profile where the service will later find them.
 - Disable sleep and hibernate so the runner stays online: `powercfg /change standby-timeout-ac 0`
 
 **2. Install build prerequisites** (elevated PowerShell):
@@ -1356,8 +1364,15 @@ winget install --id NSSM.NSSM -e
 nssm install ForgejoRunner "C:\forgejo-runner\forgejo-runner.exe" "daemon"
 nssm set ForgejoRunner AppDirectory "C:\forgejo-runner"
 nssm set ForgejoRunner Start SERVICE_AUTO_START
+nssm set ForgejoRunner ObjectName ".\<your-username>" "<password>"
 nssm start ForgejoRunner
 ```
+
+The `ObjectName` line is critical. NSSM defaults to running services as `LocalSystem`, which has its own empty profile and cannot see `rustup`, `cargo`, or `node` installed into `C:\Users\<you>\.cargo\bin` and `%APPDATA%\npm`. Running the service as the user that installed the toolchain inherits that user's `PATH` and profile, so the build just works. The alternative — installing Rust machine-wide under `C:\Rust` with `RUSTUP_HOME` and `CARGO_HOME` set in the Machine environment — also works but is more ceremony.
+
+Note the `.\` prefix on `ObjectName`. It tells Windows the account is local to this machine rather than a domain account; without it, the logon will fail even for a valid local user.
+
+Before starting the service, the account also needs the **Log on as a service** user right. By default even local admins do not have it. Grant it via `secpol.msc → Local Policies → User Rights Assignment → Log on as a service → Add User or Group`. Without this right, `nssm start ForgejoRunner` returns `START: Access is denied.`
 
 Verify the runner appears as `windows-builder` at <https://git.fiedler.live/-/admin/actions/runners>.
 
