@@ -137,6 +137,8 @@ export function TerminalTabs({ uiScale }: TerminalTabsProps): React.JSX.Element 
     restrictPrivateIps,
     confirmOnCloseTab,
     connectTimeout,
+    keepaliveInterval,
+    keepaliveMax,
   } = useSettingsStore();
   const [showQuickConnect, setShowQuickConnect] = useState(false);
   const [tabCtx, setTabCtx] = useState<{ x: number; y: number; tabId: string } | null>(null);
@@ -181,6 +183,8 @@ export function TerminalTabs({ uiScale }: TerminalTabsProps): React.JSX.Element 
             rows: 24,
             restrictPrivateIps: restrictPrivateIps,
             connectTimeout: connectTimeout,
+            keepaliveInterval: keepaliveInterval,
+            keepaliveMax: keepaliveMax,
           });
           addTab(id, `${params.username}@${params.host}`, "ssh", {
             host: params.host,
@@ -192,7 +196,7 @@ export function TerminalTabs({ uiScale }: TerminalTabsProps): React.JSX.Element 
         addToast(t("terminal.connectionFailed", { message }));
       }
     },
-    [addTab, t, restrictPrivateIps, connectTimeout, addToast],
+    [addTab, t, restrictPrivateIps, connectTimeout, keepaliveInterval, keepaliveMax, addToast],
   );
 
   const showNextVerifyRequest = useCallback(() => {

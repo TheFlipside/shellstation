@@ -24,6 +24,8 @@ pub async fn ssh_connect(
     jump_hops: Option<Vec<JumpHop>>,
     restrict_private_ips: Option<bool>,
     connect_timeout: Option<u64>,
+    keepalive_interval: Option<u64>,
+    keepalive_max: Option<u32>,
 ) -> Result<String, String> {
     validate_dimensions(cols, rows)?;
     let hops = jump_hops.unwrap_or_default();
@@ -66,6 +68,8 @@ pub async fn ssh_connect(
             jump_hops: hops,
             restrict_private_ips: restrict_private_ips.unwrap_or(false),
             connect_timeout_secs: connect_timeout.unwrap_or(10),
+            keepalive_interval_secs: keepalive_interval.unwrap_or(15),
+            keepalive_max: keepalive_max.unwrap_or(3) as usize,
             logger,
         },
         &state.host_verify_senders,
@@ -101,9 +105,9 @@ pub async fn ssh_write(state: State<'_, SshState>, id: String, data: String) -> 
         manager.get_write_handle(&id)?
     };
     tokio::spawn(async move {
-        let _ = handle
-            .data(channel_id, russh::CryptoVec::from_slice(data.as_bytes()))
-            .await;
+        if let Err(e) = handle.data(channel_id, data.into_bytes()).await {
+            tracing::warn!("ssh_write: failed to send data: {e:?}");
+        }
     });
     Ok(())
 }

@@ -281,12 +281,18 @@ pub async fn session_update(
                 .as_ref()
                 .map_or(String::new(), |c| c.username.clone())
         });
-        let effective_secret = secret.unwrap_or_else(|| {
-            existing
-                .as_ref()
-                .and_then(|c| crate::credentials::retrieve(&c.keychain_ref).ok())
-                .unwrap_or_default()
-        });
+        // Determine the secret to persist. If the caller supplied one, use it.
+        // Otherwise merge with the existing keychain entry — but propagate any
+        // retrieval error instead of silently overwriting with an empty string.
+        let effective_secret = match secret {
+            Some(s) => s,
+            None => match existing.as_ref() {
+                Some(c) => crate::credentials::retrieve(&c.keychain_ref).map_err(|e| {
+                    format!("Failed to retrieve existing credential from keychain: {e}")
+                })?,
+                None => String::new(),
+            },
+        };
         let effective_auth = effective_method.unwrap_or_else(|| {
             existing
                 .as_ref()
@@ -465,6 +471,8 @@ pub async fn session_connect(
     rows: u16,
     restrict_private_ips: Option<bool>,
     connect_timeout: Option<u64>,
+    keepalive_interval: Option<u64>,
+    keepalive_max: Option<u32>,
 ) -> Result<String, String> {
     validate_dimensions(cols, rows)?;
 
@@ -476,6 +484,8 @@ pub async fn session_connect(
 
     let restrict = restrict_private_ips.unwrap_or(false);
     let timeout_secs = connect_timeout.unwrap_or(10);
+    let keepalive_secs = keepalive_interval.unwrap_or(15);
+    let keepalive_missed = keepalive_max.unwrap_or(3) as usize;
 
     // Dispatch by protocol.
     if session.protocol == "telnet" {
@@ -587,6 +597,8 @@ pub async fn session_connect(
             jump_hops,
             restrict_private_ips: restrict,
             connect_timeout_secs: timeout_secs,
+            keepalive_interval_secs: keepalive_secs,
+            keepalive_max: keepalive_missed,
             logger,
         },
         &ssh.host_verify_senders,

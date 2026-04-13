@@ -8,11 +8,11 @@ ShellStation is a cross-platform, open-source terminal manager and SSH/Telnet cl
 
 - **Language/Frameworks:** Tauri 2.x, Rust, React, TypeScript
 - **Build:** Cargo + Vite
-- **Key deps:** tauri, xterm.js, russh, russh-keys, sqlx, tokio, keyring, serde, uuid, portable-pty, tracing
+- **Key deps:** tauri, xterm.js, russh (includes keys module), sqlx, tokio, keyring, serde, uuid, portable-pty, tracing
 
 ## Directory Layout
 
-```
+```text
 src-tauri/src/main.rs        → Tauri application entry point and command registration.
 src-tauri/src/ssh/      → SSH connection manager, jump host logic, channel handling (russh).
 src-tauri/src/telnet/   → Telnet connection manager (RFC 854, NAWS).

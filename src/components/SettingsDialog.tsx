@@ -5,7 +5,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { useEscapeKey } from "../hooks/useEscapeKey";
 import { useSessionStore } from "../stores/sessionStore";
-import { useSettingsStore } from "../stores/settingsStore";
+import { useSettingsStore, ALLOWED_TERMINAL_FONTS } from "../stores/settingsStore";
 import {
   useHighlightStore,
   type HighlightProfile,
@@ -38,19 +38,7 @@ const AVAILABLE_LANGUAGES = [
 
 const UI_SCALE_OPTIONS = [75, 80, 90, 100, 110, 120, 125, 150];
 
-const FONT_OPTIONS = [
-  "JetBrains Mono",
-  "Fira Code",
-  "Cascadia Code",
-  "Source Code Pro",
-  "IBM Plex Mono",
-  "Ubuntu Mono",
-  "Hack",
-  "Inconsolata",
-  "DejaVu Sans Mono",
-  "Courier New",
-  "monospace",
-];
+const FONT_OPTIONS = ALLOWED_TERMINAL_FONTS;
 
 interface AppConfig {
   db_backend: "sqlite" | "postgres";
@@ -112,6 +100,10 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
     setAutoRefreshInterval,
     connectTimeout,
     setConnectTimeout,
+    keepaliveInterval,
+    setKeepaliveInterval,
+    keepaliveMax,
+    setKeepaliveMax,
     toastAutoDismiss,
     setToastAutoDismiss,
     toastDismissSeconds,
@@ -640,6 +632,52 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
             ?
           </span>
         </div>
+
+        <div className="dialog-field">
+          <label htmlFor="settings-keepalive-interval">
+            {t("settings.keepaliveIntervalLabel")}
+          </label>
+          <CustomSelect
+            id="settings-keepalive-interval"
+            value={String(keepaliveInterval)}
+            onChange={(v) => {
+              setKeepaliveInterval(Number(v));
+            }}
+            options={[
+              { value: "0", label: t("settings.keepaliveOff") },
+              { value: "15", label: "15s" },
+              { value: "30", label: "30s" },
+              { value: "60", label: "60s" },
+              { value: "120", label: "120s" },
+              { value: "300", label: "300s" },
+            ]}
+          />
+          <span className="settings-help" title={t("settings.keepaliveIntervalHint")}>
+            ?
+          </span>
+        </div>
+
+        {keepaliveInterval > 0 && (
+          <div className="dialog-field">
+            <label htmlFor="settings-keepalive-max">{t("settings.keepaliveMaxLabel")}</label>
+            <CustomSelect
+              id="settings-keepalive-max"
+              value={String(keepaliveMax)}
+              onChange={(v) => {
+                setKeepaliveMax(Number(v));
+              }}
+              options={[
+                { value: "1", label: "1" },
+                { value: "3", label: "3" },
+                { value: "5", label: "5" },
+                { value: "10", label: "10" },
+              ]}
+            />
+            <span className="settings-help" title={t("settings.keepaliveMaxHint")}>
+              ?
+            </span>
+          </div>
+        )}
 
         <div className="dialog-field dialog-field-row">
           <input

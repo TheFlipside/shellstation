@@ -7,7 +7,7 @@ import { SearchAddon } from "@xterm/addon-search";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { SessionType } from "../stores/terminalStore";
-import { useSettingsStore } from "../stores/settingsStore";
+import { useSettingsStore, ALLOWED_TERMINAL_FONTS } from "../stores/settingsStore";
 import { useSessionStore } from "../stores/sessionStore";
 import { useHighlightStore } from "../stores/highlightStore";
 import { HighlightEngine } from "../highlightEngine";
@@ -34,20 +34,7 @@ function base64Decode(encoded: string): Uint8Array {
 const MIN_FONT_SIZE = 6;
 const MAX_FONT_SIZE = 72;
 
-/** Allowed terminal font families — must match FONT_OPTIONS in SettingsDialog. */
-const ALLOWED_FONTS = new Set([
-  "JetBrains Mono",
-  "Fira Code",
-  "Cascadia Code",
-  "Source Code Pro",
-  "IBM Plex Mono",
-  "Ubuntu Mono",
-  "Hack",
-  "Inconsolata",
-  "DejaVu Sans Mono",
-  "Courier New",
-  "monospace",
-]);
+const ALLOWED_FONTS: ReadonlySet<string> = new Set(ALLOWED_TERMINAL_FONTS);
 
 /** Build a CSS font-family string: selected font + monospace fallback. */
 function buildFontFamily(font: string): string {

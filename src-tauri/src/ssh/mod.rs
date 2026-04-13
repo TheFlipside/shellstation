@@ -3,9 +3,8 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, ToSocketAddrs};
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use async_trait::async_trait;
 use base64::Engine;
-use russh::keys::key;
+use russh::keys::{PrivateKeyWithHashAlg, PublicKey};
 use russh::{client, ChannelMsg, Disconnect};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
@@ -43,7 +42,9 @@ pub(crate) struct SshSession {
     channel_id: russh::ChannelId,
     reader_task: JoinHandle<()>,
     resize_tx: mpsc::Sender<ResizeRequest>,
-    /// Bastion handles kept alive for jump host chains.
+    /// Bastion handles kept alive for jump host chains. Must be retained for
+    /// their Drop impl, which closes each hop's connection in reverse order
+    /// when the session ends.
     #[allow(dead_code)]
     bastion_handles: Vec<client::Handle<SshHandler>>,
 }
@@ -67,6 +68,8 @@ pub struct SshConnectParams {
     pub auth_method: String,
     pub restrict_private_ips: bool,
     pub connect_timeout_secs: u64,
+    pub keepalive_interval_secs: u64,
+    pub keepalive_max: usize,
     pub auth_credential: Zeroizing<String>,
     pub cols: u16,
     pub rows: u16,
@@ -167,6 +170,8 @@ pub async fn establish_ssh_connection(
         jump_hops,
         restrict_private_ips,
         connect_timeout_secs,
+        keepalive_interval_secs,
+        keepalive_max,
         logger,
     } = params;
 
@@ -179,6 +184,8 @@ pub async fn establish_ssh_connection(
         &jump_hops,
         restrict_private_ips,
         connect_timeout_secs,
+        keepalive_interval_secs,
+        keepalive_max,
         &app_handle,
         verify_senders,
     )
@@ -529,11 +536,23 @@ fn remove_known_host_entries(path: &std::path::Path, host: &str, port: u16) {
     let _ = std::fs::write(path, out);
 }
 
-/// Build a default SSH client config.
-fn ssh_config() -> Arc<client::Config> {
+/// Build an SSH client config with the given keepalive parameters.
+///
+/// TCP_NODELAY is enabled unconditionally: interactive terminal sessions
+/// send small keystroke-sized packets where Nagle's algorithm adds 40+ms
+/// of latency for no real bandwidth savings. OpenSSH sets this by default.
+///
+/// A `keepalive_interval_secs` of 0 disables SSH-level keepalives entirely.
+fn ssh_config(keepalive_interval_secs: u64, keepalive_max: usize) -> Arc<client::Config> {
+    let keepalive_interval = if keepalive_interval_secs == 0 {
+        None
+    } else {
+        Some(std::time::Duration::from_secs(keepalive_interval_secs))
+    };
     Arc::new(client::Config {
-        keepalive_interval: Some(std::time::Duration::from_secs(15)),
-        keepalive_max: 3,
+        keepalive_interval,
+        keepalive_max,
+        nodelay: true,
         ..Default::default()
     })
 }
@@ -620,6 +639,8 @@ async fn connect_with_hops(
     jump_hops: &[JumpHop],
     restrict_private_ips: bool,
     connect_timeout_secs: u64,
+    keepalive_interval_secs: u64,
+    keepalive_max: usize,
     app_handle: &AppHandle,
     verify_senders: &HostVerifySenders,
 ) -> Result<(client::Handle<SshHandler>, Vec<client::Handle<SshHandler>>), String> {
@@ -633,7 +654,7 @@ async fn connect_with_hops(
 
     if jump_hops.is_empty() {
         // Direct connection — no jump hosts.
-        let config = ssh_config();
+        let config = ssh_config(keepalive_interval_secs, keepalive_max);
         let (verify_tx, verify_rx) = oneshot::channel::<bool>();
         verify_senders
             .lock()
@@ -669,7 +690,7 @@ async fn connect_with_hops(
 
     // Connect to the first hop directly.
     let first_hop = &jump_hops[0];
-    let config = ssh_config();
+    let config = ssh_config(keepalive_interval_secs, keepalive_max);
     let hop_id = format!("{session_id}-hop0");
     let (verify_tx, verify_rx) = oneshot::channel::<bool>();
     verify_senders
@@ -723,7 +744,7 @@ async fn connect_with_hops(
             .map_err(|e| format!("Failed to open tunnel to {}:{}: {e}", hop.host, hop.port))?;
 
         let stream = tunnel.into_stream();
-        let config = ssh_config();
+        let config = ssh_config(keepalive_interval_secs, keepalive_max);
         let hop_id = format!("{session_id}-hop{i}");
         let (verify_tx, verify_rx) = oneshot::channel::<bool>();
         verify_senders
@@ -769,7 +790,7 @@ async fn connect_with_hops(
         .map_err(|e| format!("Failed to open tunnel to {target_host}:{target_port}: {e}"))?;
 
     let stream = tunnel.into_stream();
-    let config = ssh_config();
+    let config = ssh_config(keepalive_interval_secs, keepalive_max);
     let (verify_tx, verify_rx) = oneshot::channel::<bool>();
     verify_senders
         .lock()
@@ -807,15 +828,24 @@ async fn authenticate_handle(
         "password" => handle
             .authenticate_password(username, auth_credential)
             .await
+            .map(|res| res.success())
             .map_err(|e| format!("Auth failed: {e}"))?,
         "publickey" => {
             let (key_path, passphrase) = parse_key_credential(auth_credential)?;
             let key_pair =
                 russh::keys::load_secret_key(&key_path, passphrase.as_ref().map(|s| s.as_str()))
                     .map_err(|e| format!("Failed to load SSH key: {e}"))?;
-            handle
-                .authenticate_publickey(username, Arc::new(key_pair))
+            let hash_alg = handle
+                .best_supported_rsa_hash()
                 .await
+                .ok()
+                .flatten()
+                .unwrap_or(None);
+            let key_with_hash = PrivateKeyWithHashAlg::new(Arc::new(key_pair), hash_alg);
+            handle
+                .authenticate_publickey(username, key_with_hash)
+                .await
+                .map(|res| res.success())
                 .map_err(|e| format!("Auth failed: {e}"))?
         }
         other => return Err(format!("Unsupported auth method: {other}")),
@@ -838,13 +868,12 @@ pub(crate) struct SshHandler {
     verify_rx: Arc<Mutex<Option<oneshot::Receiver<bool>>>>,
 }
 
-#[async_trait]
 impl client::Handler for SshHandler {
     type Error = russh::Error;
 
     async fn check_server_key(
         &mut self,
-        server_public_key: &key::PublicKey,
+        server_public_key: &PublicKey,
     ) -> Result<bool, Self::Error> {
         let kh_path = match known_hosts_path() {
             Ok(p) => Some(p),
@@ -891,8 +920,10 @@ impl client::Handler for SshHandler {
             session_id: self.session_id.clone(),
             host: self.host.clone(),
             port: self.port,
-            fingerprint: server_public_key.fingerprint(),
-            key_type: server_public_key.name().to_string(),
+            fingerprint: server_public_key
+                .fingerprint(russh::keys::HashAlg::Sha256)
+                .to_string(),
+            key_type: server_public_key.algorithm().as_str().to_string(),
         };
 
         self.app_handle
@@ -936,7 +967,7 @@ impl client::Handler for SshHandler {
                 // duplicates and ensure changed keys replace the old entry.
                 remove_known_host_entries(kh, &self.host, self.port);
 
-                if let Err(e) = russh::keys::learn_known_hosts_path(
+                if let Err(e) = russh::keys::known_hosts::learn_known_hosts_path(
                     &self.host,
                     self.port,
                     server_public_key,

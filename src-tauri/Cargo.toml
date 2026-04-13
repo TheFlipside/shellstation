@@ -28,8 +28,7 @@ serde_json = "1"
 # affects the decrypting party (i.e. an SSH server). ShellStation is purely an
 # SSH client — it signs with RSA keys but never decrypts — so the vulnerable
 # code path is not reachable here. No upstream fix exists as of 2026-04.
-russh = "0.45"
-russh-keys = "0.45"
+russh = "0.60"
 # default-features disabled to exclude sqlx-mysql, which is unused and
 # otherwise pulls in the `rsa` crate (see RUSTSEC-2023-0071 above).
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls", "sqlite", "postgres", "uuid", "chrono", "macros", "migrate"] }
