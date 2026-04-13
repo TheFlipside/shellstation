@@ -146,9 +146,16 @@ jobs:
           lookup_status=$(printf '%s' "$lookup" | head -n1)
           lookup_body=$(printf '%s' "$lookup" | tail -n +2)
 
+          # Extract the FIRST "id":N from a JSON body. The release's own id
+          # is always the first id field; nested objects (author, etc.) come
+          # later, so a greedy match would return the wrong one.
+          first_id() {
+            grep -o '"id"[[:space:]]*:[[:space:]]*[0-9]*' | \
+              head -n1 | grep -o '[0-9]*$'
+          }
+
           if [ "$lookup_status" = "200" ]; then
-            release_id=$(printf '%s' "$lookup_body" | \
-              sed -n 's/.*"id":\s*\([0-9]*\).*/\1/p' | head -n1)
+            release_id=$(printf '%s' "$lookup_body" | first_id)
             echo "Reusing existing release $TAG (id=$release_id)"
           elif [ "$lookup_status" = "404" ]; then
             echo "Creating release $TAG"
@@ -162,8 +169,7 @@ jobs:
               echo "$create_body" >&2
               exit 1
             fi
-            release_id=$(printf '%s' "$create_body" | \
-              sed -n 's/.*"id":\s*\([0-9]*\).*/\1/p' | head -n1)
+            release_id=$(printf '%s' "$create_body" | first_id)
           else
             echo "Release lookup failed: HTTP $lookup_status" >&2
             echo "$lookup_body" >&2
@@ -188,11 +194,13 @@ jobs:
           for f in release-files/*; do
             [ -f "$f" ] || continue
             name=$(basename "$f")
+            # Split assets_json into one object per line, then find the line
+            # with matching name and extract its id. Works on compact JSON.
             existing_id=$(printf '%s' "$assets_json" | \
-              awk -v n="\"name\":\"$name\"" '
-                /"id":/ { id=$0 }
-                $0 ~ n { print id; exit }
-              ' | sed -n 's/.*"id":\s*\([0-9]*\).*/\1/p')
+              tr '}' '\n' | \
+              grep -F "\"name\":\"$name\"" | \
+              grep -o '"id"[[:space:]]*:[[:space:]]*[0-9]*' | \
+              head -n1 | grep -o '[0-9]*$' || true)
             if [ -n "${existing_id:-}" ]; then
               echo "Deleting existing asset $name (id=$existing_id)"
               curl -fsSL -X DELETE -H "$auth" \
