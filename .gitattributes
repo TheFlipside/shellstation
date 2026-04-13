@@ -1,3 +1,6 @@
+# Claude
+.claude/** linguist-vendored
+
 # Force LF line endings for SQL migrations so that sqlx checksums
 # are consistent across Linux, macOS, and Windows checkouts.
 src-tauri/migrations/*.sql text eol=lf
