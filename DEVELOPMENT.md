@@ -1322,7 +1322,20 @@ winget install --id OpenJS.NodeJS.LTS -e
 winget install --id Rustlang.Rustup -e
 winget install --id Microsoft.VisualStudio.2022.BuildTools -e --override "--quiet --wait --add Microsoft.VisualStudio.Workload.VCTools --add Microsoft.VisualStudio.Component.Windows11SDK.22621 --includeRecommended"
 winget install --id Microsoft.EdgeWebView2Runtime -e
+winget install --id NASM.NASM -e
 ```
+
+After installing NASM, add its install directory to the Machine `PATH` so the runner service picks it up (the winget package does not do this automatically):
+
+```powershell
+[Environment]::SetEnvironmentVariable(
+  "Path",
+  [Environment]::GetEnvironmentVariable("Path", "Machine") + ";C:\Program Files\NASM",
+  "Machine"
+)
+```
+
+NASM is required because `aws-lc-sys` (pulled in transitively via `russh` → `rustls` → `aws-lc-rs`) assembles its crypto primitives from `.asm` sources at build time on Windows. Without `nasm.exe` on `PATH`, the Rust build panics with `NASM command not found! Build cannot continue.` Restart the runner service (or reboot) after changing the Machine `PATH` so the new value is inherited.
 
 Open a fresh terminal and verify:
 
