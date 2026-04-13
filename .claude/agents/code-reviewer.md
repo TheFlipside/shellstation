@@ -92,6 +92,19 @@ Be concise. Only report real issues — no style opinions beyond the stated stan
 - [ ] Signal connections use typed delegates, not string-based wiring
 - [ ] Naming follows C# conventions: `PascalCase` public, `_camelCase` private
 
+### Docker
+- [ ] `hadolint` passes with zero warnings
+- [ ] Base image tags are pinned (no `latest`); prefer digest pinning (`@sha256:...`)
+- [ ] `USER` instruction present — container does not run as root
+- [ ] `COPY` used instead of `ADD` (unless tar extraction is explicitly needed)
+- [ ] No secrets in `ENV`, `ARG`, or `RUN` layers
+- [ ] Minimal base image used (`-alpine`, `distroless`, `scratch`) where appropriate
+- [ ] `RUN` steps combine related commands with `&&` and clean up caches in the same layer
+- [ ] `.dockerignore` exists and excludes `.git`, `.env`, credentials, and build artifacts
+- [ ] `apt-get update && apt-get install` are in the same `RUN` (no stale cache)
+- [ ] `--no-install-recommends` used on `apt-get install`
+- [ ] No `curl | sh` or piped install scripts from unverified sources
+
 ---
 
 ## Output Format

@@ -102,6 +102,19 @@ Be precise — only report real, exploitable issues. No false alarms.
 - [ ] Lock files (`package-lock.json`, `Pipfile.lock`, `pubspec.lock`) are present and committed
 - [ ] No `curl | sh` or `pip install` from unverified URLs in build scripts
 
+### Docker / Container Security
+
+- [ ] **Base image provenance** — Base images are from trusted registries; tags are pinned with digest (`@sha256:...`), not `latest`
+- [ ] **No root execution** — `USER` instruction sets a non-root user; no `--privileged` in run instructions
+- [ ] **No secrets baked in** — No credentials, API keys, or tokens in `ENV`, `ARG`, `COPY`, or `RUN` layers; use BuildKit `--mount=type=secret`
+- [ ] **Minimal attack surface** — Base image is minimal (`-alpine`, `distroless`, `scratch`); no unnecessary packages installed
+- [ ] **No dangerous capabilities** — Dockerfile does not require `--cap-add=SYS_ADMIN`, `--privileged`, or `--net=host` at runtime
+- [ ] **Layer leak check** — Secrets are not written and then deleted in separate layers (still visible in image history); multi-stage builds used to avoid leaking build-time artifacts
+- [ ] **Supply chain** — No `curl | sh`, `wget | bash`, or piped installs from unverified URLs; package installs use `--no-install-recommends` and pin versions
+- [ ] **`.dockerignore` present** — `.git`, `.env`, credential files, and build artifacts are excluded from build context
+- [ ] **HEALTHCHECK defined** — Container has a health check to avoid running silently broken
+- [ ] **No SUID/SGID binaries** — Final image does not contain unnecessary setuid/setgid binaries (run `find / -perm /6000` to verify)
+
 ---
 
 ## Output Format
