@@ -56,7 +56,7 @@ jobs:
         uses: https://github.com/actions/checkout@v4
 
       - name: Verify toolchain
-        shell: pwsh
+        shell: powershell
         run: |
           node --version
           npm --version
@@ -82,7 +82,7 @@ jobs:
         run: npm run tauri build -- --bundles msi,nsis
 
       - name: Collect artifacts
-        shell: pwsh
+        shell: powershell
         run: |
           New-Item -ItemType Directory -Force -Path dist-release | Out-Null
           Copy-Item src-tauri/target/release/bundle/msi/*.msi dist-release/ -ErrorAction SilentlyContinue

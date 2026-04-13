@@ -1273,6 +1273,7 @@ After=network.target
 Type=simple
 User=forgejo-runner
 WorkingDirectory=/home/forgejo-runner
+Environment="PATH=/home/forgejo-runner/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 ExecStart=/home/forgejo-runner/forgejo-runner daemon
 Restart=always
 RestartSec=5
