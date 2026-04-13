@@ -19,13 +19,12 @@ jobs:
           rustc --version
           cargo --version
 
-      - name: Cache cargo registry & target
+      - name: Cache cargo registry
         uses: https://github.com/actions/cache@v4
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            src-tauri/target
           key: linux-cargo-${{ hashFiles('src-tauri/Cargo.lock') }}
           restore-keys: |
             linux-cargo-
@@ -64,13 +63,12 @@ jobs:
           cargo --version
           rustup target add x86_64-pc-windows-msvc
 
-      - name: Cache cargo registry & target
+      - name: Cache cargo registry
         uses: https://github.com/actions/cache@v4
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            src-tauri/target
           key: windows-cargo-${{ hashFiles('src-tauri/Cargo.lock') }}
           restore-keys: |
             windows-cargo-
