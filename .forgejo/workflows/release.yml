@@ -116,12 +116,54 @@ jobs:
         run: ls -la release-files/
 
       - name: Publish Forgejo release
-        uses: https://code.forgejo.org/actions/forgejo-release@v2
-        with:
-          direction: upload
-          url: https://git.fiedler.live
-          repo: tux/shellstation
-          tag: ${{ github.ref_name }}
-          release-dir: release-files
-          token: ${{ secrets.RELEASE_TOKEN }}
-          override: true
+        env:
+          FORGEJO_URL: https://git.fiedler.live
+          REPO: tux/shellstation
+          TAG: ${{ github.ref_name }}
+          TOKEN: ${{ secrets.RELEASE_TOKEN }}
+        run: |
+          set -euo pipefail
+          api="$FORGEJO_URL/api/v1/repos/$REPO"
+          auth="Authorization: token $TOKEN"
+
+          # Find existing release by tag, or create one.
+          release_id=$(curl -fsSL -H "$auth" "$api/releases/tags/$TAG" | \
+            sed -n 's/.*"id":\s*\([0-9]*\).*/\1/p' | head -n1 || true)
+
+          if [ -z "${release_id:-}" ]; then
+            echo "Creating release $TAG"
+            release_id=$(curl -fsSL -X POST -H "$auth" \
+              -H "Content-Type: application/json" \
+              -d "{\"tag_name\":\"$TAG\",\"name\":\"$TAG\"}" \
+              "$api/releases" | \
+              sed -n 's/.*"id":\s*\([0-9]*\).*/\1/p' | head -n1)
+          else
+            echo "Reusing existing release $TAG (id=$release_id)"
+          fi
+
+          if [ -z "${release_id:-}" ]; then
+            echo "Failed to obtain release id" >&2
+            exit 1
+          fi
+
+          # Fetch existing assets so we can overwrite.
+          assets_json=$(curl -fsSL -H "$auth" "$api/releases/$release_id/assets")
+
+          for f in release-files/*; do
+            [ -f "$f" ] || continue
+            name=$(basename "$f")
+            existing_id=$(printf '%s' "$assets_json" | \
+              awk -v n="\"name\":\"$name\"" '
+                /"id":/ { id=$0 }
+                $0 ~ n { print id; exit }
+              ' | sed -n 's/.*"id":\s*\([0-9]*\).*/\1/p')
+            if [ -n "${existing_id:-}" ]; then
+              echo "Deleting existing asset $name (id=$existing_id)"
+              curl -fsSL -X DELETE -H "$auth" \
+                "$api/releases/$release_id/assets/$existing_id"
+            fi
+            echo "Uploading $name"
+            curl -fsSL -X POST -H "$auth" \
+              -F "attachment=@$f" \
+              "$api/releases/$release_id/assets?name=$name"
+          done

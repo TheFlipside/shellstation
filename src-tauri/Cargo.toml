@@ -45,7 +45,7 @@ dirs = "6"
 sha2 = "0.11.0"
 zeroize = { version = "1", features = ["serde"] }
 tauri-plugin-dialog = "2.6.0"
-quick-xml = "0.37"
+quick-xml = "0.39.2"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]

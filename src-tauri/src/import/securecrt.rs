@@ -46,6 +46,9 @@ pub fn parse(xml: &str) -> Result<ParseResult, String> {
 
 /// Advance the reader past `<key name="Sessions">`, leaving it positioned
 /// at the first child element. Returns `false` if the block is not found.
+///
+/// If the XML contains multiple `<key name="Sessions">` blocks only the
+/// first one is processed; SecureCRT exports are expected to have exactly one.
 fn find_sessions_key(reader: &mut Reader<&[u8]>) -> Result<bool, String> {
     loop {
         match reader.read_event() {
@@ -55,7 +58,7 @@ fn find_sessions_key(reader: &mut Reader<&[u8]>) -> Result<bool, String> {
                         return Ok(true);
                     }
                     // Not the Sessions key — skip its entire subtree.
-                    skip_to_end(reader, b"key")?;
+                    skip_through_end(reader, b"key")?;
                 }
             }
             Ok(Event::Eof) => return Ok(false),
@@ -84,19 +87,24 @@ fn parse_key_children(
         match reader.read_event() {
             Ok(Event::Start(ref e)) => {
                 if e.local_name().as_ref() == b"key" {
-                    let key_name = get_attr(e, "name").unwrap_or_default();
-                    parse_key_block(
-                        reader,
-                        &key_name,
-                        parent_temp_id,
-                        next_temp_id,
-                        folders,
-                        sessions,
-                        warnings,
-                    )?;
+                    match get_attr(e, "name") {
+                        Some(key_name) => parse_key_block(
+                            reader,
+                            &key_name,
+                            parent_temp_id,
+                            next_temp_id,
+                            folders,
+                            sessions,
+                            warnings,
+                        )?,
+                        None => {
+                            warnings.push("Skipped <key> element without name attribute".into());
+                            skip_through_end(reader, b"key")?;
+                        }
+                    }
                 } else {
                     // Non-key element at this level (shouldn't happen, but be safe).
-                    skip_to_end(reader, e.local_name().as_ref())?;
+                    skip_through_end(reader, e.local_name().as_ref())?;
                 }
             }
             Ok(Event::End(_)) | Ok(Event::Eof) => break,
@@ -128,7 +136,7 @@ fn parse_key_block(
 ) -> Result<(), String> {
     // Skip built-in default sessions early.
     if SKIP_SESSIONS.contains(&key_name) {
-        skip_to_end(reader, b"key")?;
+        skip_through_end(reader, b"key")?;
         return Ok(());
     }
 
@@ -146,37 +154,63 @@ fn parse_key_block(
                 match local.as_ref() {
                     b"key" => {
                         has_child_keys = true;
-                        let child_name = get_attr(e, "name").unwrap_or_default();
-                        parse_key_block(
-                            reader,
-                            &child_name,
-                            my_temp_id,
-                            next_temp_id,
-                            folders,
-                            sessions,
-                            warnings,
-                        )?;
+                        match get_attr(e, "name") {
+                            Some(child_name) => parse_key_block(
+                                reader,
+                                &child_name,
+                                my_temp_id,
+                                next_temp_id,
+                                folders,
+                                sessions,
+                                warnings,
+                            )?,
+                            None => {
+                                warnings.push(format!(
+                                    "In \"{key_name}\": skipped <key> element without name attribute"
+                                ));
+                                skip_through_end(reader, b"key")?;
+                            }
+                        }
                     }
                     b"string" => {
-                        let attr_name = get_attr(e, "name").unwrap_or_default();
+                        let Some(attr_name) = get_attr(e, "name") else {
+                            warnings.push(format!(
+                                "In \"{key_name}\": ignored <string> element without name attribute"
+                            ));
+                            skip_through_end(reader, b"string")?;
+                            continue;
+                        };
                         let value = read_text(reader, b"string")?;
                         props.set_string(&attr_name, &value);
                     }
                     b"dword" => {
-                        let attr_name = get_attr(e, "name").unwrap_or_default();
+                        let Some(attr_name) = get_attr(e, "name") else {
+                            warnings.push(format!(
+                                "In \"{key_name}\": ignored <dword> element without name attribute"
+                            ));
+                            skip_through_end(reader, b"dword")?;
+                            continue;
+                        };
                         let value = read_text(reader, b"dword")?;
-                        props.set_dword(&attr_name, &value);
+                        if let Err(msg) = props.set_dword(&attr_name, &value) {
+                            warnings.push(format!("In \"{key_name}\": {msg}"));
+                        }
                     }
                     _ => {
-                        skip_to_end(reader, local.as_ref())?;
+                        skip_through_end(reader, local.as_ref())?;
                     }
                 }
             }
             Ok(Event::Empty(ref e)) => {
                 let local = e.local_name();
                 if local.as_ref() == b"string" {
-                    let attr_name = get_attr(e, "name").unwrap_or_default();
-                    props.set_string(&attr_name, "");
+                    if let Some(attr_name) = get_attr(e, "name") {
+                        props.set_string(&attr_name, "");
+                    } else {
+                        warnings.push(format!(
+                            "In \"{key_name}\": ignored empty <string> element without name attribute"
+                        ));
+                    }
                 }
             }
             Ok(Event::End(ref e)) => {
@@ -235,14 +269,17 @@ impl SessionProps {
         }
     }
 
-    fn set_dword(&mut self, name: &str, value: &str) {
-        let parsed: i32 = value.parse().unwrap_or(0);
+    fn set_dword(&mut self, name: &str, value: &str) -> Result<(), String> {
+        let parsed: i32 = value
+            .parse()
+            .map_err(|_| format!("invalid dword value for \"{name}\": {value:?}"))?;
         match name {
             "Is Session" => self.is_session = parsed == 1,
             "[SSH2] Port" => self.ssh_port = Some(parsed),
             "Port" => self.telnet_port = Some(parsed),
             _ => {}
         }
+        Ok(())
     }
 }
 
@@ -282,11 +319,10 @@ fn build_session(
     };
 
     // SecureCRT stores jump hosts as "Firewall Name" = "Session:<name>".
-    let jump_host_name = if props.firewall_name.starts_with("Session:") {
-        Some(props.firewall_name["Session:".len()..].to_string())
-    } else {
-        None
-    };
+    let jump_host_name = props
+        .firewall_name
+        .strip_prefix("Session:")
+        .map(str::to_string);
 
     Ok(ImportedSession {
         name: name.to_string(),
@@ -306,7 +342,7 @@ fn read_text(reader: &mut Reader<&[u8]>, end_tag: &[u8]) -> Result<String, Strin
         match reader.read_event() {
             Ok(Event::Text(ref e)) => {
                 text.push_str(
-                    e.unescape()
+                    e.xml_content()
                         .map_err(|err| format!("Failed to decode text: {err}"))?
                         .as_ref(),
                 );
@@ -324,8 +360,9 @@ fn read_text(reader: &mut Reader<&[u8]>, end_tag: &[u8]) -> Result<String, Strin
     }
 }
 
-/// Skip events until the matching end tag.
-fn skip_to_end(reader: &mut Reader<&[u8]>, tag: &[u8]) -> Result<(), String> {
+/// Advance the reader through and past the matching end tag, consuming
+/// any nested elements with the same tag name along the way.
+fn skip_through_end(reader: &mut Reader<&[u8]>, tag: &[u8]) -> Result<(), String> {
     let mut depth = 1u32;
     loop {
         match reader.read_event() {
