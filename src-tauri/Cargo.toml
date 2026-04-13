@@ -1,6 +1,6 @@
 [package]
 name = "shellstation"
-version = "0.9.0"
+version = "0.9.1"
 description = "Cross-Platform Terminal Manager & SSH Client"
 authors = ["LuminaApps"]
 edition = "2021"
