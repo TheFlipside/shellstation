@@ -5223,7 +5223,7 @@ checksum = "dc6fe69c597f9c37bfeeeeeb33da3530379845f10be461a66d16d03eca2ded77"
 
 [[package]]
 name = "shellstation"
-version = "0.9.2"
+version = "0.9.3"
 dependencies = [
  "async-trait",
  "base64 0.22.1",

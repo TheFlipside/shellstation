@@ -6,6 +6,16 @@ All notable changes to this project are documented in this file.
 
 ### Added
 
+### Fixed
+
+### Changed
+
+### Removed
+
+## 0.9.3 - 2026-04-14
+
+### Added
+
 - Display session name in list on mouse hover
 - More colors for command buttons
 - Ability to select jump hosts in dropdown list with typing names
@@ -26,8 +36,6 @@ All notable changes to this project are documented in this file.
 
 - Don't display warnings about unsupported session settings during database import
 - Different syntax for application log files
-
-### Removed
 
 ## 0.9.2 - 2026-04-13
 
