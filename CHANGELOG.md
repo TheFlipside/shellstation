@@ -6,17 +6,23 @@ All notable changes to this project are documented in this file.
 
 ### Added
 
+### Fixed
+
+### Changed
+
+### Removed
+
+### 0.9.4 - 2026-04-14
+
+### Added
+
 - Archive with extra files for releases
 - Ability to use legacy algorithms per ssh session
-
-### Fixed
 
 ### Changed
 
 - Credential workflow refactored with new credential manager
 - Minor hardening for data handling
-
-### Removed
 
 ## 0.9.3 - 2026-04-14
 
