@@ -11,6 +11,7 @@ All notable changes to this project are documented in this file.
 ### Changed
 
 - Credential workflow refactored with new credential manager
+- Minor hardening for data handling
 
 ### Removed
 

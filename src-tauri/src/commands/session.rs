@@ -304,12 +304,26 @@ pub async fn session_delete(state: State<'_, DbState>, id: String) -> Result<(),
     state.0.delete_session(parse_uuid(&id)?).await
 }
 
+/// Cap the search term length to bound LIKE-query cost and prevent a
+/// pathologically long needle from forcing expensive full-table scans.
+const MAX_SEARCH_QUERY_LEN: usize = 200;
+
 #[tauri::command]
 pub async fn session_search(
     state: State<'_, DbState>,
     query: String,
 ) -> Result<Vec<Session>, String> {
-    state.0.search_sessions(&query).await
+    let trimmed = if query.len() > MAX_SEARCH_QUERY_LEN {
+        &query[..query
+            .char_indices()
+            .take_while(|(i, _)| *i < MAX_SEARCH_QUERY_LEN)
+            .last()
+            .map(|(i, c)| i + c.len_utf8())
+            .unwrap_or(0)]
+    } else {
+        query.as_str()
+    };
+    state.0.search_sessions(trimmed).await
 }
 
 #[tauri::command]

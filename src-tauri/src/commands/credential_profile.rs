@@ -79,8 +79,15 @@ pub async fn credential_profile_create(
     if !secret.is_empty() {
         if let Err(e) = crate::credentials::store(&profile.keychain_ref, &secret) {
             // Roll back the DB row so the user can retry without leaving a
-            // stub profile behind.
-            let _ = cred_db.0.delete_credential_profile(profile.id).await;
+            // stub profile behind. If the rollback itself fails we still
+            // return the original error, but log the dangling-row condition
+            // so it can be investigated.
+            if let Err(rollback_err) = cred_db.0.delete_credential_profile(profile.id).await {
+                tracing::error!(
+                    profile_id = %profile.id,
+                    "failed to roll back credential profile after keychain store error: {rollback_err}"
+                );
+            }
             return Err(format!("Failed to store secret in OS keychain: {e}"));
         }
     }

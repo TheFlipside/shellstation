@@ -14,6 +14,35 @@ use crate::db::{DatabaseProvider, DbState};
 /// Maximum allowed XML file size (100 MB).
 const MAX_XML_SIZE: usize = 100 * 1024 * 1024;
 
+/// Maximum length of any imported name (folder or session). Longer values
+/// are truncated to protect downstream tools that may have stricter limits.
+const MAX_IMPORTED_NAME_LEN: usize = 255;
+
+/// Strip NUL bytes and control characters that could confuse log pipelines
+/// or C-string-based downstream consumers, and cap the length.
+fn sanitize_imported_name(raw: &str) -> String {
+    let cleaned: String = raw
+        .chars()
+        .filter(|c| *c != '\0' && (!c.is_control() || *c == ' '))
+        .collect();
+    if cleaned.chars().count() <= MAX_IMPORTED_NAME_LEN {
+        cleaned
+    } else {
+        cleaned.chars().take(MAX_IMPORTED_NAME_LEN).collect()
+    }
+}
+
+/// Clamp an imported port to the valid TCP range. Returns `None` if the
+/// value cannot be represented as a valid port, signaling the caller to
+/// skip the session.
+fn validate_port(port: i32) -> Option<i32> {
+    if (1..=65535).contains(&port) {
+        Some(port)
+    } else {
+        None
+    }
+}
+
 /// Return type shared by both parsers: (folders, sessions, warnings).
 type ParseResult = (Vec<ImportedFolder>, Vec<ImportedSession>, Vec<String>);
 
@@ -155,7 +184,7 @@ async fn persist_import(
     // Create the root import folder at the top level (no parent).
     let root_folder = db
         .create_folder(NewFolder {
-            name: root_name.to_string(),
+            name: sanitize_imported_name(root_name),
             parent_id: None,
         })
         .await
@@ -178,7 +207,7 @@ async fn persist_import(
 
         match db
             .create_folder(NewFolder {
-                name: folder.name.clone(),
+                name: sanitize_imported_name(&folder.name),
                 parent_id: Some(parent_uuid),
             })
             .await
@@ -210,12 +239,25 @@ async fn persist_import(
             .copied()
             .unwrap_or(root_folder.id);
 
+        let safe_name = sanitize_imported_name(&session.name);
+        let safe_hostname = sanitize_imported_name(&session.hostname);
+        let Some(safe_port) = validate_port(session.port) else {
+            warnings.push(format!(
+                "Skipped session \"{}\": invalid port {}",
+                safe_name, session.port
+            ));
+            if (i + 1) % PROGRESS_STEP == 0 {
+                emit_progress(app, "sessions", (i + 1) as u32, session_total);
+            }
+            continue;
+        };
+
         match db
             .create_session(NewSession {
                 folder_id: folder_uuid,
-                name: session.name.clone(),
-                hostname: session.hostname.clone(),
-                port: session.port,
+                name: safe_name.clone(),
+                hostname: safe_hostname,
+                port: safe_port,
                 protocol: session.protocol.clone(),
                 auth_method: "password".to_string(),
                 jump_host_id: None,
@@ -227,17 +269,14 @@ async fn persist_import(
             .await
         {
             Ok(created) => {
-                session_name_map.insert(session.name.clone(), created.id);
+                session_name_map.insert(safe_name.clone(), created.id);
                 if let Some(ref jump_name) = session.jump_host_name {
-                    jump_host_pending.push((created.id, jump_name.clone()));
+                    jump_host_pending.push((created.id, sanitize_imported_name(jump_name)));
                 }
                 sessions_created += 1;
             }
             Err(e) => {
-                warnings.push(format!(
-                    "Failed to create session \"{}\": {e}",
-                    session.name
-                ));
+                warnings.push(format!("Failed to create session \"{safe_name}\": {e}"));
             }
         }
         if (i + 1) % PROGRESS_STEP == 0 {
