@@ -121,8 +121,29 @@ jobs:
           name: windows-bundles
           path: dist-release/*
 
+  build-extras:
+    runs-on: linux
+    steps:
+      - name: Checkout
+        uses: https://github.com/actions/checkout@v4
+
+      - name: Package extras
+        run: |
+          set -euo pipefail
+          mkdir -p dist-release extras-stage/tools
+          cp tools/generate_test_data.py extras-stage/tools/
+          cp -r tools/highlight_profiles extras-stage/tools/
+          (cd extras-stage && zip -r ../dist-release/extras.zip tools)
+          ls -la dist-release/
+
+      - name: Upload artifacts
+        uses: https://github.com/actions/upload-artifact@v3
+        with:
+          name: extras-bundle
+          path: dist-release/*
+
   publish-release:
-    needs: [build-linux, build-windows]
+    needs: [build-linux, build-windows, build-extras]
     runs-on: linux
     steps:
       - name: Checkout
@@ -138,6 +159,12 @@ jobs:
         uses: https://github.com/actions/download-artifact@v3
         with:
           name: windows-bundles
+          path: release-files
+
+      - name: Download extras artifact
+        uses: https://github.com/actions/download-artifact@v3
+        with:
+          name: extras-bundle
           path: release-files
 
       - name: List release files
