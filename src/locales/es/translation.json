@@ -98,6 +98,8 @@
     "keyPathBrowse": "Examinar\u2026",
     "jumpHostLabel": "Host de salto",
     "jumpHostNone": "Ninguno",
+    "legacyAlgorithmsLabel": "Habilitar algoritmos SSH heredados",
+    "legacyAlgorithmsHint": "Permite negociar algoritmos d\u00e9biles (group14-sha1, ssh-rsa, aes-cbc, hmac-sha1, 3des-cbc). Act\u00edvalo solo para sistemas antiguos que no hablan SSH moderno.",
     "iconLabel": "Icono",
     "icon_desktop": "Escritorio",
     "icon_linux": "Linux",

@@ -59,6 +59,7 @@ fn row_to_session(row: &SqliteRow) -> DbResult<Session> {
         sort_order: row.get("sort_order"),
         highlight_profile_id: parse_optional_uuid(row.get("highlight_profile_id"))?,
         credential_profile_id: parse_optional_uuid(row.get("credential_profile_id"))?,
+        legacy_algorithms: row.get::<i64, _>("legacy_algorithms") != 0,
     })
 }
 
@@ -210,8 +211,8 @@ impl DatabaseProvider for SqliteProvider {
         .map_err(|e| format!("Failed to compute sort_order: {e}"))?;
 
         sqlx::query(
-            "INSERT INTO sessions (id, folder_id, name, hostname, port, protocol, username, auth_method, jump_host_id, tags, icon, sort_order, highlight_profile_id, credential_profile_id) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO sessions (id, folder_id, name, hostname, port, protocol, username, auth_method, jump_host_id, tags, icon, sort_order, highlight_profile_id, credential_profile_id, legacy_algorithms) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&id_str)
         .bind(&folder_str)
@@ -227,6 +228,7 @@ impl DatabaseProvider for SqliteProvider {
         .bind(sort_order)
         .bind(session.highlight_profile_id.map(|u| u.to_string()))
         .bind(session.credential_profile_id.map(|u| u.to_string()))
+        .bind(i64::from(session.legacy_algorithms))
         .execute(&self.pool)
         .await
         .map_err(|e| format!("Failed to create session: {e}"))?;
@@ -246,12 +248,13 @@ impl DatabaseProvider for SqliteProvider {
             sort_order,
             highlight_profile_id: session.highlight_profile_id,
             credential_profile_id: session.credential_profile_id,
+            legacy_algorithms: session.legacy_algorithms,
         })
     }
 
     async fn get_session(&self, id: Uuid) -> DbResult<Option<Session>> {
         let row = sqlx::query(
-            "SELECT id, folder_id, name, hostname, port, protocol, username, auth_method, jump_host_id, tags, icon, sort_order, highlight_profile_id, credential_profile_id \
+            "SELECT id, folder_id, name, hostname, port, protocol, username, auth_method, jump_host_id, tags, icon, sort_order, highlight_profile_id, credential_profile_id, legacy_algorithms \
              FROM sessions WHERE id = ?",
         )
         .bind(id.to_string())
@@ -267,7 +270,7 @@ impl DatabaseProvider for SqliteProvider {
 
     async fn list_all_sessions(&self) -> DbResult<Vec<Session>> {
         let rows = sqlx::query(
-            "SELECT id, folder_id, name, hostname, port, protocol, username, auth_method, jump_host_id, tags, icon, sort_order, highlight_profile_id, credential_profile_id \
+            "SELECT id, folder_id, name, hostname, port, protocol, username, auth_method, jump_host_id, tags, icon, sort_order, highlight_profile_id, credential_profile_id, legacy_algorithms \
              FROM sessions ORDER BY sort_order ASC, name ASC",
         )
         .fetch_all(&self.pool)
@@ -337,6 +340,10 @@ impl DatabaseProvider for SqliteProvider {
                 Some(u) => values.push(BindVal::Text(u.to_string())),
                 None => values.push(BindVal::Null),
             }
+        }
+        if let Some(legacy) = update.legacy_algorithms {
+            sets.push("legacy_algorithms = ?");
+            values.push(BindVal::Int(i32::from(legacy)));
         }
 
         if sets.is_empty() {
@@ -408,7 +415,7 @@ impl DatabaseProvider for SqliteProvider {
         let escaped = query.replace('%', "\\%").replace('_', "\\_");
         let pattern = format!("%{escaped}%");
         let rows = sqlx::query(
-            "SELECT id, folder_id, name, hostname, port, protocol, username, auth_method, jump_host_id, tags, icon, sort_order, highlight_profile_id, credential_profile_id \
+            "SELECT id, folder_id, name, hostname, port, protocol, username, auth_method, jump_host_id, tags, icon, sort_order, highlight_profile_id, credential_profile_id, legacy_algorithms \
              FROM sessions \
              WHERE name LIKE ? ESCAPE '\\' \
                 OR hostname LIKE ? ESCAPE '\\' \

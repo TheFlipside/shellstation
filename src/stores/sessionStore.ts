@@ -25,6 +25,7 @@ export interface Session {
   sort_order: number;
   highlight_profile_id: string | null;
   credential_profile_id: string | null;
+  legacy_algorithms: boolean;
 }
 
 interface SessionState {
@@ -86,6 +87,7 @@ export interface CreateSessionParams {
   jumpHostId?: string | null;
   highlightProfileId?: string | null;
   credentialProfileId?: string | null;
+  legacyAlgorithms?: boolean;
 }
 
 export interface BulkSessionEdit {
@@ -106,6 +108,7 @@ export interface UpdateSessionParams {
   jumpHostId?: string | null;
   highlightProfileId?: string | null;
   credentialProfileId?: string | null;
+  legacyAlgorithms?: boolean;
 }
 
 export const useSessionStore = create<SessionState>((set, get) => ({
@@ -193,6 +196,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       jumpHostId: params.jumpHostId ?? null,
       highlightProfileId: params.highlightProfileId ?? null,
       credentialProfileId: params.credentialProfileId ?? null,
+      legacyAlgorithms: params.legacyAlgorithms ?? false,
     });
     await get().loadAll();
   },
@@ -211,6 +215,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         params.highlightProfileId !== undefined ? params.highlightProfileId : null,
       credentialProfileId:
         params.credentialProfileId !== undefined ? params.credentialProfileId : null,
+      legacyAlgorithms: params.legacyAlgorithms ?? null,
     });
     await get().loadAll();
   },

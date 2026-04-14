@@ -32,6 +32,11 @@ pub struct Session {
     pub highlight_profile_id: Option<Uuid>,
     #[serde(default)]
     pub credential_profile_id: Option<Uuid>,
+    /// Opt-in: when true, connect-time negotiation includes legacy SSH
+    /// algorithms (group14-sha1, ssh-rsa, aes*-cbc, hmac-sha1, 3des-cbc).
+    /// Needed for old network gear that only supports those.
+    #[serde(default)]
+    pub legacy_algorithms: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -48,6 +53,8 @@ pub struct NewSession {
     pub highlight_profile_id: Option<Uuid>,
     #[serde(default)]
     pub credential_profile_id: Option<Uuid>,
+    #[serde(default)]
+    pub legacy_algorithms: bool,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -62,6 +69,7 @@ pub struct UpdateSession {
     pub icon: Option<String>,
     pub highlight_profile_id: Option<Option<Uuid>>,
     pub credential_profile_id: Option<Option<Uuid>>,
+    pub legacy_algorithms: Option<bool>,
 }
 
 // ── Credential Profiles (shared, not per-session) ────────────────────────

@@ -98,6 +98,8 @@
     "keyPathBrowse": "Bladeren\u2026",
     "jumpHostLabel": "Jumphost",
     "jumpHostNone": "Geen",
+    "legacyAlgorithmsLabel": "Legacy SSH-algoritmen inschakelen",
+    "legacyAlgorithmsHint": "Onderhandeling van zwakke algoritmen (group14-sha1, ssh-rsa, aes-cbc, hmac-sha1, 3des-cbc) toestaan. Alleen inschakelen voor oude systemen die geen modern SSH ondersteunen.",
     "iconLabel": "Pictogram",
     "icon_desktop": "Desktop",
     "icon_linux": "Linux",

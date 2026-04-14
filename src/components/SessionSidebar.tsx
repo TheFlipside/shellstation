@@ -164,6 +164,7 @@ export function SessionSidebar(): React.JSX.Element {
         jumpHostId: session.jump_host_id,
         highlightProfileId: session.highlight_profile_id,
         credentialProfileId: session.credential_profile_id,
+        legacyAlgorithms: session.legacy_algorithms,
       },
     });
   }, []);
@@ -245,6 +246,7 @@ export function SessionSidebar(): React.JSX.Element {
                 jumpHostId: session.jump_host_id,
                 highlightProfileId: session.highlight_profile_id,
                 credentialProfileId: session.credential_profile_id,
+                legacyAlgorithms: session.legacy_algorithms,
               },
             });
           }
@@ -515,6 +517,7 @@ export function SessionSidebar(): React.JSX.Element {
               jumpHostId: session.jump_host_id,
               highlightProfileId: session.highlight_profile_id,
               credentialProfileId: session.credential_profile_id,
+              legacyAlgorithms: session.legacy_algorithms,
             },
           });
         },
@@ -581,6 +584,7 @@ export function SessionSidebar(): React.JSX.Element {
         jumpHostId: data.jumpHostId ?? undefined,
         highlightProfileId: data.highlightProfileId ?? undefined,
         credentialProfileId: data.credentialProfileId ?? undefined,
+        legacyAlgorithms: data.legacyAlgorithms,
       }).catch(noop);
     } else if (sessionDialog.sessionId) {
       const sid = sessionDialog.sessionId;
@@ -596,6 +600,7 @@ export function SessionSidebar(): React.JSX.Element {
           jumpHostId: data.jumpHostId,
           highlightProfileId: data.highlightProfileId,
           credentialProfileId: data.credentialProfileId,
+          legacyAlgorithms: data.legacyAlgorithms,
         });
         if (data.folderId !== originalFolderId) {
           await moveSession(sid, data.folderId);

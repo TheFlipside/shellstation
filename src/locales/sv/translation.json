@@ -98,6 +98,8 @@
     "keyPathBrowse": "Bl\u00e4ddra\u2026",
     "jumpHostLabel": "Hoppv\u00e4rd",
     "jumpHostNone": "Ingen",
+    "legacyAlgorithmsLabel": "Aktivera \u00e4ldre SSH-algoritmer",
+    "legacyAlgorithmsHint": "Till\u00e5t f\u00f6rhandling av svaga algoritmer (group14-sha1, ssh-rsa, aes-cbc, hmac-sha1, 3des-cbc). Aktivera endast f\u00f6r gamla system som inte st\u00f6der modern SSH.",
     "iconLabel": "Ikon",
     "icon_desktop": "Skrivbord",
     "icon_linux": "Linux",

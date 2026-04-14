@@ -98,6 +98,8 @@
     "keyPathBrowse": "\u6d4f\u89c8\u2026",
     "jumpHostLabel": "\u8df3\u677f\u673a",
     "jumpHostNone": "\u65e0",
+    "legacyAlgorithmsLabel": "\u542f\u7528\u65e7\u7248 SSH \u7b97\u6cd5",
+    "legacyAlgorithmsHint": "\u5141\u8bb8\u534f\u5546\u8f83\u5f31\u7684\u7b97\u6cd5 (group14-sha1, ssh-rsa, aes-cbc, hmac-sha1, 3des-cbc)\u3002\u4ec5\u5bf9\u4e0d\u652f\u6301\u73b0\u4ee3 SSH \u7684\u65e7\u7cfb\u7edf\u542f\u7528\u3002",
     "iconLabel": "\u56fe\u6807",
     "icon_desktop": "\u684c\u9762",
     "icon_linux": "Linux",

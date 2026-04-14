@@ -98,6 +98,8 @@
     "keyPathBrowse": "G\u00f6zat\u2026",
     "jumpHostLabel": "Atlama Sunucusu",
     "jumpHostNone": "Yok",
+    "legacyAlgorithmsLabel": "Eski SSH algoritmalar\u0131n\u0131 etkinle\u015ftir",
+    "legacyAlgorithmsHint": "Zay\u0131f algoritmalar\u0131n (group14-sha1, ssh-rsa, aes-cbc, hmac-sha1, 3des-cbc) g\u00f6r\u00fc\u015f\u00fclmesine izin verir. Yaln\u0131zca modern SSH konu\u015famayan eski sistemler i\u00e7in etkinle\u015ftirin.",
     "iconLabel": "Simge",
     "icon_desktop": "Masa\u00fcst\u00fc",
     "icon_linux": "Linux",

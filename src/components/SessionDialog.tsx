@@ -18,6 +18,7 @@ export interface SessionFormData {
   jumpHostId: string | null;
   highlightProfileId: string | null;
   credentialProfileId: string | null;
+  legacyAlgorithms: boolean;
 }
 
 interface SessionDialogProps {
@@ -57,6 +58,7 @@ export function SessionDialog({
   const [credentialProfileId, setCredentialProfileId] = useState(
     initial?.credentialProfileId ?? "",
   );
+  const [legacyAlgorithms, setLegacyAlgorithms] = useState(initial?.legacyAlgorithms ?? false);
   const highlightProfiles = useHighlightStore((s) => s.profiles);
   const credentialProfiles = useCredentialProfilesStore((s) => s.profiles);
   const [error, setError] = useState("");
@@ -81,6 +83,7 @@ export function SessionDialog({
       jumpHostId: protocol === "telnet" ? null : jumpHostId || null,
       highlightProfileId: highlightProfileId || null,
       credentialProfileId: protocol === "telnet" ? null : credentialProfileId || null,
+      legacyAlgorithms: protocol === "ssh" ? legacyAlgorithms : false,
     });
   };
 
@@ -222,6 +225,23 @@ export function SessionDialog({
                     })),
                   ]}
                 />
+              </div>
+              <div className="dialog-field">
+                <label
+                  htmlFor="sd-legacy-algos"
+                  className="dialog-checkbox-label"
+                  title={t("session.legacyAlgorithmsHint")}
+                >
+                  <input
+                    id="sd-legacy-algos"
+                    type="checkbox"
+                    checked={legacyAlgorithms}
+                    onChange={(e) => {
+                      setLegacyAlgorithms(e.target.checked);
+                    }}
+                  />
+                  {t("session.legacyAlgorithmsLabel")}
+                </label>
               </div>
             </>
           )}

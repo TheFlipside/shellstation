@@ -573,6 +573,7 @@ pub async fn db_import(
                 icon: session.icon.clone(),
                 highlight_profile_id: None,
                 credential_profile_id: None,
+                legacy_algorithms: session.legacy_algorithms,
             })
             .await
             .map_err(|e| format!("Failed to import session '{}': {e}", session.name))?;

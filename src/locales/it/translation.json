@@ -98,6 +98,8 @@
     "keyPathBrowse": "Sfoglia\u2026",
     "jumpHostLabel": "Host di salto",
     "jumpHostNone": "Nessuno",
+    "legacyAlgorithmsLabel": "Abilita algoritmi SSH legacy",
+    "legacyAlgorithmsHint": "Consente la negoziazione di algoritmi deboli (group14-sha1, ssh-rsa, aes-cbc, hmac-sha1, 3des-cbc). Abilita solo per sistemi datati che non supportano SSH moderno.",
     "iconLabel": "Icona",
     "icon_desktop": "Desktop",
     "icon_linux": "Linux",

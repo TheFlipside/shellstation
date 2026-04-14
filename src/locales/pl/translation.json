@@ -98,6 +98,8 @@
     "keyPathBrowse": "Przegl\u0105daj\u2026",
     "jumpHostLabel": "Host po\u015brednicz\u0105cy",
     "jumpHostNone": "Brak",
+    "legacyAlgorithmsLabel": "W\u0142\u0105cz starsze algorytmy SSH",
+    "legacyAlgorithmsHint": "Zezw\u00f3l na negocjacj\u0119 s\u0142abych algorytm\u00f3w (group14-sha1, ssh-rsa, aes-cbc, hmac-sha1, 3des-cbc). W\u0142\u0105czaj tylko dla starych system\u00f3w, kt\u00f3re nie obs\u0142uguj\u0105 nowoczesnego SSH.",
     "iconLabel": "Ikona",
     "icon_desktop": "Komputer",
     "icon_linux": "Linux",

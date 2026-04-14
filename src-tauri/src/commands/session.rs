@@ -164,6 +164,7 @@ pub async fn session_create(
     jump_host_id: Option<String>,
     highlight_profile_id: Option<String>,
     credential_profile_id: Option<String>,
+    legacy_algorithms: Option<bool>,
 ) -> Result<Session, String> {
     validate_port(port)?;
     validate_session_fields(Some(&name), Some(&hostname), Some(&tags))?;
@@ -204,6 +205,7 @@ pub async fn session_create(
             icon,
             highlight_profile_id: highlight,
             credential_profile_id: credential,
+            legacy_algorithms: legacy_algorithms.unwrap_or(false),
         })
         .await
 }
@@ -232,6 +234,7 @@ pub async fn session_update(
     jump_host_id: Option<String>,
     highlight_profile_id: Option<String>,
     credential_profile_id: Option<String>,
+    legacy_algorithms: Option<bool>,
 ) -> Result<(), String> {
     if let Some(p) = port {
         validate_port(p)?;
@@ -282,6 +285,7 @@ pub async fn session_update(
                 icon,
                 highlight_profile_id: highlight,
                 credential_profile_id: credential,
+                legacy_algorithms,
             },
         )
         .await
@@ -539,6 +543,7 @@ pub async fn session_connect(
             rows,
             app_handle,
             jump_hops,
+            legacy_algorithms: session.legacy_algorithms,
             restrict_private_ips: restrict,
             connect_timeout_secs: timeout_secs,
             keepalive_interval_secs: keepalive_secs,

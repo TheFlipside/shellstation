@@ -66,6 +66,7 @@ pub async fn ssh_connect(
             rows,
             app_handle,
             jump_hops: hops,
+            legacy_algorithms: false,
             restrict_private_ips: restrict_private_ips.unwrap_or(false),
             connect_timeout_secs: connect_timeout.unwrap_or(10),
             keepalive_interval_secs: keepalive_interval.unwrap_or(15),

@@ -98,6 +98,8 @@
     "keyPathBrowse": "Browse\u2026",
     "jumpHostLabel": "Jump Host",
     "jumpHostNone": "None",
+    "legacyAlgorithmsLabel": "Enable legacy SSH algorithms",
+    "legacyAlgorithmsHint": "Allow negotiation of weak algorithms (group14-sha1, ssh-rsa, aes-cbc, hmac-sha1, 3des-cbc). Only enable for old systems that cannot speak modern SSH.",
     "iconLabel": "Icon",
     "icon_desktop": "Desktop",
     "icon_linux": "Linux",

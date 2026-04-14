@@ -7,6 +7,7 @@ All notable changes to this project are documented in this file.
 ### Added
 
 - Archive with extra files for releases
+- Ability to use legacy algorithms per ssh session
 
 ### Fixed
 

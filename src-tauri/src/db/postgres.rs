@@ -59,6 +59,7 @@ fn row_to_session(row: &PgRow) -> DbResult<Session> {
         sort_order: row.get("sort_order"),
         highlight_profile_id: parse_optional_uuid(row.get("highlight_profile_id"))?,
         credential_profile_id: parse_optional_uuid(row.get("credential_profile_id"))?,
+        legacy_algorithms: row.get::<i32, _>("legacy_algorithms") != 0,
     })
 }
 
@@ -267,8 +268,8 @@ impl DatabaseProvider for PostgresProvider {
         .map_err(|e| format!("Failed to compute sort_order: {e}"))?;
 
         sqlx::query(
-            "INSERT INTO sessions (id, folder_id, name, hostname, port, protocol, username, auth_method, jump_host_id, tags, icon, sort_order, highlight_profile_id, credential_profile_id) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)",
+            "INSERT INTO sessions (id, folder_id, name, hostname, port, protocol, username, auth_method, jump_host_id, tags, icon, sort_order, highlight_profile_id, credential_profile_id, legacy_algorithms) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)",
         )
         .bind(&id_str)
         .bind(&folder_str)
@@ -284,6 +285,7 @@ impl DatabaseProvider for PostgresProvider {
         .bind(sort_order)
         .bind(session.highlight_profile_id.map(|u| u.to_string()))
         .bind(session.credential_profile_id.map(|u| u.to_string()))
+        .bind(i32::from(session.legacy_algorithms))
         .execute(&mut *tx)
         .await
         .map_err(|e| format!("Failed to create session: {e}"))?;
@@ -307,12 +309,13 @@ impl DatabaseProvider for PostgresProvider {
             sort_order,
             highlight_profile_id: session.highlight_profile_id,
             credential_profile_id: session.credential_profile_id,
+            legacy_algorithms: session.legacy_algorithms,
         })
     }
 
     async fn get_session(&self, id: Uuid) -> DbResult<Option<Session>> {
         let row = sqlx::query(
-            "SELECT id, folder_id, name, hostname, port, protocol, username, auth_method, jump_host_id, tags, icon, sort_order, highlight_profile_id, credential_profile_id \
+            "SELECT id, folder_id, name, hostname, port, protocol, username, auth_method, jump_host_id, tags, icon, sort_order, highlight_profile_id, credential_profile_id, legacy_algorithms \
              FROM sessions WHERE id = $1",
         )
         .bind(id.to_string())
@@ -328,7 +331,7 @@ impl DatabaseProvider for PostgresProvider {
 
     async fn list_all_sessions(&self) -> DbResult<Vec<Session>> {
         let rows = sqlx::query(
-            "SELECT id, folder_id, name, hostname, port, protocol, username, auth_method, jump_host_id, tags, icon, sort_order, highlight_profile_id, credential_profile_id \
+            "SELECT id, folder_id, name, hostname, port, protocol, username, auth_method, jump_host_id, tags, icon, sort_order, highlight_profile_id, credential_profile_id, legacy_algorithms \
              FROM sessions ORDER BY sort_order ASC, name ASC",
         )
         .fetch_all(&self.pool)
@@ -408,6 +411,11 @@ impl DatabaseProvider for PostgresProvider {
                 Some(u) => values.push(BindVal::Text(u.to_string())),
                 None => values.push(BindVal::Null),
             }
+            idx += 1;
+        }
+        if let Some(legacy) = update.legacy_algorithms {
+            sets.push(format!("legacy_algorithms = ${idx}"));
+            values.push(BindVal::Int(i32::from(legacy)));
             idx += 1;
         }
 
@@ -497,7 +505,7 @@ impl DatabaseProvider for PostgresProvider {
         let escaped = query.replace('%', "\\%").replace('_', "\\_");
         let pattern = format!("%{escaped}%");
         let rows = sqlx::query(
-            "SELECT id, folder_id, name, hostname, port, protocol, username, auth_method, jump_host_id, tags, icon, sort_order, highlight_profile_id, credential_profile_id \
+            "SELECT id, folder_id, name, hostname, port, protocol, username, auth_method, jump_host_id, tags, icon, sort_order, highlight_profile_id, credential_profile_id, legacy_algorithms \
              FROM sessions \
              WHERE name LIKE $1 ESCAPE '\\' \
                 OR hostname LIKE $1 ESCAPE '\\' \

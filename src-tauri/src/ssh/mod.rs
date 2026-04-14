@@ -75,6 +75,10 @@ pub struct SshConnectParams {
     pub rows: u16,
     pub app_handle: AppHandle,
     pub jump_hops: Vec<JumpHop>,
+    /// When true, extend the preferred algorithm list with legacy SSH kex,
+    /// ciphers and MACs (group14-sha1, aes*-cbc, hmac-sha1, …). Required to
+    /// negotiate with old network gear that doesn't support modern algos.
+    pub legacy_algorithms: bool,
     pub logger: Option<std::sync::Arc<std::sync::Mutex<crate::session_logger::SessionLogManager>>>,
 }
 
@@ -168,6 +172,7 @@ pub async fn establish_ssh_connection(
         rows,
         app_handle,
         jump_hops,
+        legacy_algorithms,
         restrict_private_ips,
         connect_timeout_secs,
         keepalive_interval_secs,
@@ -186,6 +191,7 @@ pub async fn establish_ssh_connection(
         connect_timeout_secs,
         keepalive_interval_secs,
         keepalive_max,
+        legacy_algorithms,
         &app_handle,
         verify_senders,
     )
@@ -325,6 +331,20 @@ fn sanitize_ssh_error(raw: &str) -> String {
         "SSH connection failed: host unreachable".to_string()
     } else if lower.contains("name or service not known") || lower.contains("resolve") {
         "SSH connection failed: hostname could not be resolved".to_string()
+    } else if lower.contains("no common ")
+        || lower.contains("key exchange init failed")
+        || lower.contains("key exchange failed")
+    {
+        // russh raises `Error::NoCommonAlgo { kind, ours, theirs }` (displayed
+        // as "No common Kex/Cipher/Mac/Key algorithm …") when the negotiated
+        // lists don't overlap, and `Error::KexInit` / `Error::Kex` when the
+        // resulting exchange can't proceed. All of these are the symptom of
+        // old gear that only speaks legacy algorithms.
+        "SSH connection failed: no shared algorithm with the server. \
+         The remote device likely only supports legacy SSH algorithms \
+         (e.g. diffie-hellman-group14-sha1, ssh-rsa, aes-cbc). Enable \
+         \"Legacy algorithms\" on this session and reconnect."
+            .to_string()
     } else if lower.contains("authentication") {
         "SSH connection failed: authentication error".to_string()
     } else {
@@ -543,18 +563,73 @@ fn remove_known_host_entries(path: &std::path::Path, host: &str, port: u16) {
 /// of latency for no real bandwidth savings. OpenSSH sets this by default.
 ///
 /// A `keepalive_interval_secs` of 0 disables SSH-level keepalives entirely.
-fn ssh_config(keepalive_interval_secs: u64, keepalive_max: usize) -> Arc<client::Config> {
+fn ssh_config(
+    keepalive_interval_secs: u64,
+    keepalive_max: usize,
+    legacy_algorithms: bool,
+) -> Arc<client::Config> {
     let keepalive_interval = if keepalive_interval_secs == 0 {
         None
     } else {
         Some(std::time::Duration::from_secs(keepalive_interval_secs))
     };
-    Arc::new(client::Config {
+    let mut config = client::Config {
         keepalive_interval,
         keepalive_max,
         nodelay: true,
         ..Default::default()
-    })
+    };
+    if legacy_algorithms {
+        config.preferred = legacy_preferred();
+    }
+    Arc::new(config)
+}
+
+/// Build a `Preferred` algorithm set that appends legacy kex, ciphers and
+/// MACs to the modern defaults. Secure algorithms remain first in the list so
+/// a legacy-capable switch won't downgrade a modern server, but old gear that
+/// only speaks group14-sha1 / aes-cbc / hmac-sha1 can now be reached.
+fn legacy_preferred() -> russh::Preferred {
+    use std::borrow::Cow;
+    let base = russh::Preferred::DEFAULT;
+
+    let mut kex: Vec<russh::kex::Name> = base.kex.iter().copied().collect();
+    for extra in [
+        russh::kex::DH_GEX_SHA1,
+        russh::kex::DH_G14_SHA1,
+        russh::kex::DH_G1_SHA1,
+    ] {
+        if !kex.contains(&extra) {
+            kex.push(extra);
+        }
+    }
+
+    let mut cipher: Vec<russh::cipher::Name> = base.cipher.iter().copied().collect();
+    for extra in [
+        russh::cipher::AES_256_CBC,
+        russh::cipher::AES_192_CBC,
+        russh::cipher::AES_128_CBC,
+        russh::cipher::TRIPLE_DES_CBC,
+    ] {
+        if !cipher.contains(&extra) {
+            cipher.push(extra);
+        }
+    }
+
+    let mut mac: Vec<russh::mac::Name> = base.mac.iter().copied().collect();
+    for extra in [russh::mac::HMAC_SHA1_ETM, russh::mac::HMAC_SHA1] {
+        if !mac.contains(&extra) {
+            mac.push(extra);
+        }
+    }
+
+    russh::Preferred {
+        kex: Cow::Owned(kex),
+        key: base.key.clone(),
+        cipher: Cow::Owned(cipher),
+        mac: Cow::Owned(mac),
+        compression: base.compression.clone(),
+    }
 }
 
 /// Check whether an IP address belongs to a restricted (non-routable) range.
@@ -641,6 +716,7 @@ async fn connect_with_hops(
     connect_timeout_secs: u64,
     keepalive_interval_secs: u64,
     keepalive_max: usize,
+    legacy_algorithms: bool,
     app_handle: &AppHandle,
     verify_senders: &HostVerifySenders,
 ) -> Result<(client::Handle<SshHandler>, Vec<client::Handle<SshHandler>>), String> {
@@ -654,7 +730,7 @@ async fn connect_with_hops(
 
     if jump_hops.is_empty() {
         // Direct connection — no jump hosts.
-        let config = ssh_config(keepalive_interval_secs, keepalive_max);
+        let config = ssh_config(keepalive_interval_secs, keepalive_max, legacy_algorithms);
         let (verify_tx, verify_rx) = oneshot::channel::<bool>();
         verify_senders
             .lock()
@@ -690,7 +766,7 @@ async fn connect_with_hops(
 
     // Connect to the first hop directly.
     let first_hop = &jump_hops[0];
-    let config = ssh_config(keepalive_interval_secs, keepalive_max);
+    let config = ssh_config(keepalive_interval_secs, keepalive_max, legacy_algorithms);
     let hop_id = format!("{session_id}-hop0");
     let (verify_tx, verify_rx) = oneshot::channel::<bool>();
     verify_senders
@@ -744,7 +820,7 @@ async fn connect_with_hops(
             .map_err(|e| format!("Failed to open tunnel to {}:{}: {e}", hop.host, hop.port))?;
 
         let stream = tunnel.into_stream();
-        let config = ssh_config(keepalive_interval_secs, keepalive_max);
+        let config = ssh_config(keepalive_interval_secs, keepalive_max, legacy_algorithms);
         let hop_id = format!("{session_id}-hop{i}");
         let (verify_tx, verify_rx) = oneshot::channel::<bool>();
         verify_senders
@@ -790,7 +866,7 @@ async fn connect_with_hops(
         .map_err(|e| format!("Failed to open tunnel to {target_host}:{target_port}: {e}"))?;
 
     let stream = tunnel.into_stream();
-    let config = ssh_config(keepalive_interval_secs, keepalive_max);
+    let config = ssh_config(keepalive_interval_secs, keepalive_max, legacy_algorithms);
     let (verify_tx, verify_rx) = oneshot::channel::<bool>();
     verify_senders
         .lock()

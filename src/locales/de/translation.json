@@ -98,6 +98,8 @@
     "keyPathBrowse": "Durchsuchen\u2026",
     "jumpHostLabel": "Jump-Host",
     "jumpHostNone": "Keiner",
+    "legacyAlgorithmsLabel": "Alte SSH-Algorithmen aktivieren",
+    "legacyAlgorithmsHint": "Aushandlung schwacher Algorithmen (group14-sha1, ssh-rsa, aes-cbc, hmac-sha1, 3des-cbc) erlauben. Nur f\u00fcr alte Systeme aktivieren, die kein modernes SSH sprechen.",
     "iconLabel": "Symbol",
     "icon_desktop": "Desktop",
     "icon_linux": "Linux",

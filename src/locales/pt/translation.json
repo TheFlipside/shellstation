@@ -98,6 +98,8 @@
     "keyPathBrowse": "Procurar\u2026",
     "jumpHostLabel": "Host de salto",
     "jumpHostNone": "Nenhum",
+    "legacyAlgorithmsLabel": "Ativar algoritmos SSH legados",
+    "legacyAlgorithmsHint": "Permite negociar algoritmos fracos (group14-sha1, ssh-rsa, aes-cbc, hmac-sha1, 3des-cbc). Ative apenas para sistemas antigos que n\u00e3o suportam SSH moderno.",
     "iconLabel": "\u00cdcone",
     "icon_desktop": "Desktop",
     "icon_linux": "Linux",
