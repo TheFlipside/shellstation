@@ -14,16 +14,35 @@ const MAX_COMMAND_LENGTH = 1024;
 
 /** Preset colors for command button color picker. */
 const COLOR_PRESETS = [
-  "#89b4fa", // blue
-  "#a6e3a1", // green
-  "#f9e2af", // yellow
-  "#fab387", // peach
+  // Row 1 — pastel (Catppuccin Mocha)
   "#f38ba8", // red
-  "#f5c2e7", // pink
+  "#eba0ac", // maroon
+  "#fab387", // peach
+  "#f9e2af", // yellow
+  "#a6e3a1", // green
   "#94e2d5", // teal
+  "#89dceb", // sky
   "#74c7ec", // sapphire
-  "#cba6f7", // lavender
-  "#585b70", // gray
+  "#89b4fa", // blue
+  "#b4befe", // lavender
+  "#cba6f7", // mauve
+  "#f5c2e7", // pink
+  // Row 2 — saturated / vivid
+  "#e53935", // vivid red
+  "#fb8c00", // vivid orange
+  "#fdd835", // vivid yellow
+  "#43a047", // vivid green
+  "#00acc1", // vivid cyan
+  "#1e88e5", // vivid blue
+  "#5e35b1", // vivid purple
+  "#d81b60", // vivid magenta
+  // Row 3 — muted / neutral
+  "#8c6239", // brown
+  "#6d4c41", // dark brown
+  "#546e7a", // slate
+  "#78909c", // cool gray
+  "#9ca3af", // light gray
+  "#585b70", // dark gray
 ];
 
 interface CommandButtonDialogProps {

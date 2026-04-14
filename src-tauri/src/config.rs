@@ -25,7 +25,7 @@ pub struct AppLoggingConfig {
     pub enabled: bool,
     /// Directory where application log files are written. When `None`,
     /// defaults to `<config_dir>/logs/`. Files are rotated daily as
-    /// `shellstation.log.YYYY-MM-DD`.
+    /// `shellstation.YYYY-MM-DD.log`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub log_directory: Option<String>,
     /// Log level filter: "error", "warn", "info", "debug", "trace".
@@ -222,7 +222,6 @@ pub fn load_config(config_dir: &Path) -> AppConfig {
                      This often indicates the OS keychain was not ready during startup. \
                      Try opening Settings and re-saving the database configuration."
                 );
-                config.postgres.password = pw;
             }
             Ok(pw) => {
                 tracing::info!(
@@ -258,7 +257,15 @@ pub fn save_config(config_path: &Path, config: &AppConfig) -> Result<(), String>
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(config_path, std::fs::Permissions::from_mode(0o600));
+        if let Err(e) =
+            std::fs::set_permissions(config_path, std::fs::Permissions::from_mode(0o600))
+        {
+            tracing::warn!(
+                "Failed to set 0600 permissions on config file {}: {e} \
+                 — file may be readable by other users on this system.",
+                config_path.display()
+            );
+        }
     }
     Ok(())
 }

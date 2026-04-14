@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use sqlx::postgres::PgPoolOptions;
-use tauri::State;
+use tauri::{AppHandle, State};
 use uuid::Uuid;
 
 use crate::config::{self, AppConfig, ConfigState, DbBackend, PostgresConfig};
@@ -19,6 +19,13 @@ pub struct DbStatus {
 
 /// Tauri managed state for DB health status.
 pub struct DbStatusState(pub DbStatus);
+
+/// Relaunch the current application binary. Used by settings after a
+/// change that requires a fresh process (e.g. swapping DB backends).
+#[tauri::command]
+pub fn app_restart(app: AppHandle) {
+    app.restart();
+}
 
 // ── Config commands ──────────────────────────────────────────────────
 
@@ -498,9 +505,12 @@ pub async fn db_import(
     let ordered_folders = topological_sort_folders(&data.folders);
     let mut folder_id_map: HashMap<Uuid, Uuid> = HashMap::new();
     for folder in &ordered_folders {
+        // If the parent failed to import (or was dropped by topo sort),
+        // promote the folder to the root rather than carrying a dangling
+        // FK reference that would be rejected by the database.
         let remapped_parent = folder
             .parent_id
-            .map(|pid| folder_id_map.get(&pid).copied().unwrap_or(pid));
+            .and_then(|pid| folder_id_map.get(&pid).copied());
 
         // Reuse an existing folder with the same name under the same parent.
         let key = (folder.name.clone(), remapped_parent);
@@ -532,10 +542,12 @@ pub async fn db_import(
     // First pass: create all sessions and build an ID remap for jump hosts.
     let mut session_id_map: HashMap<Uuid, Uuid> = HashMap::new();
     for session in &data.sessions {
-        let remapped_folder = folder_id_map
-            .get(&session.folder_id)
-            .copied()
-            .unwrap_or(session.folder_id);
+        let Some(remapped_folder) = folder_id_map.get(&session.folder_id).copied() else {
+            return Err(format!(
+                "Failed to import session '{}': parent folder was not imported",
+                session.name
+            ));
+        };
 
         // Skip sessions that already exist at the same host:port in the same folder.
         let key = (session.hostname.clone(), session.port, remapped_folder);
@@ -568,11 +580,14 @@ pub async fn db_import(
     // Second pass: wire up jump_host_id references with remapped IDs.
     for session in &data.sessions {
         if let Some(jump_id) = session.jump_host_id {
-            let new_session_id = session_id_map
-                .get(&session.id)
-                .copied()
-                .unwrap_or(session.id);
-            let new_jump_id = session_id_map.get(&jump_id).copied().unwrap_or(jump_id);
+            // Skip if either the session itself or the jump host wasn't
+            // successfully imported — otherwise we'd write a dangling FK.
+            let Some(new_session_id) = session_id_map.get(&session.id).copied() else {
+                continue;
+            };
+            let Some(new_jump_id) = session_id_map.get(&jump_id).copied() else {
+                continue;
+            };
             state
                 .0
                 .update_session(

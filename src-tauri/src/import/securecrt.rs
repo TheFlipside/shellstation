@@ -153,6 +153,17 @@ fn parse_key_block(
                 let local = e.local_name();
                 match local.as_ref() {
                     b"key" => {
+                        // On the first child <key>, this block is definitively a
+                        // folder — register it before recursing so children can
+                        // resolve their parent temp_id during persistence
+                        // (folders are created in vector order).
+                        if !has_child_keys {
+                            folders.push(ImportedFolder {
+                                temp_id: my_temp_id,
+                                name: key_name.to_string(),
+                                parent_temp_id: Some(parent_temp_id),
+                            });
+                        }
                         has_child_keys = true;
                         match get_attr(e, "name") {
                             Some(child_name) => parse_key_block(
@@ -185,16 +196,11 @@ fn parse_key_block(
                     }
                     b"dword" => {
                         let Some(attr_name) = get_attr(e, "name") else {
-                            warnings.push(format!(
-                                "In \"{key_name}\": ignored <dword> element without name attribute"
-                            ));
                             skip_through_end(reader, b"dword")?;
                             continue;
                         };
                         let value = read_text(reader, b"dword")?;
-                        if let Err(msg) = props.set_dword(&attr_name, &value) {
-                            warnings.push(format!("In \"{key_name}\": {msg}"));
-                        }
+                        props.set_dword(&attr_name, &value);
                     }
                     _ => {
                         skip_through_end(reader, local.as_ref())?;
@@ -229,18 +235,14 @@ fn parse_key_block(
         }
     }
 
-    // Decide: session or folder.
+    // Decide: session or folder. Folders with children were already pushed
+    // eagerly above. An empty key with no children and no Is Session flag is
+    // silently dropped (matches SecureCRT's own "empty placeholder" behavior).
     if props.is_session {
         match build_session(key_name, &props, parent_temp_id) {
             Ok(s) => sessions.push(s),
             Err(w) => warnings.push(w),
         }
-    } else if has_child_keys {
-        folders.push(ImportedFolder {
-            temp_id: my_temp_id,
-            name: key_name.to_string(),
-            parent_temp_id: Some(parent_temp_id),
-        });
     }
 
     Ok(())
@@ -269,17 +271,20 @@ impl SessionProps {
         }
     }
 
-    fn set_dword(&mut self, name: &str, value: &str) -> Result<(), String> {
-        let parsed: i32 = value
-            .parse()
-            .map_err(|_| format!("invalid dword value for \"{name}\": {value:?}"))?;
+    fn set_dword(&mut self, name: &str, value: &str) {
+        // Only parse the handful of dwords we actually care about. SecureCRT
+        // emits dozens of others (e.g. "Printer Quality" = 0xFFFFFFFD) that
+        // would overflow i32 — ignoring them avoids log spam on import.
+        // Parse as i64 so legitimate u32-range values still fit.
+        let Ok(parsed) = value.parse::<i64>() else {
+            return;
+        };
         match name {
             "Is Session" => self.is_session = parsed == 1,
-            "[SSH2] Port" => self.ssh_port = Some(parsed),
-            "Port" => self.telnet_port = Some(parsed),
+            "[SSH2] Port" => self.ssh_port = i32::try_from(parsed).ok(),
+            "Port" => self.telnet_port = i32::try_from(parsed).ok(),
             _ => {}
         }
-        Ok(())
     }
 }
 

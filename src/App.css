@@ -252,15 +252,71 @@ body,
 
 .command-bar {
   display: flex;
-  align-items: center;
+  flex-direction: column;
   gap: 4px;
   padding: 4px 8px;
   background: var(--color-mantle);
   border-top: 1px solid var(--color-surface0);
   flex-shrink: 0;
-  flex-wrap: wrap;
   min-height: 32px;
   zoom: var(--ui-scale, 1);
+}
+
+.command-bar-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+  min-height: 24px;
+}
+
+.command-bar-input-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+}
+
+.command-bar-input {
+  flex: 1;
+  min-width: 0;
+  background: var(--color-base);
+  border: 1px solid var(--color-surface1);
+  border-radius: 4px;
+  padding: 4px 8px;
+  font-size: 12px;
+  color: var(--color-text);
+  font-family: "JetBrains Mono", "Fira Code", monospace;
+}
+
+.command-bar-input:focus {
+  outline: none;
+  border-color: var(--color-blue);
+}
+
+.command-bar-send-btn {
+  padding: 4px 10px;
+  border: 1px solid var(--color-surface2);
+  border-radius: 4px;
+  background: var(--color-surface0);
+  color: var(--color-text);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  transition:
+    background 0.15s,
+    border-color 0.15s;
+}
+
+.command-bar-send-btn:hover:not(:disabled) {
+  background: var(--color-surface1);
+  border-color: var(--color-blue);
+}
+
+.command-bar-send-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .command-bar-btn {
@@ -514,10 +570,21 @@ body,
 .dialog-row {
   display: flex;
   gap: 12px;
+  align-items: center;
+  min-width: 0;
 }
 
 .dialog-field-grow {
-  flex: 1;
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.dialog-field-grow input,
+.dialog-field-grow select,
+.dialog-field-grow textarea {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
 }
 
 .dialog-field-small {

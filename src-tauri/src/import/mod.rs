@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use serde::Serialize;
-use tauri::State;
+use tauri::{AppHandle, Emitter, State};
 use uuid::Uuid;
 
 use crate::db::models::{NewFolder, NewSession};
@@ -53,10 +53,32 @@ pub struct ImportResult {
     pub warnings: Vec<String>,
 }
 
+/// Tauri event name for streaming import progress to the frontend.
+const IMPORT_PROGRESS_EVENT: &str = "import:progress";
+
+#[derive(Debug, Clone, Serialize)]
+struct ImportProgress {
+    phase: &'static str,
+    current: u32,
+    total: u32,
+}
+
+fn emit_progress(app: &AppHandle, phase: &'static str, current: u32, total: u32) {
+    let _ = app.emit(
+        IMPORT_PROGRESS_EVENT,
+        ImportProgress {
+            phase,
+            current,
+            total,
+        },
+    );
+}
+
 // ── Tauri commands ──────────────────────────────────────────────────
 
 #[tauri::command]
 pub async fn import_mremoteng(
+    app: AppHandle,
     state: State<'_, DbState>,
     xml: String,
 ) -> Result<ImportResult, String> {
@@ -68,12 +90,22 @@ pub async fn import_mremoteng(
         ));
     }
 
+    emit_progress(&app, "parsing", 0, 0);
     let (folders, sessions, warnings) = mremoteng::parse(&xml)?;
-    persist_import(&state.0, "mRemoteNG Import", folders, sessions, warnings).await
+    persist_import(
+        &app,
+        &state.0,
+        "mRemoteNG Import",
+        folders,
+        sessions,
+        warnings,
+    )
+    .await
 }
 
 #[tauri::command]
 pub async fn import_securecrt(
+    app: AppHandle,
     state: State<'_, DbState>,
     xml: String,
 ) -> Result<ImportResult, String> {
@@ -85,8 +117,17 @@ pub async fn import_securecrt(
         ));
     }
 
+    emit_progress(&app, "parsing", 0, 0);
     let (folders, sessions, warnings) = securecrt::parse(&xml)?;
-    persist_import(&state.0, "SecureCRT Import", folders, sessions, warnings).await
+    persist_import(
+        &app,
+        &state.0,
+        "SecureCRT Import",
+        folders,
+        sessions,
+        warnings,
+    )
+    .await
 }
 
 // ── Shared import-to-DB logic ───────────────────────────────────────
@@ -97,15 +138,19 @@ pub async fn import_securecrt(
 /// then creates folders and sessions in order. Jump host references are
 /// resolved in a second pass.
 async fn persist_import(
+    app: &AppHandle,
     db: &Arc<dyn DatabaseProvider>,
     root_name: &str,
     folders: Vec<ImportedFolder>,
     sessions: Vec<ImportedSession>,
     mut warnings: Vec<String>,
 ) -> Result<ImportResult, String> {
+    // Emit progress at most every N items to keep event traffic reasonable
+    // for large imports.
+    const PROGRESS_STEP: usize = 25;
     let mut folders_created = 0u32;
     let mut sessions_created = 0u32;
-    let skipped = warnings.len() as u32;
+    let session_total_count = sessions.len() as u32;
 
     // Create the root import folder at the top level (no parent).
     let root_folder = db
@@ -121,8 +166,11 @@ async fn persist_import(
     let mut id_map: HashMap<usize, Uuid> = HashMap::new();
     id_map.insert(0, root_folder.id);
 
+    let folder_total = folders.len() as u32;
+    emit_progress(app, "folders", 0, folder_total);
+
     // Create folders in order (parents before children — parsers guarantee this).
-    for folder in &folders {
+    for (i, folder) in folders.iter().enumerate() {
         let parent_uuid = folder
             .parent_temp_id
             .and_then(|tid| id_map.get(&tid).copied())
@@ -143,13 +191,20 @@ async fn persist_import(
                 warnings.push(format!("Failed to create folder \"{}\": {e}", folder.name));
             }
         }
+        if (i + 1) % PROGRESS_STEP == 0 {
+            emit_progress(app, "folders", (i + 1) as u32, folder_total);
+        }
     }
+    emit_progress(app, "folders", folder_total, folder_total);
 
     // Create sessions and track (name → session_id) for jump host resolution.
     let mut session_name_map: HashMap<String, Uuid> = HashMap::new();
     let mut jump_host_pending: Vec<(Uuid, String)> = Vec::new();
 
-    for session in &sessions {
+    let session_total = sessions.len() as u32;
+    emit_progress(app, "sessions", 0, session_total);
+
+    for (i, session) in sessions.iter().enumerate() {
         let folder_uuid = id_map
             .get(&session.folder_temp_id)
             .copied()
@@ -184,9 +239,17 @@ async fn persist_import(
                 ));
             }
         }
+        if (i + 1) % PROGRESS_STEP == 0 {
+            emit_progress(app, "sessions", (i + 1) as u32, session_total);
+        }
     }
+    emit_progress(app, "sessions", session_total, session_total);
 
     // Second pass: resolve jump host references by name.
+    let jump_total = jump_host_pending.len() as u32;
+    if jump_total > 0 {
+        emit_progress(app, "jump_hosts", 0, jump_total);
+    }
     for (session_id, jump_name) in &jump_host_pending {
         if let Some(&jump_id) = session_name_map.get(jump_name) {
             if let Err(e) = db
@@ -210,10 +273,12 @@ async fn persist_import(
         }
     }
 
+    emit_progress(app, "done", 1, 1);
+
     Ok(ImportResult {
         folders_created,
         sessions_created,
-        skipped,
+        skipped: session_total_count.saturating_sub(sessions_created),
         warnings,
     })
 }

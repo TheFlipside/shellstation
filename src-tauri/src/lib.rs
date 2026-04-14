@@ -28,6 +28,66 @@ use tauri_plugin_opener::OpenerExt;
 use telnet::TelnetState;
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::layer::SubscriberExt;
+
+/// Reject paths from `config.json` that aren't absolute or that contain
+/// parent-directory (`..`) components. This is defense-in-depth: the config
+/// file is 0600, but if it's ever editable by another process or restored
+/// from an untrusted backup we don't want to follow `..` traversal into
+/// arbitrary filesystem locations.
+fn validate_config_path(raw: &str, label: &str) -> Result<std::path::PathBuf, String> {
+    let path = std::path::PathBuf::from(raw);
+    if !path.is_absolute() {
+        return Err(format!("{label} must be an absolute path: {raw}"));
+    }
+    if path
+        .components()
+        .any(|c| matches!(c, std::path::Component::ParentDir))
+    {
+        return Err(format!(
+            "{label} must not contain parent-directory (..) components: {raw}"
+        ));
+    }
+    Ok(path)
+}
+
+#[cfg(target_os = "windows")]
+fn startup_show_maximized() -> bool {
+    // Minimal FFI into kernel32!GetStartupInfoW. We only read the two fields
+    // we care about, so avoid pulling in the full `windows-sys` crate.
+    #[repr(C)]
+    struct StartupInfoW {
+        cb: u32,
+        lp_reserved: *mut u16,
+        lp_desktop: *mut u16,
+        lp_title: *mut u16,
+        dw_x: u32,
+        dw_y: u32,
+        dw_x_size: u32,
+        dw_y_size: u32,
+        dw_x_count_chars: u32,
+        dw_y_count_chars: u32,
+        dw_fill_attribute: u32,
+        dw_flags: u32,
+        w_show_window: u16,
+        cb_reserved2: u16,
+        lp_reserved2: *mut u8,
+        h_std_input: *mut std::ffi::c_void,
+        h_std_output: *mut std::ffi::c_void,
+        h_std_error: *mut std::ffi::c_void,
+    }
+    extern "system" {
+        fn GetStartupInfoW(lp_startup_info: *mut StartupInfoW);
+    }
+    const STARTF_USESHOWWINDOW: u32 = 0x0000_0001;
+    const SW_SHOWMAXIMIZED: u16 = 3;
+
+    // SAFETY: GetStartupInfoW fills the provided structure. We zero it first
+    // and set `cb` to the struct size, matching the Win32 calling contract.
+    let mut info: StartupInfoW = unsafe { std::mem::zeroed() };
+    info.cb = std::mem::size_of::<StartupInfoW>() as u32;
+    unsafe { GetStartupInfoW(&mut info) };
+    (info.dw_flags & STARTF_USESHOWWINDOW) != 0 && info.w_show_window == SW_SHOWMAXIMIZED
+}
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::EnvFilter;
 
@@ -49,7 +109,8 @@ fn init_local_sqlite(
     custom_path: Option<&str>,
 ) -> Result<SqlitePool, Box<dyn std::error::Error>> {
     let db_path = match custom_path {
-        Some(p) if !p.is_empty() => std::path::PathBuf::from(p),
+        Some(p) if !p.is_empty() => validate_config_path(p, "SQLite database path")
+            .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?,
         _ => config_dir.join("sessions.db"),
     };
     tauri::async_runtime::block_on(async {
@@ -338,7 +399,19 @@ fn init_tracing(
 
     if cfg.enabled {
         let log_dir = match &cfg.log_directory {
-            Some(p) if !p.is_empty() => std::path::PathBuf::from(p),
+            Some(p) if !p.is_empty() => {
+                match validate_config_path(p, "Application log directory") {
+                    Ok(path) => path,
+                    Err(e) => {
+                        eprintln!("{e} — application logging disabled for this session.");
+                        tracing_subscriber::registry()
+                            .with(env_filter)
+                            .with(stdout_layer)
+                            .init();
+                        return None;
+                    }
+                }
+            }
             _ => config_dir.join("logs"),
         };
         if let Err(e) = std::fs::create_dir_all(&log_dir) {
@@ -355,7 +428,12 @@ fn init_tracing(
                 .init();
             return None;
         }
-        let file_appender = tracing_appender::rolling::daily(&log_dir, "shellstation.log");
+        let file_appender = tracing_appender::rolling::Builder::new()
+            .rotation(tracing_appender::rolling::Rotation::DAILY)
+            .filename_prefix("shellstation")
+            .filename_suffix("log")
+            .build(&log_dir)
+            .expect("failed to initialize rolling file appender");
         let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
         let file_layer = fmt::layer().with_ansi(false).with_writer(non_blocking);
         tracing_subscriber::registry()
@@ -447,6 +525,13 @@ pub fn run() {
                     tauri::image::Image::from_bytes(include_bytes!("../icons/128x128.png"))
                 {
                     let _ = window.set_icon(icon);
+                }
+                // Honor Windows shortcut "Run: Maximized". Tauri uses its own
+                // window config and ignores the process-wide nCmdShow hint,
+                // so we read STARTUPINFO ourselves and maximize on request.
+                #[cfg(target_os = "windows")]
+                if startup_show_maximized() {
+                    let _ = window.maximize();
                 }
             }
 
@@ -640,6 +725,7 @@ pub fn run() {
             // Bulk operations
             commands::folder_apply_credentials,
             // Database config & migration
+            commands::app_restart,
             commands::db_get_config,
             commands::db_get_status,
             commands::db_test_connection,

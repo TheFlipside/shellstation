@@ -116,11 +116,29 @@ function SortableFolder({
         aria-expanded={isExpanded ? "true" : "false"}
         tabIndex={-1}
       >
-        <span className="tree-chevron">{isExpanded ? "\u25BE" : "\u25B8"}</span>
+        <span
+          className="tree-chevron"
+          onClick={(e) => {
+            e.stopPropagation();
+            toggleFolder(folder.id);
+          }}
+          onMouseDown={(e) => {
+            e.stopPropagation();
+          }}
+          onPointerDown={(e) => {
+            e.stopPropagation();
+          }}
+          role="button"
+          aria-label={isExpanded ? "Collapse" : "Expand"}
+        >
+          {isExpanded ? "\u25BE" : "\u25B8"}
+        </span>
         <span className="tree-icon">
           <FolderIcon />
         </span>
-        <span className="tree-label">{folder.name}</span>
+        <span className="tree-label" title={folder.name}>
+          {folder.name}
+        </span>
       </div>
       {isExpanded && (
         <SessionTree
@@ -189,7 +207,9 @@ function SortableSession({
       <span className="tree-icon">
         <SessionIconComponent iconKey={session.icon} />
       </span>
-      <span className="tree-label">{session.name}</span>
+      <span className="tree-label" title={`${session.name} (${session.hostname})`}>
+        {session.name}
+      </span>
       <span className="tree-meta">{session.hostname}</span>
     </div>
   );

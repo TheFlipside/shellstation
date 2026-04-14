@@ -146,18 +146,45 @@ export function CommandBar({ uiScale }: CommandBarProps): React.JSX.Element {
   const [btnCtx, setBtnCtx] = useState<{ x: number; y: number; buttonId: string } | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [collapsed, setCollapsed] = useState(false);
+  const [freeformInput, setFreeformInput] = useState("");
 
-  const handleButtonClick = useCallback((btn: CommandButton) => {
-    const { tabs, activeTabId } = useTerminalStore.getState();
-    const activeTab = tabs.find((tb) => tb.id === activeTabId);
-    if (!activeTab || activeTab.exited) return;
-    executeCommand(btn.command, activeTab.id, activeTab.type).catch(noop);
-    // Return focus to the active terminal so the user can interact immediately.
+  const focusActiveTerminal = useCallback((): void => {
     const termEl = document.querySelector<HTMLElement>(
       ".terminal-instance:not(.terminal-instance-hidden) .xterm-helper-textarea",
     );
     termEl?.focus();
   }, []);
+
+  const handleButtonClick = useCallback(
+    (btn: CommandButton) => {
+      const { tabs, activeTabId } = useTerminalStore.getState();
+      const activeTab = tabs.find((tb) => tb.id === activeTabId);
+      if (!activeTab || activeTab.exited) return;
+      executeCommand(btn.command, activeTab.id, activeTab.type).catch(noop);
+      focusActiveTerminal();
+    },
+    [focusActiveTerminal],
+  );
+
+  const sendFreeformToActive = useCallback((): void => {
+    if (!freeformInput) return;
+    const { tabs, activeTabId } = useTerminalStore.getState();
+    const activeTab = tabs.find((tb) => tb.id === activeTabId);
+    if (!activeTab || activeTab.exited) return;
+    executeCommand(freeformInput, activeTab.id, activeTab.type).catch(noop);
+    focusActiveTerminal();
+  }, [freeformInput, focusActiveTerminal]);
+
+  const sendFreeformToAll = useCallback((): void => {
+    if (!freeformInput) return;
+    const { tabs } = useTerminalStore.getState();
+    const alive = tabs.filter((tb) => !tb.exited);
+    if (alive.length === 0) return;
+    for (const tab of alive) {
+      executeCommand(freeformInput, tab.id, tab.type).catch(noop);
+    }
+    focusActiveTerminal();
+  }, [freeformInput, focusActiveTerminal]);
 
   const handleSave = useCallback(
     (data: CommandButtonFormData) => {
@@ -171,18 +198,18 @@ export function CommandBar({ uiScale }: CommandBarProps): React.JSX.Element {
     [dialogState, addCommandButton, updateCommandButton],
   );
 
-  const handleSendToAll = useCallback((btn: CommandButton) => {
-    const { tabs } = useTerminalStore.getState();
-    const alive = tabs.filter((tb) => !tb.exited);
-    if (alive.length === 0) return;
-    for (const tab of alive) {
-      executeCommand(btn.command, tab.id, tab.type).catch(noop);
-    }
-    const termEl = document.querySelector<HTMLElement>(
-      ".terminal-instance:not(.terminal-instance-hidden) .xterm-helper-textarea",
-    );
-    termEl?.focus();
-  }, []);
+  const handleSendToAll = useCallback(
+    (btn: CommandButton) => {
+      const { tabs } = useTerminalStore.getState();
+      const alive = tabs.filter((tb) => !tb.exited);
+      if (alive.length === 0) return;
+      for (const tab of alive) {
+        executeCommand(btn.command, tab.id, tab.type).catch(noop);
+      }
+      focusActiveTerminal();
+    },
+    [focusActiveTerminal],
+  );
 
   const getContextItems = useCallback(
     (buttonId: string): ContextMenuItem[] => {
@@ -256,47 +283,92 @@ export function CommandBar({ uiScale }: CommandBarProps): React.JSX.Element {
   return (
     <>
       <div className="command-bar" style={{ "--ui-scale": uiScale / 100 } as React.CSSProperties}>
-        <button
-          type="button"
-          className="command-bar-toggle"
-          title={t(collapsed ? "commandBar.show" : "commandBar.hide")}
-          onClick={() => {
-            setCollapsed((prev) => !prev);
-          }}
-        >
-          {collapsed ? "\u25B6" : "\u25BC"}
-        </button>
-        {!collapsed && (
-          <>
-            <button
-              type="button"
-              className="command-bar-add"
-              title={t("commandBar.addButton")}
-              onClick={() => {
-                setDialogState({ mode: "create" });
-              }}
-            >
-              +
-            </button>
-            {commandButtons.map((btn) => (
+        <div className="command-bar-row">
+          <button
+            type="button"
+            className="command-bar-toggle"
+            title={t(collapsed ? "commandBar.show" : "commandBar.hide")}
+            onClick={() => {
+              setCollapsed((prev) => !prev);
+            }}
+          >
+            {collapsed ? "\u25B6" : "\u25BC"}
+          </button>
+          {!collapsed && (
+            <>
               <button
-                key={btn.id}
                 type="button"
-                className="command-bar-btn"
-                style={{ "--btn-color": btn.color } as React.CSSProperties}
-                title={btn.command}
+                className="command-bar-add"
+                title={t("commandBar.addButton")}
                 onClick={() => {
-                  handleButtonClick(btn);
-                }}
-                onContextMenu={(e) => {
-                  e.preventDefault();
-                  setBtnCtx({ x: e.clientX, y: e.clientY, buttonId: btn.id });
+                  setDialogState({ mode: "create" });
                 }}
               >
-                {btn.name}
+                +
               </button>
-            ))}
-          </>
+              {commandButtons.map((btn) => (
+                <button
+                  key={btn.id}
+                  type="button"
+                  className="command-bar-btn"
+                  style={{ "--btn-color": btn.color } as React.CSSProperties}
+                  title={btn.command}
+                  onClick={() => {
+                    handleButtonClick(btn);
+                  }}
+                  onContextMenu={(e) => {
+                    e.preventDefault();
+                    setBtnCtx({ x: e.clientX, y: e.clientY, buttonId: btn.id });
+                  }}
+                >
+                  {btn.name}
+                </button>
+              ))}
+            </>
+          )}
+        </div>
+        {!collapsed && (
+          <div className="command-bar-input-row">
+            <input
+              type="text"
+              className="command-bar-input"
+              value={freeformInput}
+              onChange={(e) => {
+                setFreeformInput(e.target.value);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  if (e.shiftKey) {
+                    sendFreeformToAll();
+                  } else {
+                    sendFreeformToActive();
+                  }
+                }
+              }}
+              placeholder={t("commandBar.freeformPlaceholder", {
+                defaultValue: "Type a command (Enter = active, Shift+Enter = all)",
+              })}
+            />
+            <button
+              type="button"
+              className="command-bar-send-btn"
+              onClick={sendFreeformToActive}
+              disabled={!freeformInput}
+              title={t("commandBar.sendToActive", { defaultValue: "Send to active session" })}
+            >
+              {t("commandBar.sendToActiveShort", { defaultValue: "Send" })}
+            </button>
+            <button
+              type="button"
+              className="command-bar-send-btn"
+              onClick={sendFreeformToAll}
+              disabled={!freeformInput}
+              title={t("commandBar.sendToAll")}
+            >
+              {t("commandBar.sendToAllShort", { defaultValue: "Send to all" })}
+            </button>
+          </div>
         )}
       </div>
       {dialogState && (

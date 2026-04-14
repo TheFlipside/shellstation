@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
-import { getCurrentWindow } from "@tauri-apps/api/window";
+import { listen } from "@tauri-apps/api/event";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { useEscapeKey } from "../hooks/useEscapeKey";
 import { useSessionStore } from "../stores/sessionStore";
@@ -129,6 +129,12 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
   const [dbError, setDbError] = useState<string | null>(null);
   const [dbOpResult, setDbOpResult] = useState<string | null>(null);
   const [dbDirty, setDbDirty] = useState(false);
+
+  const [importProgress, setImportProgress] = useState<{
+    phase: string;
+    current: number;
+    total: number;
+  } | null>(null);
 
   // Logging config — loaded from backend
   const [loggingEnabled, setLoggingEnabled] = useState(false);
@@ -418,6 +424,7 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
       input.style.display = "none";
       document.body.appendChild(input);
       input.onchange = async () => {
+        let unlisten: (() => void) | null = null;
         try {
           const file = input.files?.[0];
           if (!file) return;
@@ -427,6 +434,13 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
             return;
           }
           const xml = await file.text();
+          setImportProgress({ phase: "reading", current: 0, total: 0 });
+          unlisten = await listen<{ phase: string; current: number; total: number }>(
+            "import:progress",
+            (event) => {
+              setImportProgress(event.payload);
+            },
+          );
           const result = await invoke<{
             folders_created: number;
             sessions_created: number;
@@ -452,6 +466,8 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
         } catch (e) {
           useToastStore.getState().addToast(String(e));
         } finally {
+          if (unlisten) unlisten();
+          setImportProgress(null);
           input.remove();
         }
       };
@@ -471,6 +487,33 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
 
   return (
     <div className="dialog-overlay" onClick={onClose} role="presentation">
+      {importProgress && (
+        <div
+          className="dialog-overlay"
+          style={{ zIndex: 10000 }}
+          onClick={(e) => {
+            e.stopPropagation();
+          }}
+          role="presentation"
+        >
+          <div className="dialog" style={{ minWidth: 320, textAlign: "center" }}>
+            <div className="dialog-title">
+              {t("settings.importInProgress", { defaultValue: "Importing…" })}
+            </div>
+            <div style={{ marginTop: 12 }}>
+              {t(`settings.importPhase.${importProgress.phase}`, {
+                defaultValue: importProgress.phase,
+              })}
+              {importProgress.total > 0 && (
+                <>
+                  {" "}
+                  — {importProgress.current} / {importProgress.total}
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
       <div
         className="dialog dialog-wide"
         onClick={(e) => {
@@ -1341,7 +1384,7 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
             onClick={
               dbSaved
                 ? () => {
-                    void getCurrentWindow().destroy();
+                    void invoke("app_restart");
                   }
                 : onClose
             }

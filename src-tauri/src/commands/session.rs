@@ -66,8 +66,29 @@ pub async fn folder_move(
     id: String,
     new_parent_id: Option<String>,
 ) -> Result<(), String> {
+    let folder_uuid = parse_uuid(&id)?;
     let parent = new_parent_id.map(|s| parse_uuid(&s)).transpose()?;
-    state.0.move_folder(parse_uuid(&id)?, parent).await
+
+    // Reject cycles: a folder cannot be moved into itself or any of its
+    // descendants. Without this, a recursive sort would stack-overflow.
+    if let Some(target_parent) = parent {
+        if target_parent == folder_uuid {
+            return Err("A folder cannot be moved into itself.".to_string());
+        }
+        let all_folders = state.0.list_folders().await?;
+        let mut current = Some(target_parent);
+        while let Some(cur) = current {
+            if cur == folder_uuid {
+                return Err("A folder cannot be moved into one of its descendants.".to_string());
+            }
+            current = all_folders
+                .iter()
+                .find(|f| f.id == cur)
+                .and_then(|f| f.parent_id);
+        }
+    }
+
+    state.0.move_folder(folder_uuid, parent).await
 }
 
 #[tauri::command]
@@ -207,8 +228,8 @@ pub async fn session_update(
     auth_method: Option<String>,
     tags: Option<String>,
     icon: Option<String>,
-    jump_host_id: Option<Option<String>>,
-    highlight_profile_id: Option<Option<String>>,
+    jump_host_id: Option<String>,
+    highlight_profile_id: Option<String>,
     password: Option<String>,
     key_path: Option<String>,
 ) -> Result<(), String> {
@@ -238,12 +259,17 @@ pub async fn session_update(
         }
     }
     let session_id = parse_uuid(&id)?;
-    let jump = jump_host_id
-        .map(|opt| opt.map(|s| parse_uuid(&s)).transpose())
-        .transpose()?;
-    let highlight = highlight_profile_id
-        .map(|opt| opt.map(|s| parse_uuid(&s)).transpose())
-        .transpose()?;
+    // The frontend always sends these fields explicitly on update, so None
+    // from the wire is the user's "clear to none" intent — translate it to
+    // Some(None) to distinguish from "don't touch" in the DB layer.
+    let jump = Some(match jump_host_id {
+        Some(s) => Some(parse_uuid(&s)?),
+        None => None,
+    });
+    let highlight = Some(match highlight_profile_id {
+        Some(s) => Some(parse_uuid(&s)?),
+        None => None,
+    });
 
     state
         .0
