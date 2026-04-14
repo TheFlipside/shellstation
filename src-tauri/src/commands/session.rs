@@ -6,8 +6,7 @@ use uuid::Uuid;
 use zeroize::Zeroizing;
 
 use crate::db::models::{
-    Credential, CredentialResponse, DataFingerprint, Folder, NewFolder, NewSession, Session,
-    UpdateSession,
+    CredentialProfile, DataFingerprint, Folder, NewFolder, NewSession, Session, UpdateSession,
 };
 use crate::db::{CredentialDbState, DbState};
 use crate::session_logger::SessionLogState;
@@ -96,35 +95,78 @@ pub async fn folder_delete(state: State<'_, DbState>, id: String) -> Result<(), 
     state.0.delete_folder(parse_uuid(&id)?).await
 }
 
+/// Bulk-edit sessions in a folder (and its descendants). Each `set_*` flag
+/// controls whether its sibling field is applied; when `true`, a `null`
+/// value clears the column. This avoids the `Option<Option<T>>` JSON
+/// ambiguity.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub async fn folder_bulk_edit_sessions(
+    state: State<'_, DbState>,
+    folder_id: String,
+    set_jump_host: bool,
+    jump_host_id: Option<String>,
+    set_highlight_profile: bool,
+    highlight_profile_id: Option<String>,
+    icon: Option<String>,
+) -> Result<u32, String> {
+    let folder_uuid = parse_uuid(&folder_id)?;
+    let jump_host = if set_jump_host {
+        Some(match jump_host_id {
+            Some(s) => Some(parse_uuid(&s)?),
+            None => None,
+        })
+    } else {
+        None
+    };
+    let highlight = if set_highlight_profile {
+        Some(match highlight_profile_id {
+            Some(s) => Some(parse_uuid(&s)?),
+            None => None,
+        })
+    } else {
+        None
+    };
+    if let Some(ref i) = icon {
+        if i.len() > super::MAX_ICON_LEN {
+            return Err(format!(
+                "Icon too long (max {} characters)",
+                super::MAX_ICON_LEN
+            ));
+        }
+    }
+    state
+        .0
+        .bulk_edit_sessions(
+            folder_uuid,
+            crate::db::BulkSessionEdit {
+                jump_host_id: jump_host,
+                highlight_profile_id: highlight,
+                icon,
+            },
+        )
+        .await
+}
+
 // ── Session commands ─────────────────────────────────────────────────
 
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 pub async fn session_create(
     state: State<'_, DbState>,
-    cred_db: State<'_, CredentialDbState>,
     folder_id: String,
     name: String,
     hostname: String,
     port: i32,
-    username: String,
     protocol: Option<String>,
-    auth_method: String,
     tags: String,
     icon: String,
     jump_host_id: Option<String>,
     highlight_profile_id: Option<String>,
-    password: Option<String>,
-    key_path: Option<String>,
+    credential_profile_id: Option<String>,
 ) -> Result<Session, String> {
     validate_port(port)?;
     validate_session_fields(Some(&name), Some(&hostname), Some(&tags))?;
-    if username.len() > super::MAX_USERNAME_LEN {
-        return Err(format!(
-            "Username too long (max {} characters)",
-            super::MAX_USERNAME_LEN
-        ));
-    }
     if icon.len() > super::MAX_ICON_LEN {
         return Err(format!(
             "Icon too long (max {} characters)",
@@ -140,8 +182,12 @@ pub async fn session_create(
     }
 
     let highlight = highlight_profile_id.map(|s| parse_uuid(&s)).transpose()?;
+    let credential = credential_profile_id
+        .as_deref()
+        .map(parse_uuid)
+        .transpose()?;
 
-    let session = state
+    state
         .0
         .create_session(NewSession {
             folder_id: folder,
@@ -149,64 +195,22 @@ pub async fn session_create(
             hostname,
             port,
             protocol: effective_protocol,
-            auth_method: auth_method.clone(),
+            // auth_method is determined by the credential profile at connect
+            // time; keep the column populated for backwards compatibility
+            // with existing rows but don't expose it in the dialog.
+            auth_method: "profile".to_string(),
             jump_host_id: jump,
             tags,
             icon,
             highlight_profile_id: highlight,
-        })
-        .await?;
-
-    // Store credential metadata locally, secret in OS keychain.
-    let secret = match auth_method.as_str() {
-        "password" => password.unwrap_or_default(),
-        "publickey" => key_path.unwrap_or_default(),
-        _ => String::new(),
-    };
-    let keychain_ref = format!("session-{}", session.id);
-
-    if let Err(e) = cred_db
-        .0
-        .upsert_credential(Credential {
-            id: Uuid::new_v4(),
-            session_id: session.id,
-            username,
-            auth_type: auth_method,
-            keychain_ref: keychain_ref.clone(),
+            credential_profile_id: credential,
         })
         .await
-    {
-        tracing::error!(session_id = %session.id, "credential upsert failed: {e}");
-    }
-
-    if !secret.is_empty() {
-        if let Err(e) = crate::credentials::store(&keychain_ref, &secret) {
-            tracing::error!(session_id = %session.id, "keychain store failed: {e}");
-        }
-    }
-
-    Ok(session)
 }
 
 #[tauri::command]
 pub async fn session_get(state: State<'_, DbState>, id: String) -> Result<Option<Session>, String> {
     state.0.get_session(parse_uuid(&id)?).await
-}
-
-#[tauri::command]
-pub async fn credential_get(
-    cred_db: State<'_, CredentialDbState>,
-    session_id: String,
-) -> Result<Option<CredentialResponse>, String> {
-    let cred = cred_db.0.get_credential(parse_uuid(&session_id)?).await?;
-    Ok(cred.map(|c| {
-        let secret = crate::credentials::retrieve(&c.keychain_ref).unwrap_or_default();
-        CredentialResponse {
-            username: c.username,
-            auth_type: c.auth_type,
-            secret,
-        }
-    }))
 }
 
 #[tauri::command]
@@ -218,20 +222,16 @@ pub async fn session_list_all(state: State<'_, DbState>) -> Result<Vec<Session>,
 #[allow(clippy::too_many_arguments)]
 pub async fn session_update(
     state: State<'_, DbState>,
-    cred_db: State<'_, CredentialDbState>,
     id: String,
     name: Option<String>,
     hostname: Option<String>,
     port: Option<i32>,
     protocol: Option<String>,
-    username: Option<String>,
-    auth_method: Option<String>,
     tags: Option<String>,
     icon: Option<String>,
     jump_host_id: Option<String>,
     highlight_profile_id: Option<String>,
-    password: Option<String>,
-    key_path: Option<String>,
+    credential_profile_id: Option<String>,
 ) -> Result<(), String> {
     if let Some(p) = port {
         validate_port(p)?;
@@ -242,14 +242,6 @@ pub async fn session_update(
         }
     }
     validate_session_fields(name.as_deref(), hostname.as_deref(), tags.as_deref())?;
-    if let Some(ref u) = username {
-        if u.len() > super::MAX_USERNAME_LEN {
-            return Err(format!(
-                "Username too long (max {} characters)",
-                super::MAX_USERNAME_LEN
-            ));
-        }
-    }
     if let Some(ref i) = icon {
         if i.len() > super::MAX_ICON_LEN {
             return Err(format!(
@@ -270,6 +262,10 @@ pub async fn session_update(
         Some(s) => Some(parse_uuid(&s)?),
         None => None,
     });
+    let credential = Some(match credential_profile_id {
+        Some(s) => Some(parse_uuid(&s)?),
+        None => None,
+    });
 
     state
         .0
@@ -280,71 +276,15 @@ pub async fn session_update(
                 hostname,
                 port,
                 protocol,
-                auth_method: auth_method.clone(),
+                auth_method: None,
                 jump_host_id: jump,
                 tags,
                 icon,
                 highlight_profile_id: highlight,
+                credential_profile_id: credential,
             },
         )
-        .await?;
-
-    // Update credential locally if username or secret was provided.
-    let effective_method = auth_method;
-    let secret = match effective_method.as_deref() {
-        Some("password") => password,
-        Some("publickey") => key_path,
-        _ => password.or(key_path),
-    };
-    // Upsert credential if either username or secret changed.
-    if username.is_some() || secret.is_some() {
-        // Fetch existing credential to merge fields.
-        let existing = cred_db.0.get_credential(session_id).await?;
-        let keychain_ref = format!("session-{session_id}");
-
-        let effective_username = username.unwrap_or_else(|| {
-            existing
-                .as_ref()
-                .map_or(String::new(), |c| c.username.clone())
-        });
-        // Determine the secret to persist. If the caller supplied one, use it.
-        // Otherwise merge with the existing keychain entry — but propagate any
-        // retrieval error instead of silently overwriting with an empty string.
-        let effective_secret = match secret {
-            Some(s) => s,
-            None => match existing.as_ref() {
-                Some(c) => crate::credentials::retrieve(&c.keychain_ref).map_err(|e| {
-                    format!("Failed to retrieve existing credential from keychain: {e}")
-                })?,
-                None => String::new(),
-            },
-        };
-        let effective_auth = effective_method.unwrap_or_else(|| {
-            existing
-                .as_ref()
-                .map_or(String::new(), |c| c.auth_type.clone())
-        });
-
-        if let Err(e) = cred_db
-            .0
-            .upsert_credential(Credential {
-                id: Uuid::new_v4(),
-                session_id,
-                username: effective_username,
-                auth_type: effective_auth,
-                keychain_ref: keychain_ref.clone(),
-            })
-            .await
-        {
-            tracing::error!(session_id = %session_id, "credential upsert failed: {e}");
-        }
-
-        if let Err(e) = crate::credentials::store(&keychain_ref, &effective_secret) {
-            tracing::error!(session_id = %session_id, "keychain store failed: {e}");
-        }
-    }
-
-    Ok(())
+        .await
 }
 
 #[tauri::command]
@@ -360,25 +300,8 @@ pub async fn session_move(
 }
 
 #[tauri::command]
-pub async fn session_delete(
-    state: State<'_, DbState>,
-    cred_db: State<'_, CredentialDbState>,
-    id: String,
-) -> Result<(), String> {
-    let session_id = parse_uuid(&id)?;
-
-    // Fetch keychain_ref before deleting DB rows so we can clean up the OS keychain.
-    if let Ok(Some(cred)) = cred_db.0.get_credential(session_id).await {
-        let _ = crate::credentials::delete(&cred.keychain_ref);
-    }
-
-    state.0.delete_session(session_id).await?;
-    // Clean up local credential so it doesn't become orphaned
-    // (especially important when sessions live in PostgreSQL).
-    if let Err(e) = cred_db.0.delete_credential(session_id).await {
-        tracing::warn!(session_id = %session_id, "credential cleanup on delete failed: {e}");
-    }
-    Ok(())
+pub async fn session_delete(state: State<'_, DbState>, id: String) -> Result<(), String> {
+    state.0.delete_session(parse_uuid(&id)?).await
 }
 
 #[tauri::command]
@@ -480,8 +403,8 @@ async fn sort_children_alphabetically(
 
 // ── Connect a saved session ──────────────────────────────────────────
 
-/// Load a saved session from the database, retrieve its credential from the
-/// local credential store, resolve jump host chains, and open an SSH connection.
+/// Load a saved session from the database, resolve its credential profile,
+/// walk any jump host chain, and open an SSH (or Telnet) connection.
 /// Returns the live connection ID for use with ssh_write/ssh_resize.
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
@@ -527,13 +450,11 @@ pub async fn session_connect(
         }
         let logger = Some(std::sync::Arc::clone(&logger_state.0));
 
-        // Brief lock: check capacity only.
         {
             let manager = telnet.0.lock().await;
             manager.check_capacity()?;
         }
 
-        // Connect WITHOUT holding the lock.
         let telnet_session = match establish_telnet_connection(TelnetConnectParams {
             id: conn_id.clone(),
             host: session.hostname,
@@ -549,7 +470,6 @@ pub async fn session_connect(
         {
             Ok(s) => s,
             Err(e) => {
-                // Close orphaned log file on connection failure.
                 if let Ok(mut mgr) = logger_state.0.lock() {
                     mgr.close_log(&conn_id);
                 }
@@ -557,7 +477,6 @@ pub async fn session_connect(
             }
         };
 
-        // Brief lock: re-check capacity and register atomically.
         {
             let mut manager = telnet.0.lock().await;
             manager.register_session(conn_id.clone(), telnet_session)?;
@@ -566,23 +485,11 @@ pub async fn session_connect(
         return Ok(conn_id);
     }
 
-    // SSH path (default).
-    // Retrieve credential metadata from local store, secret from OS keychain.
-    let cred = cred_db.0.get_credential(session_id).await?;
-    let (username, auth_credential) = match cred {
-        Some(c) => {
-            let secret = crate::credentials::retrieve(&c.keychain_ref).unwrap_or_default();
-            (c.username, Zeroizing::new(secret))
-        }
-        None if session.auth_method == "none" => (String::new(), Zeroizing::new(String::new())),
-        None => {
-            return Err(format!(
-                "No credential stored for session \"{}\". \
-                 Edit the session to set a username and password or key path.",
-                session.name
-            ))
-        }
-    };
+    // SSH path (default). Resolve the credential profile assigned to the
+    // session; if none, reject with a clear error. (Keyboard-interactive
+    // fallback requires a UI prompt flow and is tracked separately.)
+    let profile = resolve_profile_for_session(&cred_db, &session).await?;
+    let (username, auth_method, auth_credential) = profile_to_auth(&profile)?;
 
     // Resolve jump host chain.
     let jump_hops = resolve_jump_chain(&db, &cred_db, &session).await?;
@@ -592,7 +499,6 @@ pub async fn session_connect(
 
     let conn_id = Uuid::new_v4().to_string();
 
-    // Open session log before connecting.
     {
         if let Ok(mut mgr) = logger_state.0.lock() {
             if let Err(e) = mgr.open_log(&conn_id, &session.name) {
@@ -602,20 +508,18 @@ pub async fn session_connect(
     }
     let logger = Some(std::sync::Arc::clone(&logger_state.0));
 
-    // Brief lock: check capacity only.
     {
         let manager = ssh.manager.lock().await;
         manager.check_capacity()?;
     }
 
-    // Connect WITHOUT holding the lock.
     let ssh_session = match establish_ssh_connection(
         SshConnectParams {
             id: conn_id.clone(),
             host: session.hostname,
             port: session.port as u16,
             username,
-            auth_method: session.auth_method,
+            auth_method,
             auth_credential,
             cols,
             rows,
@@ -633,7 +537,6 @@ pub async fn session_connect(
     {
         Ok(s) => s,
         Err(e) => {
-            // Close orphaned log file on connection failure.
             if let Ok(mut mgr) = logger_state.0.lock() {
                 mgr.close_log(&conn_id);
             }
@@ -641,7 +544,6 @@ pub async fn session_connect(
         }
     };
 
-    // Brief lock: re-check capacity and register atomically.
     {
         let mut manager = ssh.manager.lock().await;
         manager.register_session(conn_id.clone(), ssh_session)?;
@@ -650,114 +552,73 @@ pub async fn session_connect(
     Ok(conn_id)
 }
 
-// ── Bulk credential assignment ──────────────────────────────────────
-
-/// Apply credentials (and optionally a jump host) to all SSH sessions
-/// in a folder and its subfolders. Telnet sessions are skipped.
-/// Returns the number of sessions updated.
-#[allow(clippy::too_many_arguments)]
-#[tauri::command]
-pub async fn folder_apply_credentials(
-    db: State<'_, DbState>,
-    cred_db: State<'_, CredentialDbState>,
-    folder_id: String,
-    username: String,
-    auth_method: String,
-    credential: String,
-    jump_host_id: Option<String>,
-    highlight_profile_id: Option<String>,
-) -> Result<u32, String> {
-    if auth_method != "password" && auth_method != "publickey" {
-        return Err(format!("Unsupported auth method: {auth_method}"));
-    }
-
-    let target_folder = parse_uuid(&folder_id)?;
-
-    // Resolve the optional jump host ID once.
-    let jump_host_uuid = jump_host_id.map(|s| parse_uuid(&s)).transpose()?;
-
-    // Resolve the optional highlight profile ID once.
-    let highlight_uuid = highlight_profile_id.map(|s| parse_uuid(&s)).transpose()?;
-
-    // Collect all folder IDs under the target (inclusive, recursive).
-    let all_folders = db.0.list_folders().await?;
-    let mut folder_set = HashSet::new();
-    folder_set.insert(target_folder);
-    collect_descendant_folders(target_folder, &all_folders, &mut folder_set);
-
-    // Find all SSH sessions in those folders.
-    let all_sessions = db.0.list_all_sessions().await?;
-    let ssh_sessions: Vec<&Session> = all_sessions
-        .iter()
-        .filter(|s| folder_set.contains(&s.folder_id) && s.protocol == "ssh")
-        .collect();
-
-    let mut count: u32 = 0;
-    for session in &ssh_sessions {
-        // Upsert credential metadata (stored locally per user).
-        let keychain_ref = format!("session-{}", session.id);
-        if let Err(e) = cred_db
-            .0
-            .upsert_credential(Credential {
-                id: Uuid::new_v4(),
-                session_id: session.id,
-                username: username.clone(),
-                auth_type: auth_method.clone(),
-                keychain_ref: keychain_ref.clone(),
-            })
-            .await
-        {
-            tracing::error!(session_id = %session.id, "bulk credential upsert failed: {e}");
-            continue;
-        }
-
-        // Store secret in OS keychain.
-        if let Err(e) = crate::credentials::store(&keychain_ref, &credential) {
-            tracing::error!(session_id = %session.id, "bulk keychain store failed: {e}");
-            continue;
-        }
-
-        // Update auth_method, jump_host_id, and highlight_profile_id on the
-        // session.  All fields are always applied (this is a bulk-set dialog).
-        // Silently skip setting a session as its own jump host.
-        let effective_jump = match jump_host_uuid {
-            Some(jid) if jid == session.id => None,
-            other => other,
-        };
-        let update = UpdateSession {
-            auth_method: Some(auth_method.clone()),
-            jump_host_id: Some(effective_jump),
-            highlight_profile_id: Some(highlight_uuid),
-            ..Default::default()
-        };
-        if let Err(e) = db.0.update_session(session.id, update).await {
-            tracing::error!(session_id = %session.id, "bulk session update failed: {e}");
-            continue;
-        }
-
-        count += 1;
-    }
-
-    Ok(count)
-}
-
-/// Recursively collect all descendant folder IDs into `out`.
-fn collect_descendant_folders(parent: Uuid, all: &[Folder], out: &mut HashSet<Uuid>) {
-    for folder in all {
-        if folder.parent_id == Some(parent) && out.insert(folder.id) {
-            collect_descendant_folders(folder.id, all, out);
-        }
-    }
-}
-
 // ── Helpers ──────────────────────────────────────────────────────────
 
 fn parse_uuid(s: &str) -> Result<Uuid, String> {
     Uuid::parse_str(s).map_err(|e| format!("Invalid UUID '{s}': {e}"))
 }
 
+/// Look up the credential profile assigned to a session, returning a clear
+/// error if none is set or the referenced profile has been deleted.
+async fn resolve_profile_for_session(
+    cred_db: &State<'_, CredentialDbState>,
+    session: &Session,
+) -> Result<CredentialProfile, String> {
+    let profile_id = session.credential_profile_id.ok_or_else(|| {
+        format!(
+            "No credential profile assigned to session \"{}\". \
+             Open the Credentials Manager to create one, then edit the \
+             session to link it.",
+            session.name
+        )
+    })?;
+    cred_db
+        .0
+        .get_credential_profile(profile_id)
+        .await?
+        .ok_or_else(|| {
+            format!(
+                "Credential profile for session \"{}\" no longer exists. \
+                 Edit the session and pick a different profile.",
+                session.name
+            )
+        })
+}
+
+/// Translate a profile into the (username, ssh auth_method, secret) triple
+/// expected by the SSH connection layer.
+fn profile_to_auth(
+    profile: &CredentialProfile,
+) -> Result<(String, String, Zeroizing<String>), String> {
+    match profile.auth_type.as_str() {
+        "password" => {
+            let secret = crate::credentials::retrieve(&profile.keychain_ref)
+                .map_err(|e| format!("Failed to retrieve profile secret: {e}"))?;
+            Ok((
+                profile.username.clone(),
+                "password".to_string(),
+                Zeroizing::new(secret),
+            ))
+        }
+        "key" => {
+            // Private-key path is stored on the profile row; any passphrase
+            // lives in the keychain but is not currently passed to russh.
+            Ok((
+                profile.username.clone(),
+                "publickey".to_string(),
+                Zeroizing::new(profile.key_path.clone()),
+            ))
+        }
+        other => Err(format!(
+            "Auth type \"{other}\" is not yet supported for connect \
+             (profile \"{}\").",
+            profile.name
+        )),
+    }
+}
+
 /// Walk the jump_host_id chain in the database to build a list of JumpHop
-/// entries for the SSH connect call. Credentials come from local store.
+/// entries for the SSH connect call. Each hop pulls its own profile.
 async fn resolve_jump_chain(
     db: &State<'_, DbState>,
     cred_db: &State<'_, CredentialDbState>,
@@ -782,30 +643,15 @@ async fn resolve_jump_chain(
                 .await?
                 .ok_or_else(|| format!("Jump host session {jump_id} not found"))?;
 
-        let jump_cred = match cred_db.0.get_credential(jump_id).await? {
-            Some(cred) => cred,
-            None => {
-                return Err(format!(
-                    "No credential stored for jump host \"{}\". \
-                     Edit the session to set a username and password or key path.",
-                    jump_session.name
-                ));
-            }
-        };
-
-        let jump_secret = crate::credentials::retrieve(&jump_cred.keychain_ref).map_err(|e| {
-            format!(
-                "Failed to retrieve credential for jump host \"{}\": {e}",
-                jump_session.name
-            )
-        })?;
+        let jump_profile = resolve_profile_for_session(cred_db, &jump_session).await?;
+        let (username, auth_method, auth_credential) = profile_to_auth(&jump_profile)?;
 
         hops.push(crate::ssh::JumpHop {
             host: jump_session.hostname.clone(),
             port: jump_session.port as u16,
-            username: jump_cred.username,
-            auth_method: jump_session.auth_method.clone(),
-            auth_credential: Zeroizing::new(jump_secret),
+            username,
+            auth_method,
+            auth_credential,
         });
 
         current_jump_id = jump_session.jump_host_id;

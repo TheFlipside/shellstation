@@ -20,7 +20,18 @@
     "clone": "Cloner la session",
     "sortAlphabetically": "Trier par ordre alphab\u00e9tique",
     "setCredentials": "D\u00e9finir les identifiants\u2026",
-    "editSessions": "Modifier les sessions\u2026"
+    "editSessions": "Modifier les sessions\u2026",
+    "applyCredentialProfile": "Appliquer un profil d'identifiants\u2026",
+    "bulkEdit": "\u00c9dition en masse des sessions\u2026"
+  },
+  "bulkEdit": {
+    "title": "\u00c9dition en masse \u2014 {{name}}",
+    "info": "Applique les changements \u00e0 toutes les sessions de ce dossier et de ses sous-dossiers. Seuls les champs coch\u00e9s sont mis \u00e0 jour. Le jump host ne s'applique qu'aux sessions SSH.",
+    "setJumpHost": "D\u00e9finir le jump host",
+    "setHighlightProfile": "D\u00e9finir le profil de surlignage",
+    "setIcon": "D\u00e9finir l'ic\u00f4ne",
+    "clearValue": "(Effacer)",
+    "success": "{{count}} session(s) mise(s) \u00e0 jour"
   },
   "folder": {
     "deleteWithSessions": "Supprimer le dossier et ses {{count}} session(s)\u00a0?",
@@ -31,11 +42,37 @@
     "namePlaceholder": "Nom du dossier"
   },
   "folderCredential": {
-    "title": "Modifier les sessions \u2014 {{name}}",
-    "info": "S'applique \u00e0 toutes les sessions SSH de ce dossier et sous-dossiers. Les sessions Telnet sont exclues.",
-    "jumpHostLabel": "H\u00f4te de rebond (optionnel)",
-    "highlightProfileLabel": "Profil de coloration (optionnel)",
+    "title": "Appliquer le profil d'identifiants \u2014 {{name}}",
+    "info": "Assigne un profil d'identifiants \u00e0 toutes les sessions SSH de ce dossier et de ses sous-dossiers. Les sessions Telnet sont exclues.",
+    "profileLabel": "Profil d'identifiants",
+    "profileNone": "(Effacer l'attribution)",
     "success": "{{count}} session(s) mise(s) \u00e0 jour"
+  },
+  "credentialProfiles": {
+    "title": "Gestionnaire d'identifiants",
+    "info": "Les profils d'identifiants sont partag\u00e9s entre sessions. Chaque profil stocke un secret dans le trousseau du syst\u00e8me.",
+    "open": "Gestionnaire d'identifiants",
+    "newProfile": "Nouveau profil",
+    "editProfile": "Modifier le profil",
+    "nameLabel": "Nom du profil",
+    "namePlaceholder": "p. ex. Utilisateur RADIUS",
+    "authTypeLabel": "Type d'authentification",
+    "authPassword": "Mot de passe",
+    "authKey": "Cl\u00e9 publique",
+    "authKeyboardInteractive": "Clavier interactif",
+    "usernameLabel": "Nom d'utilisateur",
+    "usernamePlaceholder": "utilisateur",
+    "passwordLabel": "Mot de passe",
+    "passwordPlaceholder": "mot de passe",
+    "passwordHint": "Laisser vide pour conserver le secret existant.",
+    "keyPathLabel": "Chemin de la cl\u00e9",
+    "keyPathPlaceholder": "~/.ssh/id_ed25519",
+    "keyPathBrowse": "Parcourir\u2026",
+    "noneYet": "Aucun profil d'identifiants.",
+    "deleteConfirm": "Supprimer le profil \"{{name}}\" ? Les sessions qui l'utilisent devront en r\u00e9assigner un nouveau.",
+    "nameRequired": "Le nom du profil est requis.",
+    "none": "(Aucun)",
+    "manageLink": "G\u00e9rer\u2026"
   },
   "session": {
     "deleteConfirm": "Supprimer la session \u00ab\u00a0{{name}}\u00a0\u00bb\u00a0?",
@@ -80,7 +117,9 @@
     "tagsLabel": "\u00c9tiquettes",
     "tagsPlaceholder": "prod, eu, web (s\u00e9par\u00e9es par des virgules)",
     "highlightProfileLabel": "Profil de coloration",
-    "highlightProfileNone": "Aucun"
+    "highlightProfileNone": "Aucun",
+    "credentialProfileLabel": "Profil d'identifiants",
+    "credentialProfileNone": "(Aucun \u2014 repli clavier interactif)"
   },
   "dialog": {
     "cancel": "Annuler",

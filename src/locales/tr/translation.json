@@ -20,7 +20,18 @@
     "clone": "Oturumu Klonla",
     "sortAlphabetically": "Alfabetik s\u0131rala",
     "setCredentials": "Kimlik bilgilerini ayarla\u2026",
-    "editSessions": "Oturumlar\u0131 d\u00fczenle\u2026"
+    "editSessions": "Oturumlar\u0131 d\u00fczenle\u2026",
+    "applyCredentialProfile": "Kimlik profilini uygula\u2026",
+    "bulkEdit": "Oturumlar\u0131 toplu d\u00fczenle\u2026"
+  },
+  "bulkEdit": {
+    "title": "Toplu D\u00fczenleme \u2014 {{name}}",
+    "info": "Bu klas\u00f6rdeki ve alt klas\u00f6rlerdeki t\u00fcm oturumlara de\u011fi\u015fiklikleri uygular. Yaln\u0131zca i\u015faretli alanlar g\u00fcncellenir. Jump host yaln\u0131zca SSH oturumlar\u0131 i\u00e7in ge\u00e7erlidir.",
+    "setJumpHost": "Jump host ayarla",
+    "setHighlightProfile": "Vurgulama profili ayarla",
+    "setIcon": "Simge ayarla",
+    "clearValue": "(Temizle)",
+    "success": "{{count}} oturum g\u00fcncellendi"
   },
   "folder": {
     "deleteWithSessions": "Klas\u00f6r ve {{count}} oturumu silinsin mi?",
@@ -31,11 +42,37 @@
     "namePlaceholder": "Klas\u00f6r ad\u0131"
   },
   "folderCredential": {
-    "title": "Oturumlar\u0131 D\u00fczenle \u2014 {{name}}",
-    "info": "Bu klas\u00f6r ve alt klas\u00f6rlerdeki t\u00fcm SSH oturumlar\u0131na uygulan\u0131r. Telnet oturumlar\u0131 hari\u00e7 tutulur.",
-    "jumpHostLabel": "Atlama Sunucusu (iste\u011fe ba\u011fl\u0131)",
-    "highlightProfileLabel": "Vurgulama Profili (iste\u011fe ba\u011fl\u0131)",
+    "title": "Kimlik profilini uygula \u2014 {{name}}",
+    "info": "Bu klas\u00f6rdeki ve alt klas\u00f6rlerdeki t\u00fcm SSH oturumlar\u0131na bir kimlik profili atar. Telnet oturumlar\u0131 hari\u00e7 tutulur.",
+    "profileLabel": "Kimlik profili",
+    "profileNone": "(Atamay\u0131 kald\u0131r)",
     "success": "{{count}} oturum g\u00fcncellendi"
+  },
+  "credentialProfiles": {
+    "title": "Kimlik Y\u00f6neticisi",
+    "info": "Kimlik profilleri oturumlar aras\u0131nda payla\u015f\u0131l\u0131r. Her profil i\u015fletim sistemi anahtarl\u0131\u011f\u0131nda bir s\u0131r saklar.",
+    "open": "Kimlik Y\u00f6neticisi",
+    "newProfile": "Yeni Profil",
+    "editProfile": "Profili D\u00fczenle",
+    "nameLabel": "Profil Ad\u0131",
+    "namePlaceholder": "\u00f6r. RADIUS kullan\u0131c\u0131s\u0131",
+    "authTypeLabel": "Kimlik Do\u011frulama T\u00fcr\u00fc",
+    "authPassword": "Parola",
+    "authKey": "A\u00e7\u0131k Anahtar",
+    "authKeyboardInteractive": "Klavye Etkile\u015fimli",
+    "usernameLabel": "Kullan\u0131c\u0131 Ad\u0131",
+    "usernamePlaceholder": "user",
+    "passwordLabel": "Parola",
+    "passwordPlaceholder": "parola",
+    "passwordHint": "Mevcut s\u0131rr\u0131 korumak i\u00e7in bo\u015f b\u0131rak\u0131n.",
+    "keyPathLabel": "Anahtar Yolu",
+    "keyPathPlaceholder": "~/.ssh/id_ed25519",
+    "keyPathBrowse": "G\u00f6zat\u2026",
+    "noneYet": "Hen\u00fcz kimlik profili yok.",
+    "deleteConfirm": "\"{{name}}\" profili silinsin mi? Bu profili kullanan oturumlar i\u00e7in yeni bir profil atanmas\u0131 gerekir.",
+    "nameRequired": "Profil ad\u0131 gereklidir.",
+    "none": "(Yok)",
+    "manageLink": "Y\u00f6net\u2026"
   },
   "session": {
     "deleteConfirm": "\"{{name}}\" oturumu silinsin mi?",
@@ -80,7 +117,9 @@
     "tagsLabel": "Etiketler",
     "tagsPlaceholder": "prod, eu, web (virg\u00fclle ayr\u0131lm\u0131\u015f)",
     "highlightProfileLabel": "Vurgulama Profili",
-    "highlightProfileNone": "Yok"
+    "highlightProfileNone": "Yok",
+    "credentialProfileLabel": "Kimlik profili",
+    "credentialProfileNone": "(Yok \u2014 klavye etkile\u015fimli geri d\u00f6n\u00fc\u015f)"
   },
   "dialog": {
     "cancel": "\u0130ptal",

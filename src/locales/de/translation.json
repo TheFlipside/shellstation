@@ -20,7 +20,18 @@
     "clone": "Sitzung klonen",
     "sortAlphabetically": "Alphabetisch sortieren",
     "setCredentials": "Zugangsdaten setzen\u2026",
-    "editSessions": "Sitzungen bearbeiten\u2026"
+    "editSessions": "Sitzungen bearbeiten\u2026",
+    "applyCredentialProfile": "Anmeldeprofil anwenden\u2026",
+    "bulkEdit": "Sitzungen massenhaft bearbeiten\u2026"
+  },
+  "bulkEdit": {
+    "title": "Massenbearbeitung \u2014 {{name}}",
+    "info": "\u00c4nderungen auf alle Sitzungen in diesem Ordner und Unterordnern anwenden. Nur markierte Felder werden aktualisiert. Jump-Host gilt nur f\u00fcr SSH-Sitzungen.",
+    "setJumpHost": "Jump-Host setzen",
+    "setHighlightProfile": "Hervorhebungsprofil setzen",
+    "setIcon": "Symbol setzen",
+    "clearValue": "(Leeren)",
+    "success": "{{count}} Sitzung(en) aktualisiert"
   },
   "folder": {
     "deleteWithSessions": "Ordner und seine {{count}} Sitzung(en) l\u00f6schen?",
@@ -31,11 +42,37 @@
     "namePlaceholder": "Ordnername"
   },
   "folderCredential": {
-    "title": "Sitzungen bearbeiten \u2014 {{name}}",
-    "info": "Gilt f\u00fcr alle SSH-Sitzungen in diesem Ordner und Unterordnern. Telnet-Sitzungen sind ausgenommen.",
-    "jumpHostLabel": "Jump-Host (optional)",
-    "highlightProfileLabel": "Hervorhebungsprofil (optional)",
+    "title": "Anmeldeprofil anwenden \u2014 {{name}}",
+    "info": "Weist allen SSH-Sitzungen in diesem Ordner und Unterordnern ein Anmeldeprofil zu. Telnet-Sitzungen werden ausgeschlossen.",
+    "profileLabel": "Anmeldeprofil",
+    "profileNone": "(Zuweisung aufheben)",
     "success": "{{count}} Sitzung(en) aktualisiert"
+  },
+  "credentialProfiles": {
+    "title": "Anmeldeverwaltung",
+    "info": "Anmeldeprofile werden sitzungs\u00fcbergreifend geteilt. Jedes Profil speichert ein Geheimnis im OS-Schl\u00fcsselbund.",
+    "open": "Anmeldeverwaltung",
+    "newProfile": "Neues Profil",
+    "editProfile": "Profil bearbeiten",
+    "nameLabel": "Profilname",
+    "namePlaceholder": "z. B. RADIUS-Benutzer",
+    "authTypeLabel": "Authentifizierungstyp",
+    "authPassword": "Passwort",
+    "authKey": "\u00d6ffentlicher Schl\u00fcssel",
+    "authKeyboardInteractive": "Tastatur-Interaktiv",
+    "usernameLabel": "Benutzername",
+    "usernamePlaceholder": "user",
+    "passwordLabel": "Passwort",
+    "passwordPlaceholder": "passwort",
+    "passwordHint": "Leer lassen, um das bestehende Geheimnis zu behalten.",
+    "keyPathLabel": "Schl\u00fcsselpfad",
+    "keyPathPlaceholder": "~/.ssh/id_ed25519",
+    "keyPathBrowse": "Durchsuchen\u2026",
+    "noneYet": "Noch keine Anmeldeprofile.",
+    "deleteConfirm": "Anmeldeprofil \"{{name}}\" l\u00f6schen? Sitzungen, die es verwenden, ben\u00f6tigen ein neues Profil.",
+    "nameRequired": "Profilname ist erforderlich.",
+    "none": "(Keines)",
+    "manageLink": "Verwalten\u2026"
   },
   "session": {
     "deleteConfirm": "Sitzung \"{{name}}\" l\u00f6schen?",
@@ -80,7 +117,9 @@
     "tagsLabel": "Tags",
     "tagsPlaceholder": "prod, eu, web (kommagetrennt)",
     "highlightProfileLabel": "Hervorhebungsprofil",
-    "highlightProfileNone": "Keines"
+    "highlightProfileNone": "Keines",
+    "credentialProfileLabel": "Anmeldeprofil",
+    "credentialProfileNone": "(Keines \u2014 Tastatur-Interaktiv Fallback)"
   },
   "dialog": {
     "cancel": "Abbrechen",

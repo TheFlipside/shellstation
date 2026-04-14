@@ -20,7 +20,18 @@
     "clone": "Klonuj sesj\u0119",
     "sortAlphabetically": "Sortuj alfabetycznie",
     "setCredentials": "Ustaw dane logowania\u2026",
-    "editSessions": "Edytuj sesje\u2026"
+    "editSessions": "Edytuj sesje\u2026",
+    "applyCredentialProfile": "Zastosuj profil po\u015bwiadcze\u0144\u2026",
+    "bulkEdit": "Edycja zbiorcza sesji\u2026"
+  },
+  "bulkEdit": {
+    "title": "Edycja zbiorcza \u2014 {{name}}",
+    "info": "Zastosuj zmiany do wszystkich sesji w tym folderze i podfolderach. Tylko zaznaczone pola zostan\u0105 zaktualizowane. Jump host dotyczy tylko sesji SSH.",
+    "setJumpHost": "Ustaw jump host",
+    "setHighlightProfile": "Ustaw profil pod\u015bwietlania",
+    "setIcon": "Ustaw ikon\u0119",
+    "clearValue": "(Wyczy\u015b\u0107)",
+    "success": "Zaktualizowano {{count}} sesji"
   },
   "folder": {
     "deleteWithSessions": "Usun\u0105\u0107 folder i jego {{count}} sesj\u0119(-e)?",
@@ -31,11 +42,37 @@
     "namePlaceholder": "Nazwa folderu"
   },
   "folderCredential": {
-    "title": "Edytuj sesje \u2014 {{name}}",
-    "info": "Dotyczy wszystkich sesji SSH w tym folderze i podfolderach. Sesje Telnet s\u0105 wykluczone.",
-    "jumpHostLabel": "Host po\u015brednicz\u0105cy (opcjonalnie)",
-    "highlightProfileLabel": "Profil pod\u015bwietlania (opcjonalnie)",
-    "success": "Zaktualizowano {{count}} sesj\u0119(-e)"
+    "title": "Zastosuj profil po\u015bwiadcze\u0144 \u2014 {{name}}",
+    "info": "Przypisuje profil po\u015bwiadcze\u0144 do wszystkich sesji SSH w tym folderze i podfolderach. Sesje Telnet s\u0105 wykluczone.",
+    "profileLabel": "Profil po\u015bwiadcze\u0144",
+    "profileNone": "(Usu\u0144 przypisanie)",
+    "success": "Zaktualizowano {{count}} sesji"
+  },
+  "credentialProfiles": {
+    "title": "Mened\u017cer po\u015bwiadcze\u0144",
+    "info": "Profile po\u015bwiadcze\u0144 s\u0105 wsp\u00f3\u0142dzielone mi\u0119dzy sesjami. Ka\u017cdy profil przechowuje jeden sekret w p\u0119ku kluczy systemu.",
+    "open": "Mened\u017cer po\u015bwiadcze\u0144",
+    "newProfile": "Nowy profil",
+    "editProfile": "Edytuj profil",
+    "nameLabel": "Nazwa profilu",
+    "namePlaceholder": "np. u\u017cytkownik RADIUS",
+    "authTypeLabel": "Typ uwierzytelniania",
+    "authPassword": "Has\u0142o",
+    "authKey": "Klucz publiczny",
+    "authKeyboardInteractive": "Klawiatura interaktywna",
+    "usernameLabel": "Nazwa u\u017cytkownika",
+    "usernamePlaceholder": "user",
+    "passwordLabel": "Has\u0142o",
+    "passwordPlaceholder": "has\u0142o",
+    "passwordHint": "Pozostaw puste, aby zachowa\u0107 istniej\u0105cy sekret.",
+    "keyPathLabel": "\u015acie\u017cka klucza",
+    "keyPathPlaceholder": "~/.ssh/id_ed25519",
+    "keyPathBrowse": "Przegl\u0105daj\u2026",
+    "noneYet": "Brak profili po\u015bwiadcze\u0144.",
+    "deleteConfirm": "Usun\u0105\u0107 profil \"{{name}}\"? Sesje u\u017cywaj\u0105ce go b\u0119d\u0105 wymaga\u0142y nowego profilu.",
+    "nameRequired": "Nazwa profilu jest wymagana.",
+    "none": "(Brak)",
+    "manageLink": "Zarz\u0105dzaj\u2026"
   },
   "session": {
     "deleteConfirm": "Usun\u0105\u0107 sesj\u0119 \u201e{{name}}\u201d?",
@@ -80,7 +117,9 @@
     "tagsLabel": "Tagi",
     "tagsPlaceholder": "prod, eu, web (oddzielone przecinkami)",
     "highlightProfileLabel": "Profil pod\u015bwietlania",
-    "highlightProfileNone": "Brak"
+    "highlightProfileNone": "Brak",
+    "credentialProfileLabel": "Profil po\u015bwiadcze\u0144",
+    "credentialProfileNone": "(Brak \u2014 powr\u00f3t do klawiatury interaktywnej)"
   },
   "dialog": {
     "cancel": "Anuluj",

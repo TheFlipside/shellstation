@@ -1,3 +1,4 @@
+mod credential_profile;
 mod database;
 mod highlight;
 mod logging;
@@ -6,6 +7,7 @@ mod session;
 mod ssh;
 mod telnet;
 
+pub use credential_profile::*;
 pub use database::*;
 pub use highlight::*;
 pub use logging::*;
@@ -43,7 +45,6 @@ fn validate_port(port: i32) -> Result<(), String> {
 /// Maximum length for session string fields to prevent resource exhaustion.
 const MAX_NAME_LEN: usize = 255;
 const MAX_HOSTNAME_LEN: usize = 255;
-const MAX_USERNAME_LEN: usize = 128;
 const MAX_TAGS_LEN: usize = 1024;
 const MAX_ICON_LEN: usize = 128;
 

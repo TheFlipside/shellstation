@@ -4,6 +4,7 @@ mod credentials;
 mod db;
 mod highlight;
 mod import;
+mod migrate_legacy;
 mod pty;
 mod session_logger;
 mod ssh;
@@ -594,6 +595,15 @@ pub fn run() {
                         Err(e) => return Err(Box::new(std::io::Error::other(e.to_string()))),
                     };
                     let provider = Arc::new(SqliteProvider::new(local_pool));
+                    let provider_trait: Arc<dyn db::DatabaseProvider> = provider.clone();
+                    if let Err(e) =
+                        tauri::async_runtime::block_on(migrate_legacy::migrate_legacy_credentials(
+                            &provider_trait,
+                            &provider_trait,
+                        ))
+                    {
+                        tracing::error!("Legacy credential migration failed: {e}");
+                    }
                     app.manage(DbState(provider.clone() as Arc<dyn db::DatabaseProvider>));
                     app.manage(CredentialDbState(provider as Arc<dyn db::DatabaseProvider>));
                     app.manage(DbStatusState(commands::DbStatus {
@@ -609,7 +619,7 @@ pub fn run() {
                     let local_pool = init_local_sqlite(&config_dir, false, None)?;
                     let cred_provider =
                         Arc::new(SqliteProvider::new(local_pool)) as Arc<dyn db::DatabaseProvider>;
-                    app.manage(CredentialDbState(cred_provider));
+                    app.manage(CredentialDbState(cred_provider.clone()));
 
                     tracing::info!(
                         host = %app_config.postgres.host,
@@ -635,8 +645,17 @@ pub fn run() {
                         Ok::<sqlx::PgPool, Box<dyn std::error::Error>>(pool)
                     }) {
                         Ok(pool) => {
-                            let provider = PostgresProvider::new(pool);
-                            app.manage(DbState(Arc::new(provider)));
+                            let provider: Arc<dyn db::DatabaseProvider> =
+                                Arc::new(PostgresProvider::new(pool));
+                            if let Err(e) = tauri::async_runtime::block_on(
+                                migrate_legacy::migrate_legacy_credentials(
+                                    &provider,
+                                    &cred_provider,
+                                ),
+                            ) {
+                                tracing::error!("Legacy credential migration failed: {e}");
+                            }
+                            app.manage(DbState(provider));
                             app.manage(DbStatusState(commands::DbStatus {
                                 backend: "postgres".to_string(),
                                 healthy: true,
@@ -720,10 +739,15 @@ pub fn run() {
             commands::session_reorder,
             commands::folder_sort_alphabetically,
             commands::session_sort_alphabetically,
-            // Credentials
-            commands::credential_get,
+            // Credential Profiles
+            commands::credential_profile_create,
+            commands::credential_profile_list,
+            commands::credential_profile_get_secret,
+            commands::credential_profile_update,
+            commands::credential_profile_delete,
             // Bulk operations
-            commands::folder_apply_credentials,
+            commands::folder_apply_credential_profile,
+            commands::folder_bulk_edit_sessions,
             // Database config & migration
             commands::app_restart,
             commands::db_get_config,

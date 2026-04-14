@@ -1,5 +1,4 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
 import { useTranslation } from "react-i18next";
 import {
   DndContext,
@@ -20,11 +19,14 @@ import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { FolderDialog } from "./FolderDialog";
 import { MoveDialog } from "./MoveDialog";
 import { FolderCredentialDialog } from "./FolderCredentialDialog";
+import { BulkEditDialog } from "./BulkEditDialog";
 import { SessionDialog, type SessionFormData } from "./SessionDialog";
 import { FolderIcon, SessionIconComponent } from "./SessionIcons";
 import { SettingsDialog } from "./SettingsDialog";
+import { CredentialManager } from "./CredentialManager";
 import { useSettingsStore } from "../stores/settingsStore";
 import { useHighlightStore } from "../stores/highlightStore";
+import { useCredentialProfilesStore } from "../stores/credentialProfilesStore";
 
 // eslint-disable-next-line @typescript-eslint/no-empty-function
 const noop = (): void => {};
@@ -95,14 +97,18 @@ export function SessionSidebar(): React.JSX.Element {
     sessionId?: string;
     initial?: Partial<SessionFormData>;
   } | null>(null);
-  const prefillCredRef = useRef<{ password: string; keyPath: string } | null>(null);
   const [moveTarget, setMoveTarget] = useState<MoveTarget | null>(null);
   const [confirmDialog, setConfirmDialog] = useState<{
     message: string;
     onConfirm: () => void;
   } | null>(null);
   const [showSettings, setShowSettings] = useState(false);
+  const [showCredentialManager, setShowCredentialManager] = useState(false);
   const [credentialFolder, setCredentialFolder] = useState<{
+    id: string;
+    name: string;
+  } | null>(null);
+  const [bulkEditFolder, setBulkEditFolder] = useState<{
     id: string;
     name: string;
   } | null>(null);
@@ -122,11 +128,13 @@ export function SessionSidebar(): React.JSX.Element {
   const { autoRefreshInterval } = useSettingsStore();
 
   const loadHighlightProfiles = useHighlightStore((s) => s.loadProfiles);
+  const loadCredentialProfiles = useCredentialProfilesStore((s) => s.loadAll);
 
   useEffect(() => {
     loadAll().catch(noop);
     loadHighlightProfiles().catch(noop);
-  }, [loadAll, loadHighlightProfiles]);
+    loadCredentialProfiles().catch(noop);
+  }, [loadAll, loadHighlightProfiles, loadCredentialProfiles]);
 
   // Auto-refresh polling when interval is set (for multi-user PostgreSQL setups).
   // Polls a lightweight fingerprint; only fetches full data when it changes.
@@ -142,36 +150,22 @@ export function SessionSidebar(): React.JSX.Element {
 
   /** Clone the given session by opening the SessionDialog in create mode with prefilled data. */
   const cloneSession = useCallback((session: Session) => {
-    invoke<{ username: string; secret: string } | null>("credential_get", {
-      sessionId: session.id,
-    })
-      .then((cred) => {
-        const secret = cred?.secret ?? "";
-        prefillCredRef.current = {
-          password: session.auth_method === "password" ? secret : "",
-          keyPath: session.auth_method === "publickey" ? secret : "",
-        };
-        setSessionDialog({
-          mode: "create",
-          folderId: session.folder_id,
-          initial: {
-            folderId: session.folder_id,
-            name: session.name + "_copy",
-            hostname: session.hostname,
-            port: session.port,
-            protocol: session.protocol,
-            username: cred?.username ?? "",
-            authMethod: session.auth_method,
-            tags: tagsToDisplay(session.tags),
-            icon: session.icon,
-            jumpHostId: session.jump_host_id,
-            highlightProfileId: session.highlight_profile_id,
-            password: session.auth_method === "password" ? secret : "",
-            keyPath: session.auth_method === "publickey" ? secret : "",
-          },
-        });
-      })
-      .catch(noop);
+    setSessionDialog({
+      mode: "create",
+      folderId: session.folder_id,
+      initial: {
+        folderId: session.folder_id,
+        name: session.name + "_copy",
+        hostname: session.hostname,
+        port: session.port,
+        protocol: session.protocol,
+        tags: tagsToDisplay(session.tags),
+        icon: session.icon,
+        jumpHostId: session.jump_host_id,
+        highlightProfileId: session.highlight_profile_id,
+        credentialProfileId: session.credential_profile_id,
+      },
+    });
   }, []);
 
   // Ctrl+D clones the currently selected session.
@@ -236,36 +230,23 @@ export function SessionSidebar(): React.JSX.Element {
         } else if (selectedItemType === "session") {
           const session = sessions.find((s) => s.id === selectedItemId);
           if (session) {
-            invoke<{ username: string; secret: string } | null>("credential_get", {
+            setSessionDialog({
+              mode: "edit",
+              folderId: session.folder_id,
               sessionId: session.id,
-            })
-              .then((cred) => {
-                const secret = cred?.secret ?? "";
-                prefillCredRef.current = {
-                  password: session.auth_method === "password" ? secret : "",
-                  keyPath: session.auth_method === "publickey" ? secret : "",
-                };
-                setSessionDialog({
-                  mode: "edit",
-                  folderId: session.folder_id,
-                  sessionId: session.id,
-                  initial: {
-                    folderId: session.folder_id,
-                    name: session.name,
-                    hostname: session.hostname,
-                    port: session.port,
-                    protocol: session.protocol,
-                    username: cred?.username ?? "",
-                    authMethod: session.auth_method,
-                    tags: tagsToDisplay(session.tags),
-                    icon: session.icon,
-                    jumpHostId: session.jump_host_id,
-                    password: session.auth_method === "password" ? secret : "",
-                    keyPath: session.auth_method === "publickey" ? secret : "",
-                  },
-                });
-              })
-              .catch(noop);
+              initial: {
+                folderId: session.folder_id,
+                name: session.name,
+                hostname: session.hostname,
+                port: session.port,
+                protocol: session.protocol,
+                tags: tagsToDisplay(session.tags),
+                icon: session.icon,
+                jumpHostId: session.jump_host_id,
+                highlightProfileId: session.highlight_profile_id,
+                credentialProfileId: session.credential_profile_id,
+              },
+            });
           }
         }
         return;
@@ -467,9 +448,15 @@ export function SessionSidebar(): React.JSX.Element {
           },
         },
         {
-          label: t("contextMenu.editSessions"),
+          label: t("contextMenu.applyCredentialProfile"),
           onClick: () => {
             setCredentialFolder({ id: ctx.id, name: folder?.name ?? "" });
+          },
+        },
+        {
+          label: t("contextMenu.bulkEdit"),
+          onClick: () => {
+            setBulkEditFolder({ id: ctx.id, name: folder?.name ?? "" });
           },
         },
         {
@@ -513,37 +500,23 @@ export function SessionSidebar(): React.JSX.Element {
         label: t("contextMenu.edit"),
         onClick: () => {
           if (!session) return;
-          invoke<{ username: string; secret: string } | null>("credential_get", {
+          setSessionDialog({
+            mode: "edit",
+            folderId: session.folder_id,
             sessionId: session.id,
-          })
-            .then((cred) => {
-              const secret = cred?.secret ?? "";
-              prefillCredRef.current = {
-                password: session.auth_method === "password" ? secret : "",
-                keyPath: session.auth_method === "publickey" ? secret : "",
-              };
-              setSessionDialog({
-                mode: "edit",
-                folderId: session.folder_id,
-                sessionId: session.id,
-                initial: {
-                  folderId: session.folder_id,
-                  name: session.name,
-                  hostname: session.hostname,
-                  port: session.port,
-                  protocol: session.protocol,
-                  username: cred?.username ?? "",
-                  authMethod: session.auth_method,
-                  tags: tagsToDisplay(session.tags),
-                  icon: session.icon,
-                  jumpHostId: session.jump_host_id,
-                  highlightProfileId: session.highlight_profile_id,
-                  password: session.auth_method === "password" ? secret : "",
-                  keyPath: session.auth_method === "publickey" ? secret : "",
-                },
-              });
-            })
-            .catch(noop);
+            initial: {
+              folderId: session.folder_id,
+              name: session.name,
+              hostname: session.hostname,
+              port: session.port,
+              protocol: session.protocol,
+              tags: tagsToDisplay(session.tags),
+              icon: session.icon,
+              jumpHostId: session.jump_host_id,
+              highlightProfileId: session.highlight_profile_id,
+              credentialProfileId: session.credential_profile_id,
+            },
+          });
         },
       },
       {
@@ -596,14 +569,6 @@ export function SessionSidebar(): React.JSX.Element {
         )
       : "[]";
 
-    // Use prefilled credential as fallback when the dialog didn't
-    // preserve the password/keyPath (e.g. webview clearing the field).
-    const prefill = prefillCredRef.current;
-    const effectivePassword =
-      (data.password !== "" ? data.password : prefill?.password) ?? undefined;
-    const effectiveKeyPath = (data.keyPath !== "" ? data.keyPath : prefill?.keyPath) ?? undefined;
-    prefillCredRef.current = null;
-
     if (sessionDialog.mode === "create") {
       createSession({
         folderId: data.folderId,
@@ -611,14 +576,11 @@ export function SessionSidebar(): React.JSX.Element {
         hostname: data.hostname,
         port: data.port,
         protocol: data.protocol,
-        username: data.username,
-        authMethod: data.authMethod,
         tags: tagsJson,
         icon: data.icon,
         jumpHostId: data.jumpHostId ?? undefined,
         highlightProfileId: data.highlightProfileId ?? undefined,
-        password: effectivePassword,
-        keyPath: effectiveKeyPath,
+        credentialProfileId: data.credentialProfileId ?? undefined,
       }).catch(noop);
     } else if (sessionDialog.sessionId) {
       const sid = sessionDialog.sessionId;
@@ -629,14 +591,11 @@ export function SessionSidebar(): React.JSX.Element {
           hostname: data.hostname,
           port: data.port,
           protocol: data.protocol,
-          username: data.username,
-          authMethod: data.authMethod,
           tags: tagsJson,
           icon: data.icon,
           jumpHostId: data.jumpHostId,
           highlightProfileId: data.highlightProfileId,
-          password: effectivePassword,
-          keyPath: effectiveKeyPath,
+          credentialProfileId: data.credentialProfileId,
         });
         if (data.folderId !== originalFolderId) {
           await moveSession(sid, data.folderId);
@@ -838,23 +797,42 @@ export function SessionSidebar(): React.JSX.Element {
           onCancel={() => {
             setSessionDialog(null);
           }}
+          onManageCredentials={() => {
+            setShowCredentialManager(true);
+          }}
+        />
+      )}
+
+      {bulkEditFolder && (
+        <BulkEditDialog
+          folderName={bulkEditFolder.name}
+          jumpHostCandidates={sessions.filter((s) => s.protocol === "ssh")}
+          onSubmit={(edit) => {
+            store
+              .folderBulkEditSessions(bulkEditFolder.id, edit)
+              .then((count) => {
+                useToastStore
+                  .getState()
+                  .addToast(t("bulkEdit.success", { count: String(count) }), "info");
+              })
+              .catch((err: unknown) => {
+                const msg = err instanceof Error ? err.message : String(err);
+                useToastStore.getState().addToast(msg);
+              });
+            setBulkEditFolder(null);
+          }}
+          onCancel={() => {
+            setBulkEditFolder(null);
+          }}
         />
       )}
 
       {credentialFolder && (
         <FolderCredentialDialog
           folderName={credentialFolder.name}
-          sessions={sessions}
-          onSubmit={(username, authMethod, credential, jumpHostId, highlightProfileId) => {
+          onSubmit={(profileId) => {
             store
-              .folderApplyCredentials(
-                credentialFolder.id,
-                username,
-                authMethod,
-                credential,
-                jumpHostId,
-                highlightProfileId,
-              )
+              .folderApplyCredentialProfile(credentialFolder.id, profileId)
               .then((count) => {
                 useToastStore
                   .getState()
@@ -868,6 +846,9 @@ export function SessionSidebar(): React.JSX.Element {
           }}
           onCancel={() => {
             setCredentialFolder(null);
+          }}
+          onManageCredentials={() => {
+            setShowCredentialManager(true);
           }}
         />
       )}
@@ -883,12 +864,45 @@ export function SessionSidebar(): React.JSX.Element {
         >
           {"\u2699"}
         </button>
+        <button
+          type="button"
+          className="sidebar-btn sidebar-btn-settings"
+          title={t("credentialProfiles.open")}
+          onClick={() => {
+            setShowCredentialManager(true);
+          }}
+        >
+          <svg
+            width="20"
+            height="20"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            aria-hidden="true"
+          >
+            <circle cx="8" cy="14" r="4" />
+            <path d="M11 11l10-10" />
+            <path d="M17 5l3 3" />
+            <path d="M14 8l3 3" />
+          </svg>
+        </button>
       </div>
 
       {showSettings && (
         <SettingsDialog
           onClose={() => {
             setShowSettings(false);
+          }}
+        />
+      )}
+
+      {showCredentialManager && (
+        <CredentialManager
+          onClose={() => {
+            setShowCredentialManager(false);
           }}
         />
       )}

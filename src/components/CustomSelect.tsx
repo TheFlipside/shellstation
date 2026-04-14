@@ -1,4 +1,5 @@
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 
 export interface SelectOption {
   value: string;
@@ -45,7 +46,12 @@ export function CustomSelect({
   useEffect(() => {
     if (!open) return;
     const handleClick = (e: MouseEvent): void => {
-      if (wrapperRef.current && !wrapperRef.current.contains(e.target as Node)) {
+      const target = e.target as Node;
+      const insideTrigger = wrapperRef.current?.contains(target) ?? false;
+      // The dropdown is portaled to document.body and is not a DOM descendant
+      // of the wrapper, so check it separately.
+      const insideDropdown = listRef.current?.contains(target) ?? false;
+      if (!insideTrigger && !insideDropdown) {
         close();
       }
     };
@@ -186,20 +192,60 @@ export function CustomSelect({
     item?.scrollIntoView({ block: "nearest" });
   }, [open, focusIndex]);
 
-  // Flip upward if dropdown overflows viewport
-  const [flipUp, setFlipUp] = useState(false);
-  useEffect(() => {
+  // Compute fixed-positioned coordinates for the portal-mounted dropdown.
+  // The dropdown escapes any ancestor with `overflow: hidden/auto` (e.g. a
+  // scrollable dialog) by rendering into document.body.
+  const [dropdownPos, setDropdownPos] = useState<{
+    top: number;
+    left: number;
+    width: number;
+    maxHeight: number;
+    flipUp: boolean;
+  } | null>(null);
+  const [portalTarget, setPortalTarget] = useState<HTMLElement | null>(null);
+
+  const updatePosition = useCallback(() => {
+    const trigger = triggerRef.current;
+    if (!trigger) return;
+    // Portal target: nearest .dialog-overlay ancestor (which owns the CSS
+    // zoom) if present, else document.body. Staying inside the same zoom
+    // context means getBoundingClientRect coords and fixed positioning
+    // share the same frame — no scale compensation needed.
+    const overlay = trigger.closest<HTMLElement>(".dialog-overlay");
+    setPortalTarget(overlay ?? document.body);
+    const rect = trigger.getBoundingClientRect();
+    const viewportH = window.innerHeight;
+    const margin = 4;
+    const desiredMax = 240;
+    const spaceBelow = viewportH - rect.bottom - margin;
+    const spaceAbove = rect.top - margin;
+    const flipUp = spaceBelow < Math.min(desiredMax, 160) && spaceAbove > spaceBelow;
+    const maxHeight = Math.max(80, Math.min(desiredMax, flipUp ? spaceAbove : spaceBelow));
+    setDropdownPos({
+      top: flipUp ? rect.top - margin : rect.bottom + margin,
+      left: rect.left,
+      width: rect.width,
+      maxHeight,
+      flipUp,
+    });
+  }, []);
+
+  useLayoutEffect(() => {
     if (!open) {
-      setFlipUp(false);
+      setDropdownPos(null);
       return;
     }
-    const el = listRef.current;
-    if (!el) return;
-    const rect = el.getBoundingClientRect();
-    if (rect.bottom > window.innerHeight) {
-      setFlipUp(true);
-    }
-  }, [open]);
+    updatePosition();
+    const handleReposition = (): void => {
+      updatePosition();
+    };
+    window.addEventListener("resize", handleReposition);
+    window.addEventListener("scroll", handleReposition, true);
+    return () => {
+      window.removeEventListener("resize", handleReposition);
+      window.removeEventListener("scroll", handleReposition, true);
+    };
+  }, [open, updatePosition]);
 
   return (
     <div ref={wrapperRef} className="custom-select-wrapper">
@@ -224,33 +270,45 @@ export function CustomSelect({
           &#x25BE;
         </span>
       </button>
-      {open && (
-        <div
-          ref={listRef}
-          className={`custom-select-dropdown${flipUp ? " custom-select-dropdown-flip" : ""}`}
-          role="listbox"
-          tabIndex={-1}
-        >
-          {options.map((opt, i) => (
-            <div
-              key={opt.value}
-              className={`custom-select-option${opt.value === value ? " custom-select-option-selected" : ""}${i === focusIndex ? " custom-select-option-focused" : ""}`}
-              role="option"
-              aria-selected={opt.value === value}
-              onMouseEnter={() => {
-                setFocusIndex(i);
-              }}
-              onClick={() => {
-                onChange(opt.value);
-                close();
-                triggerRef.current?.focus();
-              }}
-            >
-              {opt.label}
-            </div>
-          ))}
-        </div>
-      )}
+      {open &&
+        dropdownPos &&
+        portalTarget &&
+        createPortal(
+          <div
+            ref={listRef}
+            className={`custom-select-dropdown${dropdownPos.flipUp ? " custom-select-dropdown-flip" : ""}`}
+            role="listbox"
+            tabIndex={-1}
+            style={{
+              position: "fixed",
+              top: dropdownPos.flipUp ? "auto" : dropdownPos.top,
+              bottom: dropdownPos.flipUp ? window.innerHeight - dropdownPos.top : "auto",
+              left: dropdownPos.left,
+              width: dropdownPos.width,
+              maxHeight: dropdownPos.maxHeight,
+            }}
+          >
+            {options.map((opt, i) => (
+              <div
+                key={opt.value}
+                className={`custom-select-option${opt.value === value ? " custom-select-option-selected" : ""}${i === focusIndex ? " custom-select-option-focused" : ""}`}
+                role="option"
+                aria-selected={opt.value === value}
+                onMouseEnter={() => {
+                  setFocusIndex(i);
+                }}
+                onClick={() => {
+                  onChange(opt.value);
+                  close();
+                  triggerRef.current?.focus();
+                }}
+              >
+                {opt.label}
+              </div>
+            ))}
+          </div>,
+          portalTarget,
+        )}
     </div>
   );
 }

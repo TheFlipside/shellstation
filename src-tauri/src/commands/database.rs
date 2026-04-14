@@ -341,6 +341,7 @@ async fn build_export_data(
     let sessions = state.0.list_all_sessions().await?;
     let credentials = cred_db.0.list_all_credentials().await?;
     let highlight_profiles = state.0.list_highlight_profiles().await?;
+    let credential_profiles = cred_db.0.list_credential_profiles().await?;
 
     // Credentials contain only metadata (username, auth_type, keychain_ref).
     // Secrets are stored in the OS keychain and never exported.
@@ -349,6 +350,7 @@ async fn build_export_data(
         sessions,
         credentials,
         highlight_profiles,
+        credential_profiles,
     })
 }
 
@@ -570,6 +572,7 @@ pub async fn db_import(
                 tags: session.tags.clone(),
                 icon: session.icon.clone(),
                 highlight_profile_id: None,
+                credential_profile_id: None,
             })
             .await
             .map_err(|e| format!("Failed to import session '{}': {e}", session.name))?;

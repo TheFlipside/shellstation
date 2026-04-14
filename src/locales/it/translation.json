@@ -20,7 +20,18 @@
     "clone": "Clona sessione",
     "sortAlphabetically": "Ordina alfabeticamente",
     "setCredentials": "Imposta credenziali\u2026",
-    "editSessions": "Modifica sessioni\u2026"
+    "editSessions": "Modifica sessioni\u2026",
+    "applyCredentialProfile": "Applica profilo credenziali\u2026",
+    "bulkEdit": "Modifica sessioni in blocco\u2026"
+  },
+  "bulkEdit": {
+    "title": "Modifica in blocco \u2014 {{name}}",
+    "info": "Applica modifiche a tutte le sessioni in questa cartella e sottocartelle. Solo i campi selezionati vengono aggiornati. Il jump host si applica solo alle sessioni SSH.",
+    "setJumpHost": "Imposta jump host",
+    "setHighlightProfile": "Imposta profilo di evidenziazione",
+    "setIcon": "Imposta icona",
+    "clearValue": "(Cancella)",
+    "success": "{{count}} sessione(i) aggiornate"
   },
   "folder": {
     "deleteWithSessions": "Eliminare la cartella e le sue {{count}} sessione/i?",
@@ -31,11 +42,37 @@
     "namePlaceholder": "Nome della cartella"
   },
   "folderCredential": {
-    "title": "Modifica sessioni \u2014 {{name}}",
-    "info": "Si applica a tutte le sessioni SSH in questa cartella e sottocartelle. Le sessioni Telnet sono escluse.",
-    "jumpHostLabel": "Host di salto (opzionale)",
-    "highlightProfileLabel": "Profilo di evidenziazione (opzionale)",
-    "success": "{{count}} sessione/i aggiornata/e"
+    "title": "Applica profilo credenziali \u2014 {{name}}",
+    "info": "Assegna un profilo di credenziali a tutte le sessioni SSH in questa cartella e sottocartelle. Le sessioni Telnet sono escluse.",
+    "profileLabel": "Profilo credenziali",
+    "profileNone": "(Rimuovi assegnazione)",
+    "success": "{{count}} sessione(i) aggiornate"
+  },
+  "credentialProfiles": {
+    "title": "Gestore credenziali",
+    "info": "I profili di credenziali sono condivisi tra sessioni. Ogni profilo memorizza un segreto nel portachiavi del sistema.",
+    "open": "Gestore credenziali",
+    "newProfile": "Nuovo profilo",
+    "editProfile": "Modifica profilo",
+    "nameLabel": "Nome profilo",
+    "namePlaceholder": "es. Utente RADIUS",
+    "authTypeLabel": "Tipo di autenticazione",
+    "authPassword": "Password",
+    "authKey": "Chiave pubblica",
+    "authKeyboardInteractive": "Tastiera interattiva",
+    "usernameLabel": "Utente",
+    "usernamePlaceholder": "utente",
+    "passwordLabel": "Password",
+    "passwordPlaceholder": "password",
+    "passwordHint": "Lasciare vuoto per mantenere il segreto esistente.",
+    "keyPathLabel": "Percorso chiave",
+    "keyPathPlaceholder": "~/.ssh/id_ed25519",
+    "keyPathBrowse": "Sfoglia\u2026",
+    "noneYet": "Nessun profilo di credenziali.",
+    "deleteConfirm": "Eliminare il profilo \"{{name}}\"? Le sessioni che lo usano richiederanno un nuovo profilo.",
+    "nameRequired": "Il nome del profilo \u00e8 obbligatorio.",
+    "none": "(Nessuno)",
+    "manageLink": "Gestisci\u2026"
   },
   "session": {
     "deleteConfirm": "Eliminare la sessione \"{{name}}\"?",
@@ -80,7 +117,9 @@
     "tagsLabel": "Tag",
     "tagsPlaceholder": "prod, eu, web (separati da virgole)",
     "highlightProfileLabel": "Profilo di evidenziazione",
-    "highlightProfileNone": "Nessuno"
+    "highlightProfileNone": "Nessuno",
+    "credentialProfileLabel": "Profilo credenziali",
+    "credentialProfileNone": "(Nessuno \u2014 fallback tastiera interattiva)"
   },
   "dialog": {
     "cancel": "Annulla",

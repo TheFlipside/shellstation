@@ -20,7 +20,18 @@
     "clone": "Sessie klonen",
     "sortAlphabetically": "Alfabetisch sorteren",
     "setCredentials": "Inloggegevens instellen\u2026",
-    "editSessions": "Sessies bewerken\u2026"
+    "editSessions": "Sessies bewerken\u2026",
+    "applyCredentialProfile": "Inloggegevensprofiel toepassen\u2026",
+    "bulkEdit": "Sessies bulkbewerken\u2026"
+  },
+  "bulkEdit": {
+    "title": "Bulkbewerking \u2014 {{name}}",
+    "info": "Wijzigingen toepassen op alle sessies in deze map en submappen. Alleen aangevinkte velden worden bijgewerkt. Jump host geldt alleen voor SSH-sessies.",
+    "setJumpHost": "Jump host instellen",
+    "setHighlightProfile": "Highlight-profiel instellen",
+    "setIcon": "Pictogram instellen",
+    "clearValue": "(Wissen)",
+    "success": "{{count}} sessie(s) bijgewerkt"
   },
   "folder": {
     "deleteWithSessions": "Map en de {{count}} sessie(s) verwijderen?",
@@ -31,11 +42,37 @@
     "namePlaceholder": "Mapnaam"
   },
   "folderCredential": {
-    "title": "Sessies bewerken \u2014 {{name}}",
-    "info": "Geldt voor alle SSH-sessies in deze map en submappen. Telnet-sessies zijn uitgesloten.",
-    "jumpHostLabel": "Jumphost (optioneel)",
-    "highlightProfileLabel": "Markeringsprofiel (optioneel)",
+    "title": "Inloggegevensprofiel toepassen \u2014 {{name}}",
+    "info": "Wijst een inloggegevensprofiel toe aan alle SSH-sessies in deze map en submappen. Telnet-sessies worden uitgesloten.",
+    "profileLabel": "Inloggegevensprofiel",
+    "profileNone": "(Toewijzing wissen)",
     "success": "{{count}} sessie(s) bijgewerkt"
+  },
+  "credentialProfiles": {
+    "title": "Inloggegevensbeheer",
+    "info": "Inloggegevensprofielen worden gedeeld tussen sessies. Elk profiel slaat \u00e9\u00e9n geheim op in de OS-sleutelring.",
+    "open": "Inloggegevensbeheer",
+    "newProfile": "Nieuw profiel",
+    "editProfile": "Profiel bewerken",
+    "nameLabel": "Profielnaam",
+    "namePlaceholder": "bijv. RADIUS-gebruiker",
+    "authTypeLabel": "Authenticatietype",
+    "authPassword": "Wachtwoord",
+    "authKey": "Publieke sleutel",
+    "authKeyboardInteractive": "Toetsenbord-interactief",
+    "usernameLabel": "Gebruikersnaam",
+    "usernamePlaceholder": "user",
+    "passwordLabel": "Wachtwoord",
+    "passwordPlaceholder": "wachtwoord",
+    "passwordHint": "Laat leeg om het bestaande geheim te behouden.",
+    "keyPathLabel": "Sleutelpad",
+    "keyPathPlaceholder": "~/.ssh/id_ed25519",
+    "keyPathBrowse": "Bladeren\u2026",
+    "noneYet": "Nog geen inloggegevensprofielen.",
+    "deleteConfirm": "Profiel \"{{name}}\" verwijderen? Sessies die ernaar verwijzen hebben een nieuw profiel nodig.",
+    "nameRequired": "Profielnaam is verplicht.",
+    "none": "(Geen)",
+    "manageLink": "Beheren\u2026"
   },
   "session": {
     "deleteConfirm": "Sessie \"{{name}}\" verwijderen?",
@@ -80,7 +117,9 @@
     "tagsLabel": "Tags",
     "tagsPlaceholder": "prod, eu, web (kommagescheiden)",
     "highlightProfileLabel": "Markeringsprofiel",
-    "highlightProfileNone": "Geen"
+    "highlightProfileNone": "Geen",
+    "credentialProfileLabel": "Inloggegevensprofiel",
+    "credentialProfileNone": "(Geen \u2014 toetsenbord-interactieve fallback)"
   },
   "dialog": {
     "cancel": "Annuleren",

@@ -20,7 +20,18 @@
     "clone": "Clone Session",
     "sortAlphabetically": "Sort Alphabetically",
     "setCredentials": "Set Credentials\u2026",
-    "editSessions": "Edit Sessions\u2026"
+    "editSessions": "Edit Sessions\u2026",
+    "applyCredentialProfile": "Apply Credential Profile\u2026",
+    "bulkEdit": "Bulk Edit Sessions\u2026"
+  },
+  "bulkEdit": {
+    "title": "Bulk Edit \u2014 {{name}}",
+    "info": "Apply changes to all sessions in this folder and subfolders. Only checked fields will be updated. Jump host only applies to SSH sessions.",
+    "setJumpHost": "Set Jump Host",
+    "setHighlightProfile": "Set Highlight Profile",
+    "setIcon": "Set Icon",
+    "clearValue": "(Clear)",
+    "success": "Updated {{count}} session(s)"
   },
   "folder": {
     "deleteWithSessions": "Delete folder and its {{count}} session(s)?",
@@ -31,11 +42,37 @@
     "namePlaceholder": "Folder name"
   },
   "folderCredential": {
-    "title": "Edit Sessions \u2014 {{name}}",
-    "info": "Applies to all SSH sessions in this folder and subfolders. Telnet sessions are excluded.",
-    "jumpHostLabel": "Jump Host (optional)",
-    "highlightProfileLabel": "Highlight Profile (optional)",
+    "title": "Apply Credential Profile \u2014 {{name}}",
+    "info": "Assigns a credential profile to all SSH sessions in this folder and subfolders. Telnet sessions are excluded.",
+    "profileLabel": "Credential Profile",
+    "profileNone": "(Clear assignment)",
     "success": "Updated {{count}} session(s)"
+  },
+  "credentialProfiles": {
+    "title": "Credential Manager",
+    "info": "Credential profiles are shared across sessions. Each profile stores one secret in your OS keychain.",
+    "open": "Credential Manager",
+    "newProfile": "New Profile",
+    "editProfile": "Edit Profile",
+    "nameLabel": "Profile Name",
+    "namePlaceholder": "e.g. RADIUS user",
+    "authTypeLabel": "Auth Type",
+    "authPassword": "Password",
+    "authKey": "Public Key",
+    "authKeyboardInteractive": "Keyboard-Interactive",
+    "usernameLabel": "Username",
+    "usernamePlaceholder": "user",
+    "passwordLabel": "Password",
+    "passwordPlaceholder": "password",
+    "passwordHint": "Leave blank to keep the existing secret.",
+    "keyPathLabel": "Key Path",
+    "keyPathPlaceholder": "~/.ssh/id_ed25519",
+    "keyPathBrowse": "Browse\u2026",
+    "noneYet": "No credential profiles yet.",
+    "deleteConfirm": "Delete credential profile \"{{name}}\"? Sessions referencing it will need a new profile assigned.",
+    "nameRequired": "Profile name is required.",
+    "none": "(None)",
+    "manageLink": "Manage\u2026"
   },
   "session": {
     "deleteConfirm": "Delete session \"{{name}}\"?",
@@ -80,7 +117,9 @@
     "tagsLabel": "Tags",
     "tagsPlaceholder": "prod, eu, web (comma-separated)",
     "highlightProfileLabel": "Highlight Profile",
-    "highlightProfileNone": "None"
+    "highlightProfileNone": "None",
+    "credentialProfileLabel": "Credential Profile",
+    "credentialProfileNone": "(None — keyboard-interactive fallback)"
   },
   "dialog": {
     "cancel": "Cancel",

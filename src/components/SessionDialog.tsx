@@ -1,9 +1,9 @@
-import React, { useEffect, useState } from "react";
+import React, { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { open } from "@tauri-apps/plugin-dialog";
 import { useEscapeKey } from "../hooks/useEscapeKey";
 import type { Folder, Session } from "../stores/sessionStore";
 import { useHighlightStore } from "../stores/highlightStore";
+import { useCredentialProfilesStore } from "../stores/credentialProfilesStore";
 import { SESSION_ICON_KEYS, SessionIconComponent } from "./SessionIcons";
 import { CustomSelect } from "./CustomSelect";
 
@@ -13,14 +13,11 @@ export interface SessionFormData {
   hostname: string;
   port: number;
   protocol: string;
-  username: string;
-  authMethod: string;
   tags: string;
   icon: string;
   jumpHostId: string | null;
   highlightProfileId: string | null;
-  password: string;
-  keyPath: string;
+  credentialProfileId: string | null;
 }
 
 interface SessionDialogProps {
@@ -31,6 +28,7 @@ interface SessionDialogProps {
   initial?: Partial<SessionFormData>;
   onSubmit: (data: SessionFormData) => void;
   onCancel: () => void;
+  onManageCredentials: () => void;
 }
 
 export function SessionDialog({
@@ -41,6 +39,7 @@ export function SessionDialog({
   initial,
   onSubmit,
   onCancel,
+  onManageCredentials,
 }: SessionDialogProps): React.JSX.Element {
   const { t } = useTranslation();
   useEscapeKey(onCancel);
@@ -51,30 +50,21 @@ export function SessionDialog({
   const [port, setPort] = useState(
     String(initial?.port ?? (initial?.protocol === "telnet" ? 23 : 22)),
   );
-  const [username, setUsername] = useState(initial?.username ?? "");
-  const [authMethod, setAuthMethod] = useState(initial?.authMethod ?? "password");
-  const [password, setPassword] = useState(initial?.password ?? "");
-  const [keyPath, setKeyPath] = useState(initial?.keyPath ?? "");
   const [tags, setTags] = useState(initial?.tags ?? "");
   const [icon, setIcon] = useState(initial?.icon ?? "desktop");
   const [jumpHostId, setJumpHostId] = useState(initial?.jumpHostId ?? "");
   const [highlightProfileId, setHighlightProfileId] = useState(initial?.highlightProfileId ?? "");
+  const [credentialProfileId, setCredentialProfileId] = useState(
+    initial?.credentialProfileId ?? "",
+  );
   const highlightProfiles = useHighlightStore((s) => s.profiles);
+  const credentialProfiles = useCredentialProfilesStore((s) => s.profiles);
   const [error, setError] = useState("");
-
-  // Clear credentials from state when the dialog unmounts.
-  useEffect(() => {
-    return () => {
-      setPassword("");
-      setKeyPath("");
-    };
-  }, []);
 
   const handleSubmit = (e: React.SyntheticEvent): void => {
     e.preventDefault();
     setError("");
     if (!name.trim() || !hostname.trim()) return;
-    if (protocol === "ssh" && !username.trim()) return;
     const portNum = Number(port);
     if (!Number.isInteger(portNum) || portNum < 1 || portNum > 65535) {
       setError(t("session.portRange"));
@@ -86,14 +76,11 @@ export function SessionDialog({
       hostname: hostname.trim(),
       port: portNum,
       protocol,
-      username: username.trim(),
-      authMethod: protocol === "telnet" ? "none" : authMethod,
       tags,
       icon,
       jumpHostId: protocol === "telnet" ? null : jumpHostId || null,
       highlightProfileId: highlightProfileId || null,
-      password,
-      keyPath,
+      credentialProfileId: protocol === "telnet" ? null : credentialProfileId || null,
     });
   };
 
@@ -161,10 +148,8 @@ export function SessionDialog({
                 setProtocol(v);
                 if (v === "telnet") {
                   setPort((prev) => (prev === "22" ? "23" : prev));
-                  setAuthMethod("none");
                 } else {
                   setPort((prev) => (prev === "23" ? "22" : prev));
-                  if (authMethod === "none") setAuthMethod("password");
                 }
               }}
               options={[
@@ -199,83 +184,29 @@ export function SessionDialog({
               />
             </div>
           </div>
-          <div className="dialog-field">
-            <label htmlFor="sd-user">{t("session.usernameLabel")}</label>
-            <input
-              id="sd-user"
-              type="text"
-              value={username}
-              onChange={(e) => {
-                setUsername(e.target.value);
-              }}
-              placeholder={t("session.usernamePlaceholder")}
-            />
-          </div>
           {protocol === "ssh" && (
             <>
               <div className="dialog-field">
-                <label htmlFor="sd-auth">{t("session.authMethodLabel")}</label>
-                <CustomSelect
-                  id="sd-auth"
-                  value={authMethod}
-                  onChange={setAuthMethod}
-                  options={[
-                    { value: "password", label: t("session.authPassword") },
-                    { value: "publickey", label: t("session.authPublicKey") },
-                  ]}
-                />
-              </div>
-              <div className="dialog-field">
-                <label htmlFor="sd-credential">
-                  {authMethod === "password"
-                    ? t("session.passwordLabel")
-                    : t("session.keyPathLabel")}
-                </label>
-                {authMethod === "password" ? (
-                  <input
-                    id="sd-credential"
-                    type="password"
-                    autoComplete="off"
-                    value={password}
-                    onChange={(e) => {
-                      setPassword(e.target.value);
-                    }}
-                    placeholder={t("session.passwordPlaceholder")}
-                  />
-                ) : (
-                  <div className="dialog-row">
-                    <div className="dialog-field-grow">
-                      <input
-                        id="sd-credential"
-                        type="text"
-                        value={keyPath}
-                        onChange={(e) => {
-                          setKeyPath(e.target.value);
-                        }}
-                        placeholder={t("session.keyPathPlaceholder")}
-                      />
-                    </div>
-                    <button
-                      type="button"
-                      className="dialog-btn"
-                      onClick={() => {
-                        void (async () => {
-                          const path = await open({
-                            title: t("session.keyPathLabel"),
-                            defaultPath: keyPath || undefined,
-                            multiple: false,
-                            directory: false,
-                          });
-                          if (path) {
-                            setKeyPath(path);
-                          }
-                        })();
-                      }}
-                    >
-                      {t("session.keyPathBrowse")}
-                    </button>
+                <label htmlFor="sd-credprofile">{t("session.credentialProfileLabel")}</label>
+                <div className="dialog-row">
+                  <div className="dialog-field-grow">
+                    <CustomSelect
+                      id="sd-credprofile"
+                      value={credentialProfileId}
+                      onChange={setCredentialProfileId}
+                      options={[
+                        { value: "", label: t("session.credentialProfileNone") },
+                        ...credentialProfiles.map((p) => ({
+                          value: p.id,
+                          label: p.username ? `${p.name} (${p.username})` : p.name,
+                        })),
+                      ]}
+                    />
                   </div>
-                )}
+                  <button type="button" className="dialog-btn" onClick={onManageCredentials}>
+                    {t("credentialProfiles.manageLink")}
+                  </button>
+                </div>
               </div>
               <div className="dialog-field">
                 <label htmlFor="sd-jump">{t("session.jumpHostLabel")}</label>

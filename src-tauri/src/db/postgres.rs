@@ -7,10 +7,11 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
 use super::models::{
-    Credential, DataFingerprint, Folder, HighlightProfile, NewFolder, NewHighlightProfile,
-    NewSession, Session, UpdateHighlightProfile, UpdateSession,
+    Credential, CredentialProfile, DataFingerprint, Folder, HighlightProfile, NewCredentialProfile,
+    NewFolder, NewHighlightProfile, NewSession, Session, UpdateCredentialProfile,
+    UpdateHighlightProfile, UpdateSession,
 };
-use super::{DatabaseProvider, DbResult};
+use super::{BulkSessionEdit, DatabaseProvider, DbResult};
 
 pub struct PostgresProvider {
     pool: PgPool,
@@ -57,6 +58,19 @@ fn row_to_session(row: &PgRow) -> DbResult<Session> {
         icon: row.get("icon"),
         sort_order: row.get("sort_order"),
         highlight_profile_id: parse_optional_uuid(row.get("highlight_profile_id"))?,
+        credential_profile_id: parse_optional_uuid(row.get("credential_profile_id"))?,
+    })
+}
+
+fn row_to_credential_profile(row: &PgRow) -> DbResult<CredentialProfile> {
+    Ok(CredentialProfile {
+        id: parse_uuid(row.get("id"))?,
+        name: row.get("name"),
+        auth_type: row.get("auth_type"),
+        username: row.get("username"),
+        keychain_ref: row.get("keychain_ref"),
+        key_path: row.get("key_path"),
+        sort_order: row.get("sort_order"),
     })
 }
 
@@ -253,8 +267,8 @@ impl DatabaseProvider for PostgresProvider {
         .map_err(|e| format!("Failed to compute sort_order: {e}"))?;
 
         sqlx::query(
-            "INSERT INTO sessions (id, folder_id, name, hostname, port, protocol, username, auth_method, jump_host_id, tags, icon, sort_order, highlight_profile_id) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)",
+            "INSERT INTO sessions (id, folder_id, name, hostname, port, protocol, username, auth_method, jump_host_id, tags, icon, sort_order, highlight_profile_id, credential_profile_id) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)",
         )
         .bind(&id_str)
         .bind(&folder_str)
@@ -269,6 +283,7 @@ impl DatabaseProvider for PostgresProvider {
         .bind(&session.icon)
         .bind(sort_order)
         .bind(session.highlight_profile_id.map(|u| u.to_string()))
+        .bind(session.credential_profile_id.map(|u| u.to_string()))
         .execute(&mut *tx)
         .await
         .map_err(|e| format!("Failed to create session: {e}"))?;
@@ -291,12 +306,13 @@ impl DatabaseProvider for PostgresProvider {
             icon: session.icon,
             sort_order,
             highlight_profile_id: session.highlight_profile_id,
+            credential_profile_id: session.credential_profile_id,
         })
     }
 
     async fn get_session(&self, id: Uuid) -> DbResult<Option<Session>> {
         let row = sqlx::query(
-            "SELECT id, folder_id, name, hostname, port, protocol, username, auth_method, jump_host_id, tags, icon, sort_order, highlight_profile_id \
+            "SELECT id, folder_id, name, hostname, port, protocol, username, auth_method, jump_host_id, tags, icon, sort_order, highlight_profile_id, credential_profile_id \
              FROM sessions WHERE id = $1",
         )
         .bind(id.to_string())
@@ -312,7 +328,7 @@ impl DatabaseProvider for PostgresProvider {
 
     async fn list_all_sessions(&self) -> DbResult<Vec<Session>> {
         let rows = sqlx::query(
-            "SELECT id, folder_id, name, hostname, port, protocol, username, auth_method, jump_host_id, tags, icon, sort_order, highlight_profile_id \
+            "SELECT id, folder_id, name, hostname, port, protocol, username, auth_method, jump_host_id, tags, icon, sort_order, highlight_profile_id, credential_profile_id \
              FROM sessions ORDER BY sort_order ASC, name ASC",
         )
         .fetch_all(&self.pool)
@@ -381,6 +397,14 @@ impl DatabaseProvider for PostgresProvider {
         if let Some(ref highlight_profile_id) = update.highlight_profile_id {
             sets.push(format!("highlight_profile_id = ${idx}"));
             match highlight_profile_id {
+                Some(u) => values.push(BindVal::Text(u.to_string())),
+                None => values.push(BindVal::Null),
+            }
+            idx += 1;
+        }
+        if let Some(ref credential_profile_id) = update.credential_profile_id {
+            sets.push(format!("credential_profile_id = ${idx}"));
+            match credential_profile_id {
                 Some(u) => values.push(BindVal::Text(u.to_string())),
                 None => values.push(BindVal::Null),
             }
@@ -473,7 +497,7 @@ impl DatabaseProvider for PostgresProvider {
         let escaped = query.replace('%', "\\%").replace('_', "\\_");
         let pattern = format!("%{escaped}%");
         let rows = sqlx::query(
-            "SELECT id, folder_id, name, hostname, port, protocol, username, auth_method, jump_host_id, tags, icon, sort_order, highlight_profile_id \
+            "SELECT id, folder_id, name, hostname, port, protocol, username, auth_method, jump_host_id, tags, icon, sort_order, highlight_profile_id, credential_profile_id \
              FROM sessions \
              WHERE name LIKE $1 ESCAPE '\\' \
                 OR hostname LIKE $1 ESCAPE '\\' \
@@ -692,6 +716,252 @@ impl DatabaseProvider for PostgresProvider {
         .map_err(|e| format!("Failed to list credentials: {e}"))?;
 
         rows.iter().map(row_to_credential).collect()
+    }
+
+    // ── Credential Profiles ──────────────────────────────────────────────
+
+    async fn create_credential_profile(
+        &self,
+        profile: NewCredentialProfile,
+    ) -> DbResult<CredentialProfile> {
+        let id = Uuid::new_v4();
+        let id_str = id.to_string();
+        let keychain_ref = format!("credprofile-{id}");
+
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| format!("Failed to begin transaction: {e}"))?;
+
+        sqlx::query("SELECT id FROM credential_profiles FOR UPDATE")
+            .fetch_all(&mut *tx)
+            .await
+            .map_err(|e| format!("Failed to lock credential profiles: {e}"))?;
+
+        let sort_order: i32 =
+            sqlx::query_scalar("SELECT COALESCE(MAX(sort_order), -1) + 1 FROM credential_profiles")
+                .fetch_one(&mut *tx)
+                .await
+                .map_err(|e| format!("Failed to compute sort_order: {e}"))?;
+
+        sqlx::query(
+            "INSERT INTO credential_profiles (id, name, auth_type, username, keychain_ref, key_path, sort_order) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7)",
+        )
+        .bind(&id_str)
+        .bind(&profile.name)
+        .bind(&profile.auth_type)
+        .bind(&profile.username)
+        .bind(&keychain_ref)
+        .bind(&profile.key_path)
+        .bind(sort_order)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| format!("Failed to create credential profile: {e}"))?;
+
+        tx.commit()
+            .await
+            .map_err(|e| format!("Failed to commit: {e}"))?;
+
+        Ok(CredentialProfile {
+            id,
+            name: profile.name,
+            auth_type: profile.auth_type,
+            username: profile.username,
+            keychain_ref,
+            key_path: profile.key_path,
+            sort_order,
+        })
+    }
+
+    async fn list_credential_profiles(&self) -> DbResult<Vec<CredentialProfile>> {
+        let rows = sqlx::query(
+            "SELECT id, name, auth_type, username, keychain_ref, key_path, sort_order \
+             FROM credential_profiles ORDER BY sort_order ASC, name ASC",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| format!("Failed to list credential profiles: {e}"))?;
+
+        rows.iter().map(row_to_credential_profile).collect()
+    }
+
+    async fn get_credential_profile(&self, id: Uuid) -> DbResult<Option<CredentialProfile>> {
+        let row = sqlx::query(
+            "SELECT id, name, auth_type, username, keychain_ref, key_path, sort_order \
+             FROM credential_profiles WHERE id = $1",
+        )
+        .bind(id.to_string())
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| format!("Failed to get credential profile: {e}"))?;
+
+        match row {
+            Some(r) => Ok(Some(row_to_credential_profile(&r)?)),
+            None => Ok(None),
+        }
+    }
+
+    async fn update_credential_profile(
+        &self,
+        id: Uuid,
+        update: UpdateCredentialProfile,
+    ) -> DbResult<()> {
+        let mut sets = Vec::new();
+        let mut values: Vec<String> = Vec::new();
+        let mut idx: usize = 1;
+
+        if let Some(ref name) = update.name {
+            sets.push(format!("name = ${idx}"));
+            values.push(name.clone());
+            idx += 1;
+        }
+        if let Some(ref auth_type) = update.auth_type {
+            sets.push(format!("auth_type = ${idx}"));
+            values.push(auth_type.clone());
+            idx += 1;
+        }
+        if let Some(ref username) = update.username {
+            sets.push(format!("username = ${idx}"));
+            values.push(username.clone());
+            idx += 1;
+        }
+        if let Some(ref key_path) = update.key_path {
+            sets.push(format!("key_path = ${idx}"));
+            values.push(key_path.clone());
+            idx += 1;
+        }
+
+        if sets.is_empty() {
+            return Ok(());
+        }
+
+        let sql = format!(
+            "UPDATE credential_profiles SET {} WHERE id = ${idx}",
+            sets.join(", ")
+        );
+        let mut query = sqlx::query(&sql);
+        for val in &values {
+            query = query.bind(val.as_str());
+        }
+        query = query.bind(id.to_string());
+
+        let result = query
+            .execute(&self.pool)
+            .await
+            .map_err(|e| format!("Failed to update credential profile: {e}"))?;
+
+        if result.rows_affected() == 0 {
+            return Err(format!("Credential profile {id} not found"));
+        }
+        Ok(())
+    }
+
+    async fn delete_credential_profile(&self, id: Uuid) -> DbResult<()> {
+        let result = sqlx::query("DELETE FROM credential_profiles WHERE id = $1")
+            .bind(id.to_string())
+            .execute(&self.pool)
+            .await
+            .map_err(|e| format!("Failed to delete credential profile: {e}"))?;
+
+        if result.rows_affected() == 0 {
+            return Err(format!("Credential profile {id} not found"));
+        }
+        Ok(())
+    }
+
+    async fn bulk_set_session_credential_profile(
+        &self,
+        folder_id: Uuid,
+        profile_id: Option<Uuid>,
+    ) -> DbResult<u32> {
+        // Walk the folder subtree via a recursive CTE and update in one shot.
+        let result = sqlx::query(
+            "WITH RECURSIVE subtree(id) AS ( \
+                 SELECT id FROM folders WHERE id = $2 \
+                 UNION ALL \
+                 SELECT f.id FROM folders f JOIN subtree s ON f.parent_id = s.id \
+             ) \
+             UPDATE sessions SET credential_profile_id = $1 \
+             WHERE folder_id IN (SELECT id FROM subtree) AND protocol != 'telnet'",
+        )
+        .bind(profile_id.map(|u| u.to_string()))
+        .bind(folder_id.to_string())
+        .execute(&self.pool)
+        .await
+        .map_err(|e| format!("Failed to bulk set credential profile: {e}"))?;
+
+        Ok(result.rows_affected() as u32)
+    }
+
+    async fn bulk_edit_sessions(&self, folder_id: Uuid, edit: BulkSessionEdit) -> DbResult<u32> {
+        if edit.jump_host_id.is_none() && edit.highlight_profile_id.is_none() && edit.icon.is_none()
+        {
+            return Ok(0);
+        }
+
+        let subtree_cte = "WITH RECURSIVE subtree(id) AS ( \
+            SELECT id FROM folders WHERE id = $1 \
+            UNION ALL \
+            SELECT f.id FROM folders f JOIN subtree s ON f.parent_id = s.id \
+        )";
+
+        let mut total: u64 = 0;
+
+        // First pass: highlight_profile_id / icon applied to all rows
+        // (SSH + telnet) in the subtree. Positional params start at $2
+        // because $1 is the folder_id bound into the recursive CTE.
+        let mut setters: Vec<String> = Vec::new();
+        if edit.highlight_profile_id.is_some() {
+            setters.push(format!("highlight_profile_id = ${}", setters.len() + 2));
+        }
+        if edit.icon.is_some() {
+            setters.push(format!("icon = ${}", setters.len() + 2));
+        }
+
+        if !setters.is_empty() {
+            let sql = format!(
+                "{subtree_cte} \
+                 UPDATE sessions SET {} \
+                 WHERE folder_id IN (SELECT id FROM subtree)",
+                setters.join(", "),
+            );
+            let mut q = sqlx::query(&sql).bind(folder_id.to_string());
+            if let Some(hp) = &edit.highlight_profile_id {
+                q = q.bind(hp.map(|u| u.to_string()));
+            }
+            if let Some(icon) = &edit.icon {
+                q = q.bind(icon);
+            }
+            let result = q
+                .execute(&self.pool)
+                .await
+                .map_err(|e| format!("Failed to bulk edit sessions: {e}"))?;
+            total = result.rows_affected();
+        }
+
+        // Second pass: jump_host_id — SSH only.
+        if let Some(jh) = &edit.jump_host_id {
+            let sql = format!(
+                "{subtree_cte} \
+                 UPDATE sessions SET jump_host_id = $2 \
+                 WHERE folder_id IN (SELECT id FROM subtree) AND protocol != 'telnet'",
+            );
+            let result = sqlx::query(&sql)
+                .bind(folder_id.to_string())
+                .bind(jh.map(|u| u.to_string()))
+                .execute(&self.pool)
+                .await
+                .map_err(|e| format!("Failed to bulk set jump host: {e}"))?;
+            // See sqlite.rs: report distinct sessions touched, not the
+            // sum of both passes (they overlap on SSH rows).
+            if setters.is_empty() {
+                total = result.rows_affected();
+            }
+        }
+
+        Ok(total as u32)
     }
 
     // ── Highlight Profiles ────────────────────────────────────────────────

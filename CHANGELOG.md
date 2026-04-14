@@ -10,6 +10,8 @@ All notable changes to this project are documented in this file.
 
 ### Changed
 
+- Credential workflow refactored with new credential manager
+
 ### Removed
 
 ## 0.9.3 - 2026-04-14

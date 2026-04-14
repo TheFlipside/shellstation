@@ -30,6 +30,8 @@ pub struct Session {
     pub icon: String,
     pub sort_order: i32,
     pub highlight_profile_id: Option<Uuid>,
+    #[serde(default)]
+    pub credential_profile_id: Option<Uuid>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -44,6 +46,8 @@ pub struct NewSession {
     pub tags: String,
     pub icon: String,
     pub highlight_profile_id: Option<Uuid>,
+    #[serde(default)]
+    pub credential_profile_id: Option<Uuid>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -57,6 +61,41 @@ pub struct UpdateSession {
     pub tags: Option<String>,
     pub icon: Option<String>,
     pub highlight_profile_id: Option<Option<Uuid>>,
+    pub credential_profile_id: Option<Option<Uuid>>,
+}
+
+// ── Credential Profiles (shared, not per-session) ────────────────────────
+
+/// A named credential profile. One row in the DB; one entry in the OS
+/// keychain under `keychain_ref`. Sessions reference a profile by id.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CredentialProfile {
+    pub id: Uuid,
+    pub name: String,
+    /// `password`, `key`, or `keyboard-interactive`.
+    pub auth_type: String,
+    pub username: String,
+    pub keychain_ref: String,
+    /// For `key` profiles: filesystem path to the private key. Empty
+    /// otherwise.
+    pub key_path: String,
+    pub sort_order: i32,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct NewCredentialProfile {
+    pub name: String,
+    pub auth_type: String,
+    pub username: String,
+    pub key_path: String,
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub struct UpdateCredentialProfile {
+    pub name: Option<String>,
+    pub auth_type: Option<String>,
+    pub username: Option<String>,
+    pub key_path: Option<String>,
 }
 
 /// Credential metadata stored in the database. The actual secret (password or
@@ -68,15 +107,6 @@ pub struct Credential {
     pub username: String,
     pub auth_type: String,
     pub keychain_ref: String,
-}
-
-/// Response sent to the frontend when it needs to display/edit a credential.
-/// Includes the secret retrieved from the OS keychain.
-#[derive(Debug, Clone, Serialize)]
-pub struct CredentialResponse {
-    pub username: String,
-    pub auth_type: String,
-    pub secret: String,
 }
 
 // ── Highlight Profiles ──────────────────────────────────────────────────
@@ -114,7 +144,10 @@ pub struct DataFingerprint {
 pub struct ExportData {
     pub folders: Vec<Folder>,
     pub sessions: Vec<Session>,
+    #[serde(default)]
     pub credentials: Vec<Credential>,
     #[serde(default)]
     pub highlight_profiles: Vec<HighlightProfile>,
+    #[serde(default)]
+    pub credential_profiles: Vec<CredentialProfile>,
 }

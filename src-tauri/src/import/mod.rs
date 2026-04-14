@@ -222,6 +222,7 @@ async fn persist_import(
                 tags: String::new(),
                 icon: String::new(),
                 highlight_profile_id: None,
+                credential_profile_id: None,
             })
             .await
         {

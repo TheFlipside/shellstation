@@ -20,7 +20,18 @@
     "clone": "Klona session",
     "sortAlphabetically": "Sortera alfabetiskt",
     "setCredentials": "Ange inloggningsuppgifter\u2026",
-    "editSessions": "Redigera sessioner\u2026"
+    "editSessions": "Redigera sessioner\u2026",
+    "applyCredentialProfile": "Till\u00e4mpa inloggningsprofil\u2026",
+    "bulkEdit": "Massredigera sessioner\u2026"
+  },
+  "bulkEdit": {
+    "title": "Massredigering \u2014 {{name}}",
+    "info": "Till\u00e4mpa \u00e4ndringar p\u00e5 alla sessioner i denna mapp och undermappar. Endast markerade f\u00e4lt uppdateras. Jump host g\u00e4ller endast SSH-sessioner.",
+    "setJumpHost": "St\u00e4ll in jump host",
+    "setHighlightProfile": "St\u00e4ll in highlight-profil",
+    "setIcon": "St\u00e4ll in ikon",
+    "clearValue": "(Rensa)",
+    "success": "{{count}} session(er) uppdaterade"
   },
   "folder": {
     "deleteWithSessions": "Ta bort mappen och dess {{count}} session(er)?",
@@ -31,11 +42,37 @@
     "namePlaceholder": "Mappnamn"
   },
   "folderCredential": {
-    "title": "Redigera sessioner \u2014 {{name}}",
-    "info": "G\u00e4ller alla SSH-sessioner i denna mapp och undermappar. Telnet-sessioner \u00e4r undantagna.",
-    "jumpHostLabel": "Hoppv\u00e4rd (valfritt)",
-    "highlightProfileLabel": "Markeringsprofil (valfritt)",
+    "title": "Till\u00e4mpa inloggningsprofil \u2014 {{name}}",
+    "info": "Tilldelar en inloggningsprofil till alla SSH-sessioner i denna mapp och undermappar. Telnet-sessioner exkluderas.",
+    "profileLabel": "Inloggningsprofil",
+    "profileNone": "(Rensa tilldelning)",
     "success": "{{count}} session(er) uppdaterade"
+  },
+  "credentialProfiles": {
+    "title": "Inloggningshanterare",
+    "info": "Inloggningsprofiler delas mellan sessioner. Varje profil lagrar en hemlighet i OS-nyckelringen.",
+    "open": "Inloggningshanterare",
+    "newProfile": "Ny profil",
+    "editProfile": "Redigera profil",
+    "nameLabel": "Profilnamn",
+    "namePlaceholder": "t.ex. RADIUS-anv\u00e4ndare",
+    "authTypeLabel": "Autentiseringstyp",
+    "authPassword": "L\u00f6senord",
+    "authKey": "Publik nyckel",
+    "authKeyboardInteractive": "Tangentbord-interaktiv",
+    "usernameLabel": "Anv\u00e4ndarnamn",
+    "usernamePlaceholder": "user",
+    "passwordLabel": "L\u00f6senord",
+    "passwordPlaceholder": "l\u00f6senord",
+    "passwordHint": "L\u00e4mna tomt f\u00f6r att beh\u00e5lla befintlig hemlighet.",
+    "keyPathLabel": "Nyckelv\u00e4g",
+    "keyPathPlaceholder": "~/.ssh/id_ed25519",
+    "keyPathBrowse": "Bl\u00e4ddra\u2026",
+    "noneYet": "Inga inloggningsprofiler \u00e4nnu.",
+    "deleteConfirm": "Ta bort profilen \"{{name}}\"? Sessioner som refererar till den beh\u00f6ver en ny profil.",
+    "nameRequired": "Profilnamn kr\u00e4vs.",
+    "none": "(Ingen)",
+    "manageLink": "Hantera\u2026"
   },
   "session": {
     "deleteConfirm": "Ta bort sessionen \"{{name}}\"?",
@@ -80,7 +117,9 @@
     "tagsLabel": "Taggar",
     "tagsPlaceholder": "prod, eu, web (kommaseparerade)",
     "highlightProfileLabel": "Markeringsprofil",
-    "highlightProfileNone": "Ingen"
+    "highlightProfileNone": "Ingen",
+    "credentialProfileLabel": "Inloggningsprofil",
+    "credentialProfileNone": "(Ingen \u2014 tangentbord-interaktiv fallback)"
   },
   "dialog": {
     "cancel": "Avbryt",

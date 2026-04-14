@@ -759,6 +759,18 @@ body,
 .sidebar-btn-settings {
   font-size: 20px;
   padding: 4px 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+}
+
+.sidebar-btn-settings svg {
+  display: block;
+}
+
+.sidebar-footer {
+  gap: 6px;
 }
 
 /* ── Settings Dialog ──────────────────────────────────────────── */

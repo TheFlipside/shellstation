@@ -24,6 +24,7 @@ export interface Session {
   icon: string;
   sort_order: number;
   highlight_profile_id: string | null;
+  credential_profile_id: string | null;
 }
 
 interface SessionState {
@@ -54,14 +55,8 @@ interface SessionState {
   clearSearch: () => void;
 
   // Bulk operations
-  folderApplyCredentials: (
-    folderId: string,
-    username: string,
-    authMethod: string,
-    credential: string,
-    jumpHostId?: string | null,
-    highlightProfileId?: string | null,
-  ) => Promise<number>;
+  folderApplyCredentialProfile: (folderId: string, profileId: string | null) => Promise<number>;
+  folderBulkEditSessions: (folderId: string, edit: BulkSessionEdit) => Promise<number>;
 
   // Reordering
   reorderFolders: (parentId: string | null, orderedIds: string[]) => Promise<void>;
@@ -86,14 +81,19 @@ export interface CreateSessionParams {
   hostname: string;
   port: number;
   protocol?: string;
-  username: string;
-  authMethod: string;
   tags: string;
   icon: string;
-  jumpHostId?: string;
-  highlightProfileId?: string;
-  password?: string;
-  keyPath?: string;
+  jumpHostId?: string | null;
+  highlightProfileId?: string | null;
+  credentialProfileId?: string | null;
+}
+
+export interface BulkSessionEdit {
+  /** undefined = leave alone; null = clear; string = set */
+  jumpHostId?: string | null;
+  /** undefined = leave alone; null = clear; string = set */
+  highlightProfileId?: string | null;
+  icon?: string;
 }
 
 export interface UpdateSessionParams {
@@ -101,14 +101,11 @@ export interface UpdateSessionParams {
   hostname?: string;
   port?: number;
   protocol?: string;
-  username?: string;
-  authMethod?: string;
   tags?: string;
   icon?: string;
   jumpHostId?: string | null;
   highlightProfileId?: string | null;
-  password?: string;
-  keyPath?: string;
+  credentialProfileId?: string | null;
 }
 
 export const useSessionStore = create<SessionState>((set, get) => ({
@@ -128,7 +125,6 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       invoke<Folder[]>("folder_list"),
       invoke<Session[]>("session_list_all"),
     ]);
-    // Prune expanded folder IDs that no longer exist (e.g. deleted externally)
     const folderIds = new Set(folders.map((f) => f.id));
     const expanded = get().expandedFolderIds;
     let pruned = false;
@@ -174,7 +170,6 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
   deleteFolder: async (id) => {
     await invoke("folder_delete", { id });
-    // Clean up persisted expand state for deleted folder
     set((state) => {
       const next = new Set(state.expandedFolderIds);
       next.delete(id);
@@ -193,14 +188,11 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       hostname: params.hostname,
       port: params.port,
       protocol: params.protocol ?? "ssh",
-      username: params.username,
-      authMethod: params.authMethod,
       tags: params.tags,
       icon: params.icon,
       jumpHostId: params.jumpHostId ?? null,
       highlightProfileId: params.highlightProfileId ?? null,
-      password: params.password ?? null,
-      keyPath: params.keyPath ?? null,
+      credentialProfileId: params.credentialProfileId ?? null,
     });
     await get().loadAll();
   },
@@ -212,15 +204,13 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       hostname: params.hostname ?? null,
       port: params.port ?? null,
       protocol: params.protocol ?? null,
-      username: params.username ?? null,
-      authMethod: params.authMethod ?? null,
       tags: params.tags ?? null,
       icon: params.icon ?? null,
       jumpHostId: params.jumpHostId !== undefined ? params.jumpHostId : null,
       highlightProfileId:
         params.highlightProfileId !== undefined ? params.highlightProfileId : null,
-      password: params.password ?? null,
-      keyPath: params.keyPath ?? null,
+      credentialProfileId:
+        params.credentialProfileId !== undefined ? params.credentialProfileId : null,
     });
     await get().loadAll();
   },
@@ -251,21 +241,23 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
   // ── Bulk operations ─────────────────────────────────────────────────
 
-  folderApplyCredentials: async (
-    folderId,
-    username,
-    authMethod,
-    credential,
-    jumpHostId,
-    highlightProfileId,
-  ) => {
-    const count = await invoke<number>("folder_apply_credentials", {
+  folderApplyCredentialProfile: async (folderId, profileId) => {
+    const count = await invoke<number>("folder_apply_credential_profile", {
       folderId,
-      username,
-      authMethod,
-      credential,
-      jumpHostId: jumpHostId ?? null,
-      highlightProfileId: highlightProfileId ?? null,
+      profileId: profileId ?? null,
+    });
+    await get().loadAll();
+    return count;
+  },
+
+  folderBulkEditSessions: async (folderId, edit) => {
+    const count = await invoke<number>("folder_bulk_edit_sessions", {
+      folderId,
+      setJumpHost: edit.jumpHostId !== undefined,
+      jumpHostId: edit.jumpHostId ?? null,
+      setHighlightProfile: edit.highlightProfileId !== undefined,
+      highlightProfileId: edit.highlightProfileId ?? null,
+      icon: edit.icon ?? null,
     });
     await get().loadAll();
     return count;

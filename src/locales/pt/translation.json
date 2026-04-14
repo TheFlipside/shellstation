@@ -20,7 +20,18 @@
     "clone": "Clonar sess\u00e3o",
     "sortAlphabetically": "Ordenar alfabeticamente",
     "setCredentials": "Definir credenciais\u2026",
-    "editSessions": "Editar sess\u00f5es\u2026"
+    "editSessions": "Editar sess\u00f5es\u2026",
+    "applyCredentialProfile": "Aplicar perfil de credenciais\u2026",
+    "bulkEdit": "Editar sess\u00f5es em massa\u2026"
+  },
+  "bulkEdit": {
+    "title": "Edi\u00e7\u00e3o em massa \u2014 {{name}}",
+    "info": "Aplicar altera\u00e7\u00f5es a todas as sess\u00f5es nesta pasta e subpastas. Apenas os campos marcados ser\u00e3o atualizados. Jump host aplica-se apenas a sess\u00f5es SSH.",
+    "setJumpHost": "Definir jump host",
+    "setHighlightProfile": "Definir perfil de realce",
+    "setIcon": "Definir \u00edcone",
+    "clearValue": "(Limpar)",
+    "success": "{{count}} sess\u00e3o(\u00f5es) atualizada(s)"
   },
   "folder": {
     "deleteWithSessions": "Excluir a pasta e suas {{count}} sess\u00e3o(\u00f5es)?",
@@ -31,11 +42,37 @@
     "namePlaceholder": "Nome da pasta"
   },
   "folderCredential": {
-    "title": "Editar sess\u00f5es \u2014 {{name}}",
-    "info": "Aplica-se a todas as sess\u00f5es SSH nesta pasta e subpastas. Sess\u00f5es Telnet s\u00e3o exclu\u00eddas.",
-    "jumpHostLabel": "Host de salto (opcional)",
-    "highlightProfileLabel": "Perfil de destaque (opcional)",
+    "title": "Aplicar perfil de credenciais \u2014 {{name}}",
+    "info": "Atribui um perfil de credenciais a todas as sess\u00f5es SSH nesta pasta e subpastas. Sess\u00f5es Telnet s\u00e3o exclu\u00eddas.",
+    "profileLabel": "Perfil de credenciais",
+    "profileNone": "(Limpar atribui\u00e7\u00e3o)",
     "success": "{{count}} sess\u00e3o(\u00f5es) atualizada(s)"
+  },
+  "credentialProfiles": {
+    "title": "Gerenciador de credenciais",
+    "info": "Os perfis de credenciais s\u00e3o compartilhados entre sess\u00f5es. Cada perfil armazena um segredo no chaveiro do SO.",
+    "open": "Gerenciador de credenciais",
+    "newProfile": "Novo perfil",
+    "editProfile": "Editar perfil",
+    "nameLabel": "Nome do perfil",
+    "namePlaceholder": "ex: Usu\u00e1rio RADIUS",
+    "authTypeLabel": "Tipo de autentica\u00e7\u00e3o",
+    "authPassword": "Senha",
+    "authKey": "Chave p\u00fablica",
+    "authKeyboardInteractive": "Teclado interativo",
+    "usernameLabel": "Usu\u00e1rio",
+    "usernamePlaceholder": "usu\u00e1rio",
+    "passwordLabel": "Senha",
+    "passwordPlaceholder": "senha",
+    "passwordHint": "Deixe em branco para manter o segredo existente.",
+    "keyPathLabel": "Caminho da chave",
+    "keyPathPlaceholder": "~/.ssh/id_ed25519",
+    "keyPathBrowse": "Procurar\u2026",
+    "noneYet": "Nenhum perfil de credenciais ainda.",
+    "deleteConfirm": "Excluir o perfil \"{{name}}\"? Sess\u00f5es que o usam precisar\u00e3o de um novo perfil.",
+    "nameRequired": "O nome do perfil \u00e9 obrigat\u00f3rio.",
+    "none": "(Nenhum)",
+    "manageLink": "Gerenciar\u2026"
   },
   "session": {
     "deleteConfirm": "Excluir a sess\u00e3o \"{{name}}\"?",
@@ -80,7 +117,9 @@
     "tagsLabel": "Tags",
     "tagsPlaceholder": "prod, eu, web (separadas por v\u00edrgulas)",
     "highlightProfileLabel": "Perfil de destaque",
-    "highlightProfileNone": "Nenhum"
+    "highlightProfileNone": "Nenhum",
+    "credentialProfileLabel": "Perfil de credenciais",
+    "credentialProfileNone": "(Nenhum \u2014 fallback teclado interativo)"
   },
   "dialog": {
     "cancel": "Cancelar",

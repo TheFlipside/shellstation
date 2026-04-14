@@ -8,11 +8,21 @@ use async_trait::async_trait;
 use uuid::Uuid;
 
 use models::{
-    Credential, DataFingerprint, Folder, HighlightProfile, NewFolder, NewHighlightProfile,
-    NewSession, Session, UpdateHighlightProfile, UpdateSession,
+    Credential, CredentialProfile, DataFingerprint, Folder, HighlightProfile, NewCredentialProfile,
+    NewFolder, NewHighlightProfile, NewSession, Session, UpdateCredentialProfile,
+    UpdateHighlightProfile, UpdateSession,
 };
 
 pub type DbResult<T> = Result<T, String>;
+
+/// Fields that can be updated in a bulk edit. `None` means "leave alone"; for
+/// nullable columns, `Some(None)` means "clear to NULL".
+#[derive(Debug, Default)]
+pub struct BulkSessionEdit {
+    pub jump_host_id: Option<Option<Uuid>>,
+    pub highlight_profile_id: Option<Option<Uuid>>,
+    pub icon: Option<String>,
+}
 
 /// Tauri managed state wrapping the database provider (folders + sessions).
 pub struct DbState(pub Arc<dyn DatabaseProvider>);
@@ -62,12 +72,46 @@ pub trait DatabaseProvider: Send + Sync {
     async fn sort_sessions_alphabetically(&self, folder_id: Uuid) -> DbResult<()>;
 
     // ── Credentials (metadata — secrets live in OS keychain) ─────────────
+    //
+    // Legacy per-session credentials. These methods remain only so that the
+    // one-shot `migrate_legacy_credentials` routine can drain the old table
+    // into `credential_profiles`. Do not call from new code.
 
     async fn upsert_credential(&self, cred: Credential) -> DbResult<()>;
-    async fn get_credential(&self, session_id: Uuid) -> DbResult<Option<Credential>>;
     #[allow(dead_code)]
+    async fn get_credential(&self, session_id: Uuid) -> DbResult<Option<Credential>>;
     async fn delete_credential(&self, session_id: Uuid) -> DbResult<()>;
     async fn list_all_credentials(&self) -> DbResult<Vec<Credential>>;
+
+    // ── Credential Profiles ──────────────────────────────────────────────
+
+    async fn create_credential_profile(
+        &self,
+        profile: NewCredentialProfile,
+    ) -> DbResult<CredentialProfile>;
+    async fn list_credential_profiles(&self) -> DbResult<Vec<CredentialProfile>>;
+    async fn get_credential_profile(&self, id: Uuid) -> DbResult<Option<CredentialProfile>>;
+    async fn update_credential_profile(
+        &self,
+        id: Uuid,
+        update: UpdateCredentialProfile,
+    ) -> DbResult<()>;
+    async fn delete_credential_profile(&self, id: Uuid) -> DbResult<()>;
+
+    /// Assign `profile_id` to every session in `folder_id` and its descendants.
+    /// Telnet sessions are skipped. Returns the number of sessions updated.
+    async fn bulk_set_session_credential_profile(
+        &self,
+        folder_id: Uuid,
+        profile_id: Option<Uuid>,
+    ) -> DbResult<u32>;
+
+    /// Bulk-update optional session fields across `folder_id` and all its
+    /// descendants. Each field is set only when its outer `Option` is `Some`;
+    /// the inner `Option` distinguishes "clear to NULL" from "leave alone"
+    /// for nullable columns. `jump_host_id` is skipped for telnet sessions.
+    /// Returns the number of sessions touched.
+    async fn bulk_edit_sessions(&self, folder_id: Uuid, edit: BulkSessionEdit) -> DbResult<u32>;
 
     // ── Highlight Profiles ────────────────────────────────────────────────
 
