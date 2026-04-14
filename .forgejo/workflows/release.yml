@@ -37,9 +37,17 @@ jobs:
 
       - name: Collect artifacts
         run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
           mkdir -p dist-release
-          cp src-tauri/target/release/bundle/deb/*.deb dist-release/ || true
-          cp src-tauri/target/release/bundle/appimage/*.AppImage dist-release/ || true
+          for f in src-tauri/target/release/bundle/deb/*.deb; do
+            [ -f "$f" ] || continue
+            cp "$f" "dist-release/ShellStation-linux-amd64-${version}.deb"
+          done
+          for f in src-tauri/target/release/bundle/appimage/*.AppImage; do
+            [ -f "$f" ] || continue
+            cp "$f" "dist-release/ShellStation-linux-amd64-${version}.AppImage"
+          done
           ls -la dist-release/
 
       - name: Upload artifacts
@@ -82,9 +90,29 @@ jobs:
       - name: Collect artifacts
         shell: powershell
         run: |
+          $ErrorActionPreference = "Stop"
+          $version = $env:GITHUB_REF_NAME -replace '^v', ''
           New-Item -ItemType Directory -Force -Path dist-release | Out-Null
-          Copy-Item src-tauri/target/release/bundle/msi/*.msi dist-release/ -ErrorAction SilentlyContinue
-          Copy-Item src-tauri/target/release/bundle/nsis/*.exe dist-release/ -ErrorAction SilentlyContinue
+
+          $msi = Get-ChildItem src-tauri/target/release/bundle/msi/*.msi -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($msi) {
+            Copy-Item $msi.FullName "dist-release/ShellStation-windows-x64-$version.msi"
+          }
+
+          $exe = Get-ChildItem src-tauri/target/release/bundle/nsis/*.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($exe) {
+            Copy-Item $exe.FullName "dist-release/ShellStation-windows-x64-$version-setup.exe"
+          }
+
+          $raw = "src-tauri/target/release/shellstation.exe"
+          if (Test-Path $raw) {
+            $stage = New-Item -ItemType Directory -Force -Path "dist-release/zip-stage"
+            Copy-Item $raw (Join-Path $stage.FullName "ShellStation.exe")
+            Compress-Archive -Path (Join-Path $stage.FullName "ShellStation.exe") `
+              -DestinationPath "dist-release/ShellStation-windows-x64-$version.zip" -Force
+            Remove-Item -Recurse -Force $stage.FullName
+          }
+
           Get-ChildItem dist-release
 
       - name: Upload artifacts
