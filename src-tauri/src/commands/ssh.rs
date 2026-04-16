@@ -72,6 +72,7 @@ pub async fn ssh_connect(
             keepalive_interval_secs: keepalive_interval.unwrap_or(15),
             keepalive_max: keepalive_max.unwrap_or(3) as usize,
             logger,
+            kbd_interactive_senders: std::sync::Arc::clone(&state.kbd_interactive_senders),
         },
         &state.host_verify_senders,
     )
@@ -148,6 +149,28 @@ pub async fn ssh_disconnect(
         mgr.close_log(&id);
     }
     Ok(())
+}
+
+/// Respond to a pending keyboard-interactive authentication prompt.
+///
+/// Same deadlock-avoidance pattern as `ssh_host_verify_response`: uses
+/// `std::sync::Mutex` instead of the manager's tokio::Mutex.
+#[tauri::command]
+pub async fn ssh_kbd_interactive_response(
+    state: State<'_, SshState>,
+    id: String,
+    responses: Vec<String>,
+) -> Result<(), String> {
+    let mut senders = state
+        .kbd_interactive_senders
+        .lock()
+        .map_err(|e| format!("Kbd-interactive sender lock poisoned: {e}"))?;
+    let sender = senders
+        .remove(&id)
+        .ok_or_else(|| format!("No pending kbd-interactive prompt for session {id}"))?;
+    sender
+        .send(responses)
+        .map_err(|_| "Kbd-interactive channel closed".to_string())
 }
 
 /// Respond to a pending host key verification request.

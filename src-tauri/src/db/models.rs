@@ -46,6 +46,7 @@ pub struct NewSession {
     pub hostname: String,
     pub port: i32,
     pub protocol: String,
+    pub username: String,
     pub auth_method: String,
     pub jump_host_id: Option<Uuid>,
     pub tags: String,
@@ -59,6 +60,7 @@ pub struct NewSession {
 
 #[derive(Debug, Default, Deserialize)]
 pub struct UpdateSession {
+    pub username: Option<String>,
     pub name: Option<String>,
     pub hostname: Option<String>,
     pub port: Option<i32>,

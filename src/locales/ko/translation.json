@@ -121,7 +121,8 @@
     "highlightProfileLabel": "하이라이트 프로필",
     "highlightProfileNone": "없음",
     "credentialProfileLabel": "자격 증명 프로필",
-    "credentialProfileNone": "(없음 — 키보드 대화형 폴백)"
+    "credentialProfileNone": "(없음 — 키보드 대화형 폴백)",
+    "usernameHintKbd": "자격 증명 프로필이 지정되지 않은 경우 키보드 대화형 인증에 필요합니다."
   },
   "dialog": {
     "cancel": "취소",
@@ -329,6 +330,11 @@
     "importSecurecrt": "SecureCRT 하이라이트 가져오기",
     "importProfile": "프로필 가져오기",
     "importSuccess": "{{count}}개의 프로필과 {{rules}}개의 규칙이 가져와졌습니다."
+  },
+  "kbdInteractive": {
+    "title": "키보드 대화형 인증",
+    "submit": "제출",
+    "cancel": "취소"
   },
   "common": {
     "edit": "편집",

@@ -497,8 +497,7 @@ pub fn run() {
                     .publisher
                     .clone()
                     .map(|p| vec![p]),
-                icon: tauri::image::Image::from_bytes(include_bytes!("../icons/32x32.png"))
-                    .ok(),
+                icon: tauri::image::Image::from_bytes(include_bytes!("../icons/32x32.png")).ok(),
                 ..Default::default()
             };
 
@@ -739,6 +738,7 @@ pub fn run() {
             commands::ssh_resize,
             commands::ssh_disconnect,
             commands::ssh_host_verify_response,
+            commands::ssh_kbd_interactive_response,
             // Telnet
             commands::telnet_connect,
             commands::telnet_write,

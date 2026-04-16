@@ -335,7 +335,11 @@ fn build_session(
         hostname: props.hostname.clone(),
         port,
         protocol: protocol.to_string(),
-        username: props.username.clone(),
+        username: if props.username.is_empty() {
+            None
+        } else {
+            Some(props.username.clone())
+        },
         jump_host_name,
     })
 }

@@ -121,7 +121,8 @@
     "highlightProfileLabel": "Markeringsprofil",
     "highlightProfileNone": "Ingen",
     "credentialProfileLabel": "Inloggningsprofil",
-    "credentialProfileNone": "(Ingen — tangentbord-interaktiv fallback)"
+    "credentialProfileNone": "(Ingen — tangentbord-interaktiv fallback)",
+    "usernameHintKbd": "Krävs för keyboard-interactive-autentisering när ingen autentiseringsprofil är tilldelad."
   },
   "dialog": {
     "cancel": "Avbryt",
@@ -329,6 +330,11 @@
     "importSecurecrt": "Importera SecureCRT-markeringar",
     "importProfile": "Importera profil",
     "importSuccess": "{{count}} profil(er) med {{rules}} regel/regler importerade."
+  },
+  "kbdInteractive": {
+    "title": "Keyboard-Interactive-autentisering",
+    "submit": "Skicka",
+    "cancel": "Avbryt"
   },
   "common": {
     "edit": "Redigera",

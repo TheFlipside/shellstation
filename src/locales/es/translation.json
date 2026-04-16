@@ -121,7 +121,8 @@
     "highlightProfileLabel": "Perfil de resaltado",
     "highlightProfileNone": "Ninguno",
     "credentialProfileLabel": "Perfil de credenciales",
-    "credentialProfileNone": "(Ninguno — respaldo teclado interactivo)"
+    "credentialProfileNone": "(Ninguno — respaldo teclado interactivo)",
+    "usernameHintKbd": "Necesario para la autenticación keyboard-interactive cuando no se asigna un perfil de credenciales."
   },
   "dialog": {
     "cancel": "Cancelar",
@@ -329,6 +330,11 @@
     "importSecurecrt": "Importar resaltados de SecureCRT",
     "importProfile": "Importar perfil",
     "importSuccess": "{{count}} perfil(es) con {{rules}} regla(s) importado(s)."
+  },
+  "kbdInteractive": {
+    "title": "Autenticación Keyboard-Interactive",
+    "submit": "Enviar",
+    "cancel": "Cancelar"
   },
   "common": {
     "edit": "Editar",

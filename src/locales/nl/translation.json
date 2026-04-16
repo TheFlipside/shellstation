@@ -121,7 +121,8 @@
     "highlightProfileLabel": "Markeringsprofiel",
     "highlightProfileNone": "Geen",
     "credentialProfileLabel": "Inloggegevensprofiel",
-    "credentialProfileNone": "(Geen — toetsenbord-interactieve fallback)"
+    "credentialProfileNone": "(Geen — toetsenbord-interactieve fallback)",
+    "usernameHintKbd": "Vereist voor keyboard-interactive authenticatie wanneer geen referentieprofiel is toegewezen."
   },
   "dialog": {
     "cancel": "Annuleren",
@@ -329,6 +330,11 @@
     "importSecurecrt": "SecureCRT-markeringen importeren",
     "importProfile": "Profiel importeren",
     "importSuccess": "{{count}} profiel(en) met {{rules}} regel(s) geïmporteerd."
+  },
+  "kbdInteractive": {
+    "title": "Keyboard-Interactive Authenticatie",
+    "submit": "Verzenden",
+    "cancel": "Annuleren"
   },
   "common": {
     "edit": "Bewerken",

@@ -82,6 +82,7 @@ export interface CreateSessionParams {
   hostname: string;
   port: number;
   protocol?: string;
+  username?: string;
   tags: string;
   icon: string;
   jumpHostId?: string | null;
@@ -103,6 +104,7 @@ export interface UpdateSessionParams {
   hostname?: string;
   port?: number;
   protocol?: string;
+  username?: string;
   tags?: string;
   icon?: string;
   jumpHostId?: string | null;
@@ -191,6 +193,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       hostname: params.hostname,
       port: params.port,
       protocol: params.protocol ?? "ssh",
+      username: params.username ?? null,
       tags: params.tags,
       icon: params.icon,
       jumpHostId: params.jumpHostId ?? null,
@@ -208,6 +211,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       hostname: params.hostname ?? null,
       port: params.port ?? null,
       protocol: params.protocol ?? null,
+      username: params.username ?? null,
       tags: params.tags ?? null,
       icon: params.icon ?? null,
       jumpHostId: params.jumpHostId !== undefined ? params.jumpHostId : null,

@@ -121,7 +121,8 @@
     "highlightProfileLabel": "Profil podświetlania",
     "highlightProfileNone": "Brak",
     "credentialProfileLabel": "Profil poświadczeń",
-    "credentialProfileNone": "(Brak — powrót do klawiatury interaktywnej)"
+    "credentialProfileNone": "(Brak — powrót do klawiatury interaktywnej)",
+    "usernameHintKbd": "Wymagane do uwierzytelniania keyboard-interactive, gdy nie przypisano profilu poświadczeń."
   },
   "dialog": {
     "cancel": "Anuluj",
@@ -329,6 +330,11 @@
     "importSecurecrt": "Importuj podświetlanie SecureCRT",
     "importProfile": "Importuj profil",
     "importSuccess": "Zaimportowano {{count}} profil(ów) z {{rules}} regułą(-ami)."
+  },
+  "kbdInteractive": {
+    "title": "Uwierzytelnianie Keyboard-Interactive",
+    "submit": "Wyślij",
+    "cancel": "Anuluj"
   },
   "common": {
     "edit": "Edytuj",

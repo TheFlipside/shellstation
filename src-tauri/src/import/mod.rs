@@ -66,9 +66,7 @@ pub struct ImportedSession {
     pub port: i32,
     /// `"ssh"` or `"telnet"`.
     pub protocol: String,
-    /// Parsed but not yet used — credentials are configured per-session in the UI.
-    #[allow(dead_code)]
-    pub username: String,
+    pub username: Option<String>,
     /// Jump host reference by name (resolved post-import).
     pub jump_host_name: Option<String>,
 }
@@ -259,6 +257,7 @@ async fn persist_import(
                 hostname: safe_hostname,
                 port: safe_port,
                 protocol: session.protocol.clone(),
+                username: session.username.clone().unwrap_or_default(),
                 auth_method: "password".to_string(),
                 jump_host_id: None,
                 tags: String::new(),

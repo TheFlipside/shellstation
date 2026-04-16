@@ -567,6 +567,7 @@ pub async fn db_import(
                 hostname: session.hostname.clone(),
                 port: session.port,
                 protocol: session.protocol.clone(),
+                username: session.username.clone(),
                 auth_method: session.auth_method.clone(),
                 jump_host_id: None,
                 tags: session.tags.clone(),

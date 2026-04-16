@@ -121,7 +121,8 @@
     "highlightProfileLabel": "Профиль подсветки",
     "highlightProfileNone": "Нет",
     "credentialProfileLabel": "Профиль учётных данных",
-    "credentialProfileNone": "(Нет — запасной вариант: интерактивная клавиатура)"
+    "credentialProfileNone": "(Нет — запасной вариант: интерактивная клавиатура)",
+    "usernameHintKbd": "Требуется для аутентификации keyboard-interactive, если профиль учётных данных не назначен."
   },
   "dialog": {
     "cancel": "Отмена",
@@ -329,6 +330,11 @@
     "importSecurecrt": "Импорт подсветки SecureCRT",
     "importProfile": "Импорт профиля",
     "importSuccess": "Импортировано {{count}} профиля(ей) с {{rules}} правилом(ами)."
+  },
+  "kbdInteractive": {
+    "title": "Аутентификация Keyboard-Interactive",
+    "submit": "Отправить",
+    "cancel": "Отмена"
   },
   "common": {
     "edit": "Редактировать",

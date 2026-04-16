@@ -121,7 +121,8 @@
     "highlightProfileLabel": "Highlight Profile",
     "highlightProfileNone": "None",
     "credentialProfileLabel": "Credential Profile",
-    "credentialProfileNone": "(None — keyboard-interactive fallback)"
+    "credentialProfileNone": "(None — keyboard-interactive fallback)",
+    "usernameHintKbd": "Required for keyboard-interactive authentication when no credential profile is assigned."
   },
   "dialog": {
     "cancel": "Cancel",
@@ -329,6 +330,11 @@
     "importSecurecrt": "Import SecureCRT Highlights",
     "importProfile": "Import Profile",
     "importSuccess": "Imported {{count}} profile(s) with {{rules}} rule(s)."
+  },
+  "kbdInteractive": {
+    "title": "Keyboard-Interactive Authentication",
+    "submit": "Submit",
+    "cancel": "Cancel"
   },
   "common": {
     "edit": "Edit",

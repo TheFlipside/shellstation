@@ -121,7 +121,8 @@
     "highlightProfileLabel": "Profil de coloration",
     "highlightProfileNone": "Aucun",
     "credentialProfileLabel": "Profil d'identifiants",
-    "credentialProfileNone": "(Aucun — repli clavier interactif)"
+    "credentialProfileNone": "(Aucun — repli clavier interactif)",
+    "usernameHintKbd": "Requis pour l'authentification keyboard-interactive lorsqu'aucun profil d'identifiants n'est attribué."
   },
   "dialog": {
     "cancel": "Annuler",
@@ -329,6 +330,11 @@
     "importSecurecrt": "Importer les colorations SecureCRT",
     "importProfile": "Importer le profil",
     "importSuccess": "{{count}} profil(s) avec {{rules}} règle(s) importé(s)."
+  },
+  "kbdInteractive": {
+    "title": "Authentification Keyboard-Interactive",
+    "submit": "Envoyer",
+    "cancel": "Annuler"
   },
   "common": {
     "edit": "Modifier",

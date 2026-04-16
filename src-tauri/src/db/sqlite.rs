@@ -220,7 +220,7 @@ impl DatabaseProvider for SqliteProvider {
         .bind(&session.hostname)
         .bind(session.port)
         .bind(&session.protocol)
-        .bind("")
+        .bind(&session.username)
         .bind(&session.auth_method)
         .bind(&jump_str)
         .bind(&session.tags)
@@ -240,7 +240,7 @@ impl DatabaseProvider for SqliteProvider {
             hostname: session.hostname,
             port: session.port,
             protocol: session.protocol,
-            username: String::new(),
+            username: session.username,
             auth_method: session.auth_method,
             jump_host_id: session.jump_host_id,
             tags: session.tags,
@@ -307,6 +307,10 @@ impl DatabaseProvider for SqliteProvider {
         if let Some(ref protocol) = update.protocol {
             sets.push("protocol = ?");
             values.push(BindVal::Text(protocol.clone()));
+        }
+        if let Some(ref username) = update.username {
+            sets.push("username = ?");
+            values.push(BindVal::Text(username.clone()));
         }
         if let Some(ref auth_method) = update.auth_method {
             sets.push("auth_method = ?");

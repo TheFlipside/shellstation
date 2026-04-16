@@ -121,7 +121,8 @@
     "highlightProfileLabel": "Profilo di evidenziazione",
     "highlightProfileNone": "Nessuno",
     "credentialProfileLabel": "Profilo credenziali",
-    "credentialProfileNone": "(Nessuno — fallback tastiera interattiva)"
+    "credentialProfileNone": "(Nessuno — fallback tastiera interattiva)",
+    "usernameHintKbd": "Necessario per l'autenticazione keyboard-interactive quando non è assegnato un profilo credenziali."
   },
   "dialog": {
     "cancel": "Annulla",
@@ -329,6 +330,11 @@
     "importSecurecrt": "Importa evidenziazioni SecureCRT",
     "importProfile": "Importa profilo",
     "importSuccess": "{{count}} profilo/i con {{rules}} regola/e importato/i."
+  },
+  "kbdInteractive": {
+    "title": "Autenticazione Keyboard-Interactive",
+    "submit": "Invia",
+    "cancel": "Annulla"
   },
   "common": {
     "edit": "Modifica",

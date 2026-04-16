@@ -121,7 +121,8 @@
     "highlightProfileLabel": "ハイライトプロファイル",
     "highlightProfileNone": "なし",
     "credentialProfileLabel": "認証プロファイル",
-    "credentialProfileNone": "(なし — キーボードインタラクティブにフォールバック)"
+    "credentialProfileNone": "(なし — キーボードインタラクティブにフォールバック)",
+    "usernameHintKbd": "資格情報プロファイルが未割り当ての場合、キーボードインタラクティブ認証に必要です。"
   },
   "dialog": {
     "cancel": "キャンセル",
@@ -329,6 +330,11 @@
     "importSecurecrt": "SecureCRTのハイライトをインポート",
     "importProfile": "プロファイルをインポート",
     "importSuccess": "{{count}}件のプロファイルと{{rules}}件のルールをインポートしました。"
+  },
+  "kbdInteractive": {
+    "title": "キーボードインタラクティブ認証",
+    "submit": "送信",
+    "cancel": "キャンセル"
   },
   "common": {
     "edit": "編集",

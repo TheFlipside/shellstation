@@ -4,13 +4,14 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use base64::Engine;
+use russh::client::KeyboardInteractiveAuthResponse;
 use russh::keys::{PrivateKeyWithHashAlg, PublicKey};
 use russh::{client, ChannelMsg, Disconnect};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 use tokio::sync::{mpsc, oneshot, Mutex};
 use tokio::task::JoinHandle;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info, trace, warn};
 use zeroize::Zeroizing;
 
 /// Pending TOFU verification senders, stored separately from `SshManager`
@@ -18,6 +19,11 @@ use zeroize::Zeroizing;
 /// without acquiring the main `SshManager` lock (which is held by the
 /// `connect()` call that is waiting for the verification).
 type HostVerifySenders = Arc<std::sync::Mutex<HashMap<String, oneshot::Sender<bool>>>>;
+
+/// Pending keyboard-interactive auth senders. Same pattern as host verify:
+/// uses `std::sync::Mutex` to avoid deadlock with the manager's tokio Mutex.
+pub type KbdInteractiveSenders =
+    Arc<std::sync::Mutex<HashMap<String, oneshot::Sender<Vec<String>>>>>;
 
 /// Payload emitted to the frontend when the server key needs user verification.
 #[derive(Clone, Serialize)]
@@ -28,6 +34,23 @@ pub struct HostVerifyPayload {
     pub port: u16,
     pub fingerprint: String,
     pub key_type: String,
+}
+
+/// Payload emitted to the frontend for keyboard-interactive authentication.
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KbdInteractivePayload {
+    pub session_id: String,
+    pub name: String,
+    pub instructions: String,
+    pub prompts: Vec<KbdInteractivePrompt>,
+}
+
+/// A single prompt within a keyboard-interactive authentication request.
+#[derive(Clone, Serialize)]
+pub struct KbdInteractivePrompt {
+    pub prompt: String,
+    pub echo: bool,
 }
 
 /// Resize request sent to the reader task which owns the channel.
@@ -80,6 +103,7 @@ pub struct SshConnectParams {
     /// negotiate with old network gear that doesn't support modern algos.
     pub legacy_algorithms: bool,
     pub logger: Option<std::sync::Arc<std::sync::Mutex<crate::session_logger::SessionLogManager>>>,
+    pub kbd_interactive_senders: KbdInteractiveSenders,
 }
 
 /// Manages all active SSH sessions.
@@ -178,6 +202,7 @@ pub async fn establish_ssh_connection(
         keepalive_interval_secs,
         keepalive_max,
         logger,
+        kbd_interactive_senders,
     } = params;
 
     info!(session_id = %id, host = %host, port = %port, hops = jump_hops.len(), "Connecting via SSH");
@@ -194,20 +219,32 @@ pub async fn establish_ssh_connection(
         legacy_algorithms,
         &app_handle,
         verify_senders,
+        &kbd_interactive_senders,
     )
     .await?;
 
     // Authenticate.
-    authenticate_handle(&mut handle, &username, &auth_method, &auth_credential).await?;
+    authenticate_handle(
+        &mut handle,
+        &username,
+        &auth_method,
+        &auth_credential,
+        &id,
+        &app_handle,
+        &kbd_interactive_senders,
+    )
+    .await?;
 
     info!(session_id = %id, "SSH authenticated");
 
     // Open a session channel with PTY.
+    debug!(session_id = %id, "Opening session channel");
     let channel = handle
         .channel_open_session()
         .await
         .map_err(|e| format!("Failed to open channel: {e}"))?;
 
+    debug!(session_id = %id, term = "xterm-256color", cols, rows, "Requesting PTY");
     channel
         .request_pty(
             false,
@@ -221,6 +258,7 @@ pub async fn establish_ssh_connection(
         .await
         .map_err(|e| format!("Failed to request PTY: {e}"))?;
 
+    debug!(session_id = %id, "Requesting shell");
     channel
         .request_shell(false)
         .await
@@ -308,6 +346,8 @@ pub struct SshState {
     /// verification without acquiring the main manager tokio::Mutex (which is
     /// held by the `connect()` call waiting for the verification result).
     pub host_verify_senders: HostVerifySenders,
+    /// Same pattern for keyboard-interactive auth prompts.
+    pub kbd_interactive_senders: KbdInteractiveSenders,
 }
 
 impl Default for SshState {
@@ -315,6 +355,7 @@ impl Default for SshState {
         Self {
             manager: Arc::new(Mutex::new(SshManager::default())),
             host_verify_senders: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            kbd_interactive_senders: Arc::new(std::sync::Mutex::new(HashMap::new())),
         }
     }
 }
@@ -719,6 +760,7 @@ async fn connect_with_hops(
     legacy_algorithms: bool,
     app_handle: &AppHandle,
     verify_senders: &HostVerifySenders,
+    kbd_interactive_senders: &KbdInteractiveSenders,
 ) -> Result<(client::Handle<SshHandler>, Vec<client::Handle<SshHandler>>), String> {
     // Validate all targets against restricted IP ranges (SSRF prevention).
     if restrict_private_ips {
@@ -730,6 +772,12 @@ async fn connect_with_hops(
 
     if jump_hops.is_empty() {
         // Direct connection — no jump hosts.
+        debug!(
+            session_id,
+            host = target_host,
+            port = target_port,
+            "Direct connection (no jump hosts)"
+        );
         let config = ssh_config(keepalive_interval_secs, keepalive_max, legacy_algorithms);
         let (verify_tx, verify_rx) = oneshot::channel::<bool>();
         verify_senders
@@ -745,6 +793,13 @@ async fn connect_with_hops(
             verify_rx: Arc::new(Mutex::new(Some(verify_rx))),
         };
 
+        trace!(
+            session_id,
+            host = target_host,
+            port = target_port,
+            timeout_secs = connect_timeout_secs,
+            "TCP connect attempt"
+        );
         let handle = tokio::time::timeout(
             std::time::Duration::from_secs(connect_timeout_secs),
             client::connect(config, (target_host, target_port), handler),
@@ -758,10 +813,21 @@ async fn connect_with_hops(
             sanitize_ssh_error(&e.to_string())
         })?;
 
+        debug!(
+            session_id,
+            host = target_host,
+            port = target_port,
+            "TCP connected, handshake complete"
+        );
         return Ok((handle, Vec::new()));
     }
 
     // Jump host chain: connect to each hop in order, then tunnel to target.
+    debug!(
+        session_id,
+        hops = jump_hops.len(),
+        "Starting jump host chain"
+    );
     let mut bastion_handles: Vec<client::Handle<SshHandler>> = Vec::new();
 
     // Connect to the first hop directly.
@@ -782,6 +848,7 @@ async fn connect_with_hops(
         verify_rx: Arc::new(Mutex::new(Some(verify_rx))),
     };
 
+    trace!(session_id, hop = 0, host = %first_hop.host, port = first_hop.port, timeout_secs = connect_timeout_secs, "TCP connect attempt to first hop");
     let mut current_handle = tokio::time::timeout(
         std::time::Duration::from_secs(connect_timeout_secs),
         client::connect(config, (first_hop.host.as_str(), first_hop.port), handler),
@@ -800,20 +867,28 @@ async fn connect_with_hops(
             sanitize_ssh_error(&e.to_string())
         )
     })?;
+    debug!(session_id, hop = 0, host = %first_hop.host, "First hop connected");
 
     // Authenticate the first hop.
-    authenticate_handle(
-        &mut current_handle,
-        &first_hop.username,
-        &first_hop.auth_method,
-        &first_hop.auth_credential,
-    )
-    .await?;
+    {
+        let hop_id = format!("{session_id}-hop0");
+        authenticate_handle(
+            &mut current_handle,
+            &first_hop.username,
+            &first_hop.auth_method,
+            &first_hop.auth_credential,
+            &hop_id,
+            app_handle,
+            kbd_interactive_senders,
+        )
+        .await?;
+    }
 
     info!(hop = 0, host = %first_hop.host, "Jump host authenticated");
 
     // Chain through remaining hops (if any).
     for (i, hop) in jump_hops.iter().enumerate().skip(1) {
+        debug!(session_id, hop = i, host = %hop.host, port = hop.port, "Opening tunnel to next hop");
         let tunnel = current_handle
             .channel_open_direct_tcpip(&hop.host, hop.port.into(), "127.0.0.1", 0)
             .await
@@ -829,7 +904,7 @@ async fn connect_with_hops(
             .insert(hop_id.clone(), verify_tx);
 
         let handler = SshHandler {
-            session_id: hop_id,
+            session_id: hop_id.clone(),
             host: hop.host.clone(),
             port: hop.port,
             app_handle: app_handle.clone(),
@@ -853,6 +928,9 @@ async fn connect_with_hops(
             &hop.username,
             &hop.auth_method,
             &hop.auth_credential,
+            &hop_id,
+            app_handle,
+            kbd_interactive_senders,
         )
         .await?;
 
@@ -860,6 +938,12 @@ async fn connect_with_hops(
     }
 
     // Finally, tunnel from the last hop to the target.
+    debug!(
+        session_id,
+        host = target_host,
+        port = target_port,
+        "Opening tunnel to final target"
+    );
     let tunnel = current_handle
         .channel_open_direct_tcpip(target_host, target_port.into(), "127.0.0.1", 0)
         .await
@@ -890,24 +974,40 @@ async fn connect_with_hops(
             sanitize_ssh_error(&e.to_string())
         })?;
 
+    debug!(
+        session_id,
+        host = target_host,
+        port = target_port,
+        "Target connected through tunnel"
+    );
     Ok((target_handle, bastion_handles))
 }
 
 /// Authenticate an SSH handle using the specified method.
+#[allow(clippy::too_many_arguments)]
 async fn authenticate_handle(
     handle: &mut client::Handle<SshHandler>,
     username: &str,
     auth_method: &str,
     auth_credential: &str,
+    session_id: &str,
+    app_handle: &AppHandle,
+    kbd_interactive_senders: &KbdInteractiveSenders,
 ) -> Result<(), String> {
+    debug!(session_id = %session_id, auth_method = %auth_method, "Authenticating SSH session");
+
     let auth_ok = match auth_method {
-        "password" => handle
-            .authenticate_password(username, auth_credential)
-            .await
-            .map(|res| res.success())
-            .map_err(|e| format!("Auth failed: {e}"))?,
+        "password" => {
+            debug!(session_id = %session_id, user = %username, "Attempting password authentication");
+            handle
+                .authenticate_password(username, auth_credential)
+                .await
+                .map(|res| res.success())
+                .map_err(|e| format!("Auth failed: {e}"))?
+        }
         "publickey" => {
             let (key_path, passphrase) = parse_key_credential(auth_credential)?;
+            debug!(session_id = %session_id, user = %username, key = %key_path, has_passphrase = passphrase.is_some(), "Attempting public key authentication");
             let key_pair =
                 russh::keys::load_secret_key(&key_path, passphrase.as_ref().map(|s| s.as_str()))
                     .map_err(|e| format!("Failed to load SSH key: {e}"))?;
@@ -924,6 +1024,16 @@ async fn authenticate_handle(
                 .map(|res| res.success())
                 .map_err(|e| format!("Auth failed: {e}"))?
         }
+        "keyboard-interactive" => {
+            return authenticate_keyboard_interactive(
+                handle,
+                username,
+                session_id,
+                app_handle,
+                kbd_interactive_senders,
+            )
+            .await;
+        }
         other => return Err(format!("Unsupported auth method: {other}")),
     };
 
@@ -932,6 +1042,111 @@ async fn authenticate_handle(
     }
 
     Ok(())
+}
+
+/// Keyboard-interactive authentication loop.
+///
+/// Emits `ssh-kbd-interactive` events with prompt details to the frontend,
+/// awaits user responses via oneshot channels, and relays them back to the
+/// server. Supports multiple prompt rounds.
+async fn authenticate_keyboard_interactive(
+    handle: &mut client::Handle<SshHandler>,
+    username: &str,
+    session_id: &str,
+    app_handle: &AppHandle,
+    kbd_interactive_senders: &KbdInteractiveSenders,
+) -> Result<(), String> {
+    debug!(session_id = %session_id, "Starting keyboard-interactive authentication");
+
+    let mut response = handle
+        .authenticate_keyboard_interactive_start(username, None::<String>)
+        .await
+        .map_err(|e| {
+            debug!(session_id = %session_id, error = %e, "keyboard-interactive start failed");
+            format!("Keyboard-interactive auth failed: {e}")
+        })?;
+
+    debug!(session_id = %session_id, response = ?std::mem::discriminant(&response), "keyboard-interactive initial response");
+
+    loop {
+        match response {
+            KeyboardInteractiveAuthResponse::Success => {
+                debug!(session_id = %session_id, "Keyboard-interactive authentication succeeded");
+                return Ok(());
+            }
+            KeyboardInteractiveAuthResponse::Failure { .. } => {
+                debug!(session_id = %session_id, "Server rejected keyboard-interactive auth (Failure response)");
+                return Err("Server rejected keyboard-interactive authentication. \
+                     The server may not support this method — assign a \
+                     credential profile with password or key authentication instead."
+                    .to_string());
+            }
+            KeyboardInteractiveAuthResponse::InfoRequest {
+                name,
+                instructions,
+                prompts,
+            } => {
+                debug!(
+                    session_id = %session_id,
+                    prompt_count = prompts.len(),
+                    "Keyboard-interactive prompt round received"
+                );
+
+                let payload = KbdInteractivePayload {
+                    session_id: session_id.to_string(),
+                    name: name.clone(),
+                    instructions: instructions.clone(),
+                    prompts: prompts
+                        .iter()
+                        .map(|p| KbdInteractivePrompt {
+                            prompt: p.prompt.clone(),
+                            echo: p.echo,
+                        })
+                        .collect(),
+                };
+
+                // Create a oneshot channel for the frontend response.
+                let (tx, rx) = oneshot::channel::<Vec<String>>();
+                kbd_interactive_senders
+                    .lock()
+                    .map_err(|e| format!("Kbd-interactive sender lock poisoned: {e}"))?
+                    .insert(session_id.to_string(), tx);
+
+                // Emit event to frontend.
+                app_handle
+                    .emit("ssh-kbd-interactive", &payload)
+                    .map_err(|e| format!("Failed to emit kbd-interactive event: {e}"))?;
+
+                // Await user input with 60-second timeout.
+                let responses = tokio::time::timeout(std::time::Duration::from_secs(60), rx)
+                    .await
+                    .map_err(|_| {
+                        // Clean up the sender on timeout.
+                        if let Ok(mut senders) = kbd_interactive_senders.lock() {
+                            senders.remove(session_id);
+                        }
+                        "Keyboard-interactive authentication timed out (60s)".to_string()
+                    })?
+                    .map_err(|_| "Keyboard-interactive prompt cancelled".to_string())?;
+
+                // Empty responses = user cancelled.
+                if responses.is_empty() && !prompts.is_empty() {
+                    return Err("Keyboard-interactive authentication cancelled".to_string());
+                }
+
+                debug!(
+                    session_id = %session_id,
+                    response_count = responses.len(),
+                    "Sending keyboard-interactive responses"
+                );
+
+                response = handle
+                    .authenticate_keyboard_interactive_respond(responses)
+                    .await
+                    .map_err(|e| format!("Keyboard-interactive auth failed: {e}"))?;
+            }
+        }
+    }
 }
 
 /// SSH client handler implementing TOFU host key verification.
@@ -961,9 +1176,20 @@ impl client::Handler for SshHandler {
 
         // Check if we already know this host.
         if let Some(ref kh) = kh_path {
+            trace!(
+                session_id = %self.session_id,
+                known_hosts = %kh.display(),
+                host = %self.host,
+                port = self.port,
+                key_type = server_public_key.algorithm().as_str(),
+                "Checking known_hosts"
+            );
             match russh::keys::check_known_hosts_path(&self.host, self.port, server_public_key, kh)
             {
-                Ok(true) => return Ok(true),
+                Ok(true) => {
+                    trace!(session_id = %self.session_id, "Host key found in known_hosts — trusted");
+                    return Ok(true);
+                }
                 Ok(false) => {
                     // No matching key type found — could be a first-time connection
                     // or a key algorithm change. Fall through to prompt.

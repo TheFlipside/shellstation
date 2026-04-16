@@ -7,6 +7,7 @@ import { useSessionStore } from "../stores/sessionStore";
 import { Terminal } from "./Terminal";
 import { QuickConnect, type QuickConnectParams } from "./QuickConnect";
 import { HostVerifyDialog, type HostVerifyRequest } from "./HostVerifyDialog";
+import { KbdInteractiveDialog, type KbdInteractiveRequest } from "./KbdInteractiveDialog";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { useSettingsStore } from "../stores/settingsStore";
@@ -157,6 +158,10 @@ export function TerminalTabs({ uiScale }: TerminalTabsProps): React.JSX.Element 
   } | null>(null);
   const [hostVerifyRequest, setHostVerifyRequest] = useState<HostVerifyRequest | null>(null);
   const verifyQueueRef = useRef<HostVerifyRequest[]>([]);
+  const [kbdInteractiveRequest, setKbdInteractiveRequest] = useState<KbdInteractiveRequest | null>(
+    null,
+  );
+  const kbdInteractiveQueueRef = useRef<KbdInteractiveRequest[]>([]);
 
   const createLocalTab = useCallback(async () => {
     const id = await invoke<string>("pty_spawn", { cols: 80, rows: 24 });
@@ -219,6 +224,19 @@ export function TerminalTabs({ uiScale }: TerminalTabsProps): React.JSX.Element 
       invoke("ssh_host_verify_response", { id: sessionId, accept }).catch(noop);
     },
     [showNextVerifyRequest],
+  );
+
+  const showNextKbdRequest = useCallback(() => {
+    const next = kbdInteractiveQueueRef.current.shift();
+    setKbdInteractiveRequest(next ?? null);
+  }, []);
+
+  const handleKbdInteractiveResponse = useCallback(
+    (sessionId: string, responses: string[]) => {
+      showNextKbdRequest();
+      invoke("ssh_kbd_interactive_response", { id: sessionId, responses }).catch(noop);
+    },
+    [showNextKbdRequest],
   );
 
   const destroyTab = useCallback(
@@ -429,6 +447,36 @@ export function TerminalTabs({ uiScale }: TerminalTabsProps): React.JSX.Element 
     };
   }, []);
 
+  // Listen for keyboard-interactive authentication prompt events.
+  useEffect(() => {
+    let cancelled = false;
+    let unlisten: UnlistenFn | null = null;
+
+    listen<KbdInteractiveRequest>("ssh-kbd-interactive", (event) => {
+      if (cancelled) return;
+      setKbdInteractiveRequest((current) => {
+        if (current !== null) {
+          kbdInteractiveQueueRef.current.push(event.payload);
+          return current;
+        }
+        return event.payload;
+      });
+    })
+      .then((fn) => {
+        if (cancelled) {
+          fn();
+        } else {
+          unlisten = fn;
+        }
+      })
+      .catch(noop);
+
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, []);
+
   // Open a local terminal on first mount if the setting is enabled.
   const didSpawnRef = useRef(false);
   useEffect(() => {
@@ -575,6 +623,12 @@ export function TerminalTabs({ uiScale }: TerminalTabsProps): React.JSX.Element 
       )}
       {hostVerifyRequest && (
         <HostVerifyDialog request={hostVerifyRequest} onRespond={handleHostVerifyResponse} />
+      )}
+      {kbdInteractiveRequest && (
+        <KbdInteractiveDialog
+          request={kbdInteractiveRequest}
+          onRespond={handleKbdInteractiveResponse}
+        />
       )}
       {tabCtx && (
         <ContextMenu

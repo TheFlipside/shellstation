@@ -13,6 +13,7 @@ export interface SessionFormData {
   hostname: string;
   port: number;
   protocol: string;
+  username: string;
   tags: string;
   icon: string;
   jumpHostId: string | null;
@@ -55,6 +56,7 @@ export function SessionDialog({
   const [icon, setIcon] = useState(initial?.icon ?? "desktop");
   const [jumpHostId, setJumpHostId] = useState(initial?.jumpHostId ?? "");
   const [highlightProfileId, setHighlightProfileId] = useState(initial?.highlightProfileId ?? "");
+  const [username, setUsername] = useState(initial?.username ?? "");
   const [credentialProfileId, setCredentialProfileId] = useState(
     initial?.credentialProfileId ?? "",
   );
@@ -78,6 +80,7 @@ export function SessionDialog({
       hostname: hostname.trim(),
       port: portNum,
       protocol,
+      username: protocol === "ssh" && !credentialProfileId ? username.trim() : "",
       tags,
       icon,
       jumpHostId: protocol === "telnet" ? null : jumpHostId || null,
@@ -211,6 +214,21 @@ export function SessionDialog({
                   </button>
                 </div>
               </div>
+              {!credentialProfileId && (
+                <div className="dialog-field">
+                  <label htmlFor="sd-username">{t("session.usernameLabel")}</label>
+                  <input
+                    id="sd-username"
+                    type="text"
+                    value={username}
+                    onChange={(e) => {
+                      setUsername(e.target.value);
+                    }}
+                    placeholder={t("session.usernamePlaceholder")}
+                  />
+                  <span className="dialog-hint">{t("session.usernameHintKbd")}</span>
+                </div>
+              )}
               <div className="dialog-field">
                 <label htmlFor="sd-jump">{t("session.jumpHostLabel")}</label>
                 <CustomSelect

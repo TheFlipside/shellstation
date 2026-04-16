@@ -5,6 +5,8 @@ use uuid::Uuid;
 
 use zeroize::Zeroizing;
 
+use tracing::debug;
+
 use crate::db::models::{
     CredentialProfile, DataFingerprint, Folder, NewFolder, NewSession, Session, UpdateSession,
 };
@@ -159,6 +161,7 @@ pub async fn session_create(
     hostname: String,
     port: i32,
     protocol: Option<String>,
+    username: Option<String>,
     tags: String,
     icon: String,
     jump_host_id: Option<String>,
@@ -196,6 +199,7 @@ pub async fn session_create(
             hostname,
             port,
             protocol: effective_protocol,
+            username: username.unwrap_or_default(),
             // auth_method is determined by the credential profile at connect
             // time; keep the column populated for backwards compatibility
             // with existing rows but don't expose it in the dialog.
@@ -229,6 +233,7 @@ pub async fn session_update(
     hostname: Option<String>,
     port: Option<i32>,
     protocol: Option<String>,
+    username: Option<String>,
     tags: Option<String>,
     icon: Option<String>,
     jump_host_id: Option<String>,
@@ -279,6 +284,7 @@ pub async fn session_update(
                 hostname,
                 port,
                 protocol,
+                username,
                 auth_method: None,
                 jump_host_id: jump,
                 tags,
@@ -503,11 +509,31 @@ pub async fn session_connect(
         return Ok(conn_id);
     }
 
-    // SSH path (default). Resolve the credential profile assigned to the
-    // session; if none, reject with a clear error. (Keyboard-interactive
-    // fallback requires a UI prompt flow and is tracked separately.)
-    let profile = resolve_profile_for_session(&cred_db, &session).await?;
-    let (username, auth_method, auth_credential) = profile_to_auth(&profile)?;
+    // SSH path (default). Use the credential profile if assigned, otherwise
+    // fall back to keyboard-interactive with the session's own username.
+    let (username, auth_method, auth_credential) = match session.credential_profile_id {
+        Some(profile_id) => {
+            debug!(session = %id, profile_id = %profile_id, "Resolving credential profile for session");
+            let profile = resolve_profile_for_session(&cred_db, &session).await?;
+            debug!(session = %id, auth_type = %profile.auth_type, user = %profile.username, "Credential profile resolved");
+            profile_to_auth(&profile)?
+        }
+        None => {
+            debug!(session = %id, user = %session.username, "No credential profile — falling back to keyboard-interactive");
+            if session.username.is_empty() {
+                return Err(
+                    "No credential profile assigned and no username configured. \
+                     Edit the session to set a username or assign a credential profile."
+                        .to_string(),
+                );
+            }
+            (
+                session.username.clone(),
+                "keyboard-interactive".to_string(),
+                Zeroizing::new(String::new()),
+            )
+        }
+    };
 
     // Resolve jump host chain.
     let jump_hops = resolve_jump_chain(&db, &cred_db, &session).await?;
@@ -549,6 +575,7 @@ pub async fn session_connect(
             keepalive_interval_secs: keepalive_secs,
             keepalive_max: keepalive_missed,
             logger,
+            kbd_interactive_senders: std::sync::Arc::clone(&ssh.kbd_interactive_senders),
         },
         &ssh.host_verify_senders,
     )
@@ -628,6 +655,11 @@ fn profile_to_auth(
                 Zeroizing::new(profile.key_path.clone()),
             ))
         }
+        "keyboard-interactive" => Ok((
+            profile.username.clone(),
+            "keyboard-interactive".to_string(),
+            Zeroizing::new(String::new()),
+        )),
         other => Err(format!(
             "Auth type \"{other}\" is not yet supported for connect \
              (profile \"{}\").",
@@ -662,6 +694,14 @@ async fn resolve_jump_chain(
                 .await?
                 .ok_or_else(|| format!("Jump host session {jump_id} not found"))?;
 
+        debug!(
+            hop = hops.len(),
+            jump_id = %jump_id,
+            host = %jump_session.hostname,
+            port = jump_session.port,
+            "Resolving jump hop"
+        );
+
         let jump_profile = resolve_profile_for_session(cred_db, &jump_session).await?;
         let (username, auth_method, auth_credential) = profile_to_auth(&jump_profile)?;
 
@@ -678,5 +718,6 @@ async fn resolve_jump_chain(
 
     // The chain is built from target→bastion order, but SSH needs bastion→target.
     hops.reverse();
+    debug!(total_hops = hops.len(), "Jump chain resolved");
     Ok(hops)
 }

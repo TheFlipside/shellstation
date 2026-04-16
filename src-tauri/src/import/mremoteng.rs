@@ -186,7 +186,7 @@ fn build_session(
         .and_then(|p| p.parse().ok())
         .unwrap_or(if protocol == "ssh" { 22 } else { 23 });
 
-    let username = attrs.get("Username").cloned().unwrap_or_default();
+    let username = attrs.get("Username").filter(|s| !s.is_empty()).cloned();
 
     // mRemoteNG stores jump host references in SSHTunnelConnectionName.
     let jump_host_name = attrs

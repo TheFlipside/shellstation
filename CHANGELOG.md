@@ -11,7 +11,11 @@ All notable changes to this project are documented in this file.
 
 ### Fixed
 
+- Implement proper keyboard-interactive authentication
+
 ### Changed
+
+- More verbose logging in debug mode
 
 ### Removed
 

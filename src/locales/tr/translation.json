@@ -121,7 +121,8 @@
     "highlightProfileLabel": "Vurgulama Profili",
     "highlightProfileNone": "Yok",
     "credentialProfileLabel": "Kimlik profili",
-    "credentialProfileNone": "(Yok — klavye etkileşimli geri dönüş)"
+    "credentialProfileNone": "(Yok — klavye etkileşimli geri dönüş)",
+    "usernameHintKbd": "Kimlik bilgisi profili atanmadığında keyboard-interactive kimlik doğrulaması için gereklidir."
   },
   "dialog": {
     "cancel": "İptal",
@@ -329,6 +330,11 @@
     "importSecurecrt": "SecureCRT vurgulamalarını içe aktar",
     "importProfile": "Profili içe aktar",
     "importSuccess": "{{count}} profil ve {{rules}} kural içe aktarıldı."
+  },
+  "kbdInteractive": {
+    "title": "Keyboard-Interactive Kimlik Doğrulama",
+    "submit": "Gönder",
+    "cancel": "İptal"
   },
   "common": {
     "edit": "Düzenle",

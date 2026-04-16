@@ -121,7 +121,8 @@
     "highlightProfileLabel": "Hervorhebungsprofil",
     "highlightProfileNone": "Keines",
     "credentialProfileLabel": "Anmeldeprofil",
-    "credentialProfileNone": "(Keines — Tastatur-Interaktiv Fallback)"
+    "credentialProfileNone": "(Keines — Tastatur-Interaktiv Fallback)",
+    "usernameHintKbd": "Erforderlich für Keyboard-Interactive-Authentifizierung, wenn kein Anmeldeprofil zugewiesen ist."
   },
   "dialog": {
     "cancel": "Abbrechen",
@@ -329,6 +330,11 @@
     "importSecurecrt": "SecureCRT-Hervorhebungen importieren",
     "importProfile": "Profil importieren",
     "importSuccess": "{{count}} Profil(e) mit {{rules}} Regel(n) importiert."
+  },
+  "kbdInteractive": {
+    "title": "Keyboard-Interactive-Authentifizierung",
+    "submit": "Absenden",
+    "cancel": "Abbrechen"
   },
   "common": {
     "edit": "Bearbeiten",
