@@ -205,7 +205,7 @@ pub async fn establish_ssh_connection(
         kbd_interactive_senders,
     } = params;
 
-    info!(session_id = %id, host = %host, port = %port, hops = jump_hops.len(), "Connecting via SSH");
+    info!(session_id = %id, host = %host, port = %port, hops = jump_hops.len(), legacy_algorithms, "Connecting via SSH");
 
     let (mut handle, bastion_handles) = connect_with_hops(
         &id,
@@ -360,9 +360,27 @@ impl Default for SshState {
     }
 }
 
+/// Remove a pending host-verify sender from the map. Called on connection error
+/// paths to prevent leaked entries when `check_server_key` was never invoked or
+/// timed out before the connection itself failed.
+fn cleanup_verify_sender(senders: &HostVerifySenders, id: &str) {
+    if let Ok(mut map) = senders.lock() {
+        map.remove(id);
+    }
+}
+
+/// Remove a pending keyboard-interactive sender from the map. Called on error
+/// paths (emit failure, timeout, channel drop) to prevent leaked entries.
+fn cleanup_kbd_interactive_sender(senders: &KbdInteractiveSenders, id: &str) {
+    if let Ok(mut map) = senders.lock() {
+        map.remove(id);
+    }
+}
+
 /// Sanitize SSH error messages to avoid leaking internal network topology.
 /// The raw error is already logged server-side; user-facing messages are generic.
 fn sanitize_ssh_error(raw: &str) -> String {
+    debug!(raw_error = %raw, "Sanitizing SSH error for user display");
     let lower = raw.to_lowercase();
     if lower.contains("connection refused") {
         "SSH connection failed: connection refused".to_string()
@@ -623,7 +641,25 @@ fn ssh_config(
     if legacy_algorithms {
         config.preferred = legacy_preferred();
     }
+    log_algorithm_proposal(&config.preferred, legacy_algorithms);
     Arc::new(config)
+}
+
+/// Log the full algorithm proposal at debug level so SSH negotiation failures
+/// can be diagnosed by comparing the client's offer against the server's.
+fn log_algorithm_proposal(pref: &russh::Preferred, legacy: bool) {
+    fn join_names<'a>(items: impl Iterator<Item = &'a str>) -> String {
+        items.collect::<Vec<_>>().join(", ")
+    }
+    debug!(
+        legacy,
+        kex = %join_names(pref.kex.iter().map(|n| n.as_ref())),
+        key = %join_names(pref.key.iter().map(|a| a.as_str())),
+        cipher = %join_names(pref.cipher.iter().map(|n| n.as_ref())),
+        mac = %join_names(pref.mac.iter().map(|n| n.as_ref())),
+        compression = %join_names(pref.compression.iter().map(|n| n.as_ref())),
+        "SSH algorithm proposal"
+    );
 }
 
 /// Build a `Preferred` algorithm set that appends legacy kex, ciphers and
@@ -806,10 +842,18 @@ async fn connect_with_hops(
         )
         .await
         .map_err(|_| {
+            cleanup_verify_sender(verify_senders, session_id);
             format!("SSH connection failed: connection to {target_host}:{target_port} timed out")
         })?
         .map_err(|e| {
-            error!(host = %target_host, port = %target_port, error = %e, "SSH connection failed");
+            cleanup_verify_sender(verify_senders, session_id);
+            error!(
+                host = %target_host,
+                port = %target_port,
+                error = %e,
+                error_debug = ?e,
+                "SSH connection/handshake failed"
+            );
             sanitize_ssh_error(&e.to_string())
         })?;
 
@@ -841,7 +885,7 @@ async fn connect_with_hops(
         .insert(hop_id.clone(), verify_tx);
 
     let handler = SshHandler {
-        session_id: hop_id,
+        session_id: hop_id.clone(),
         host: first_hop.host.clone(),
         port: first_hop.port,
         app_handle: app_handle.clone(),
@@ -855,13 +899,15 @@ async fn connect_with_hops(
     )
     .await
     .map_err(|_| {
+        cleanup_verify_sender(verify_senders, &hop_id);
         format!(
             "SSH jump host connection failed: connection to {}:{} timed out",
             first_hop.host, first_hop.port
         )
     })?
     .map_err(|e| {
-        error!(host = %first_hop.host, port = %first_hop.port, error = %e, "SSH hop failed");
+        cleanup_verify_sender(verify_senders, &hop_id);
+        error!(host = %first_hop.host, port = %first_hop.port, error = %e, error_debug = ?e, "SSH first hop handshake failed");
         format!(
             "SSH jump host connection failed: {}",
             sanitize_ssh_error(&e.to_string())
@@ -916,7 +962,8 @@ async fn connect_with_hops(
         current_handle = client::connect_stream(config, stream, handler)
             .await
             .map_err(|e| {
-                error!(host = %hop.host, port = %hop.port, error = %e, "SSH hop failed");
+                cleanup_verify_sender(verify_senders, &hop_id);
+                error!(host = %hop.host, port = %hop.port, hop = i, error = %e, error_debug = ?e, "SSH hop handshake failed");
                 format!(
                     "SSH jump host connection failed: {}",
                     sanitize_ssh_error(&e.to_string())
@@ -970,7 +1017,8 @@ async fn connect_with_hops(
     let target_handle = client::connect_stream(config, stream, handler)
         .await
         .map_err(|e| {
-            error!(host = %target_host, port = %target_port, error = %e, "SSH target connection failed");
+            cleanup_verify_sender(verify_senders, session_id);
+            error!(host = %target_host, port = %target_port, error = %e, error_debug = ?e, "SSH target handshake through tunnel failed");
             sanitize_ssh_error(&e.to_string())
         })?;
 
@@ -1002,8 +1050,14 @@ async fn authenticate_handle(
             handle
                 .authenticate_password(username, auth_credential)
                 .await
-                .map(|res| res.success())
-                .map_err(|e| format!("Auth failed: {e}"))?
+                .map(|res| {
+                    debug!(session_id = %session_id, success = res.success(), "Password auth result");
+                    res.success()
+                })
+                .map_err(|e| {
+                    debug!(session_id = %session_id, error = %e, error_debug = ?e, "Password auth error");
+                    format!("Auth failed: {e}")
+                })?
         }
         "publickey" => {
             let (key_path, passphrase) = parse_key_credential(auth_credential)?;
@@ -1016,13 +1070,20 @@ async fn authenticate_handle(
                 .await
                 .ok()
                 .flatten()
-                .unwrap_or(None);
+                .flatten();
+            debug!(session_id = %session_id, rsa_hash_alg = ?hash_alg, "RSA hash algorithm negotiated for public key auth");
             let key_with_hash = PrivateKeyWithHashAlg::new(Arc::new(key_pair), hash_alg);
             handle
                 .authenticate_publickey(username, key_with_hash)
                 .await
-                .map(|res| res.success())
-                .map_err(|e| format!("Auth failed: {e}"))?
+                .map(|res| {
+                    debug!(session_id = %session_id, success = res.success(), "Public key auth result");
+                    res.success()
+                })
+                .map_err(|e| {
+                    debug!(session_id = %session_id, error = %e, error_debug = ?e, "Public key auth error");
+                    format!("Auth failed: {e}")
+                })?
         }
         "keyboard-interactive" => {
             return authenticate_keyboard_interactive(
@@ -1115,19 +1176,22 @@ async fn authenticate_keyboard_interactive(
                 // Emit event to frontend.
                 app_handle
                     .emit("ssh-kbd-interactive", &payload)
-                    .map_err(|e| format!("Failed to emit kbd-interactive event: {e}"))?;
+                    .map_err(|e| {
+                        cleanup_kbd_interactive_sender(kbd_interactive_senders, session_id);
+                        format!("Failed to emit kbd-interactive event: {e}")
+                    })?;
 
                 // Await user input with 60-second timeout.
                 let responses = tokio::time::timeout(std::time::Duration::from_secs(60), rx)
                     .await
                     .map_err(|_| {
-                        // Clean up the sender on timeout.
-                        if let Ok(mut senders) = kbd_interactive_senders.lock() {
-                            senders.remove(session_id);
-                        }
+                        cleanup_kbd_interactive_sender(kbd_interactive_senders, session_id);
                         "Keyboard-interactive authentication timed out (60s)".to_string()
                     })?
-                    .map_err(|_| "Keyboard-interactive prompt cancelled".to_string())?;
+                    .map_err(|_| {
+                        cleanup_kbd_interactive_sender(kbd_interactive_senders, session_id);
+                        "Keyboard-interactive prompt cancelled".to_string()
+                    })?;
 
                 // Empty responses = user cancelled.
                 if responses.is_empty() && !prompts.is_empty() {
@@ -1175,6 +1239,14 @@ impl client::Handler for SshHandler {
         };
 
         // Check if we already know this host.
+        debug!(
+            session_id = %self.session_id,
+            host = %self.host,
+            port = self.port,
+            key_type = server_public_key.algorithm().as_str(),
+            fingerprint = %server_public_key.fingerprint(russh::keys::HashAlg::Sha256),
+            "Server offered host key"
+        );
         if let Some(ref kh) = kh_path {
             trace!(
                 session_id = %self.session_id,
