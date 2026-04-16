@@ -48,6 +48,7 @@ interface SettingsState {
   connectTimeout: number;
   keepaliveInterval: number;
   keepaliveMax: number;
+  sidebarWidth: number;
   toastAutoDismiss: boolean;
   toastDismissSeconds: number;
   commandButtons: CommandButton[];
@@ -72,6 +73,7 @@ interface SettingsState {
   setConnectTimeout: (seconds: number) => void;
   setKeepaliveInterval: (seconds: number) => void;
   setKeepaliveMax: (count: number) => void;
+  setSidebarWidth: (width: number) => void;
   setToastAutoDismiss: (value: boolean) => void;
   setToastDismissSeconds: (seconds: number) => void;
 }
@@ -95,6 +97,7 @@ export const useSettingsStore = create<SettingsState>()(
       connectTimeout: 10,
       keepaliveInterval: 15,
       keepaliveMax: 3,
+      sidebarWidth: 260,
       toastAutoDismiss: true,
       toastDismissSeconds: 5,
       commandButtons: [],
@@ -160,7 +163,9 @@ export const useSettingsStore = create<SettingsState>()(
         }
       },
       setTerminalFontSize: (size: number) => {
-        set({ terminalFontSize: size });
+        if (Number.isFinite(size) && size >= 6 && size <= 72) {
+          set({ terminalFontSize: size });
+        }
       },
       setCopyOnSelect: (value: boolean) => {
         set({ copyOnSelect: value });
@@ -172,10 +177,14 @@ export const useSettingsStore = create<SettingsState>()(
         set({ restrictPrivateIps: value });
       },
       setAutoRefreshInterval: (seconds: number) => {
-        set({ autoRefreshInterval: seconds });
+        if (Number.isFinite(seconds) && seconds >= 0) {
+          set({ autoRefreshInterval: seconds });
+        }
       },
       setConnectTimeout: (seconds: number) => {
-        set({ connectTimeout: seconds });
+        if (Number.isFinite(seconds) && seconds > 0) {
+          set({ connectTimeout: seconds });
+        }
       },
       setKeepaliveInterval: (seconds: number) => {
         if (Number.isFinite(seconds) && seconds >= 0) {
@@ -185,6 +194,11 @@ export const useSettingsStore = create<SettingsState>()(
       setKeepaliveMax: (count: number) => {
         if (Number.isFinite(count) && count >= 1) {
           set({ keepaliveMax: count });
+        }
+      },
+      setSidebarWidth: (width: number) => {
+        if (Number.isFinite(width) && width >= 160 && width <= 600) {
+          set({ sidebarWidth: width });
         }
       },
       setToastAutoDismiss: (value: boolean) => {
@@ -208,6 +222,16 @@ export const useSettingsStore = create<SettingsState>()(
             }
             if (!Number.isFinite(state.keepaliveMax) || state.keepaliveMax < 1) {
               state.keepaliveMax = 3;
+            }
+          }
+          // Sanitize persisted sidebar width.
+          if (state) {
+            if (
+              !Number.isFinite(state.sidebarWidth) ||
+              state.sidebarWidth < 160 ||
+              state.sidebarWidth > 600
+            ) {
+              state.sidebarWidth = 260;
             }
           }
           // Sanitize persisted commandButtons against corrupted localStorage:

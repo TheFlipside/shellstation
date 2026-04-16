@@ -98,7 +98,7 @@ body,
 }
 
 .tab-bar-scroll-btn {
-  display: none;
+  display: flex;
   align-items: center;
   justify-content: center;
   width: 22px;
@@ -112,6 +112,8 @@ body,
   -webkit-app-region: no-drag;
   padding: 0;
   z-index: 1;
+  visibility: hidden;
+  pointer-events: none;
 }
 
 .tab-bar-scroll-btn:hover {
@@ -120,7 +122,8 @@ body,
 }
 
 .tab-bar.tab-bar-overflowing .tab-bar-scroll-btn {
-  display: flex;
+  visibility: visible;
+  pointer-events: auto;
 }
 
 .tab-bar-tabs {

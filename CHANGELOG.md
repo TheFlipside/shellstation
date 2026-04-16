@@ -16,6 +16,7 @@ All notable changes to this project are documented in this file.
 ### Changed
 
 - More verbose logging in debug mode
+- Position of GUI separator is saved persistently
 
 ### Removed
 

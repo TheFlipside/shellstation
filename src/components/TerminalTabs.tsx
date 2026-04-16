@@ -56,11 +56,14 @@ export function TerminalTabs({ uiScale }: TerminalTabsProps): React.JSX.Element 
   useEffect(() => {
     const el = tabScrollRef.current;
     if (!el) return;
+    let timerId: ReturnType<typeof setTimeout> | undefined;
     const observer = new ResizeObserver(() => {
-      checkOverflow();
+      clearTimeout(timerId);
+      timerId = setTimeout(checkOverflow, 150);
     });
     observer.observe(el);
     return () => {
+      clearTimeout(timerId);
       observer.disconnect();
     };
   }, [checkOverflow]);
@@ -364,6 +367,7 @@ export function TerminalTabs({ uiScale }: TerminalTabsProps): React.JSX.Element 
   const getTabContextItems = useCallback(
     (tabId: string): ContextMenuItem[] => {
       const index = tabs.findIndex((tb) => tb.id === tabId);
+      if (index === -1) return [];
       const tab = tabs[index];
       const items: ContextMenuItem[] = [
         {

@@ -22,8 +22,9 @@ interface DbStatus {
 function App(): React.JSX.Element {
   const { t } = useTranslation();
   const uiScale = useSettingsStore((s) => s.uiScale);
+  const sidebarWidth = useSettingsStore((s) => s.sidebarWidth);
+  const setSidebarWidth = useSettingsStore((s) => s.setSidebarWidth);
   useTheme();
-  const [sidebarWidth, setSidebarWidth] = useState(260);
   const [showQuitConfirm, setShowQuitConfirm] = useState(false);
   const [dbStatus, setDbStatus] = useState<DbStatus | null>(null);
   const [showSettingsFromBanner, setShowSettingsFromBanner] = useState(false);
@@ -63,7 +64,7 @@ function App(): React.JSX.Element {
 
     document.addEventListener("mousemove", handleMouseMove);
     document.addEventListener("mouseup", handleMouseUp);
-  }, []);
+  }, [setSidebarWidth]);
 
   const requestQuit = useCallback(() => {
     const tabs = useTerminalStore.getState().tabs;
