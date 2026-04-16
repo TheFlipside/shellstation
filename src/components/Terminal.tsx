@@ -21,6 +21,7 @@ interface TerminalProps {
   exited?: boolean;
   onExit?: () => void;
   onReconnect?: () => void;
+  onClose?: () => void;
 }
 
 /** Decode a base64 string to bytes using the built-in atob. */
@@ -103,6 +104,7 @@ export function Terminal({
   exited,
   onExit,
   onReconnect,
+  onClose,
 }: TerminalProps): React.JSX.Element {
   const containerRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<XTerm | null>(null);
@@ -114,6 +116,8 @@ export function Terminal({
   exitedRef.current = exited;
   const onReconnectRef = useRef(onReconnect);
   onReconnectRef.current = onReconnect;
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
 
   const { terminalFontFamily, terminalFontSize, copyOnSelect, pasteOnRightClick } =
     useSettingsStore();
@@ -272,6 +276,13 @@ export function Terminal({
       if (event.ctrlKey && !event.shiftKey && event.key === "0") {
         event.preventDefault();
         setLocalZoomOffset(0);
+        return false;
+      }
+
+      // Ctrl+W on a disconnected session — close the tab.
+      if (event.ctrlKey && event.key === "w" && exitedRef.current) {
+        event.preventDefault();
+        onCloseRef.current?.();
         return false;
       }
 

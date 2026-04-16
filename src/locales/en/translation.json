@@ -5,6 +5,7 @@
     "newSession": "New Session",
     "createFolderFirst": "Create a folder first.",
     "searchPlaceholder": "Search sessions…",
+    "clearSearch": "Clear search",
     "empty": "No folders yet. Click +F to create one.",
     "refresh": "Refresh",
     "sortAlphabetically": "Sort Alphabetically",

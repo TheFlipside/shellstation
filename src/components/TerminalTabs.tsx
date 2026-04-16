@@ -610,6 +610,9 @@ export function TerminalTabs({ uiScale }: TerminalTabsProps): React.JSX.Element 
                     }
                   : undefined
               }
+              onClose={() => {
+                requestCloseTab(tab.id);
+              }}
             />
           );
         })}

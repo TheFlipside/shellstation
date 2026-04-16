@@ -84,6 +84,7 @@ export function SessionSidebar(): React.JSX.Element {
     expandFolder,
     collapseFolder,
     toggleFolder,
+    clearSelection,
   } = store;
 
   const [ctx, setCtx] = useState<ContextState | null>(null);
@@ -121,6 +122,7 @@ export function SessionSidebar(): React.JSX.Element {
 
   // Track whether a reorder is in progress to avoid double-firing.
   const reordering = useRef(false);
+  const treeRef = useRef<HTMLDivElement>(null);
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
@@ -208,6 +210,11 @@ export function SessionSidebar(): React.JSX.Element {
   // Arrow-key and Enter navigation within the session tree.
   const handleTreeKeyDown = useCallback(
     (e: React.KeyboardEvent): void => {
+      // Skip all tree key handling when a modal dialog is open — the dialog
+      // captures Enter/Escape via its own hooks but cannot prevent the tree's
+      // React onKeyDown from firing first.
+      if (confirmDialog || folderDialog || sessionDialog) return;
+
       const key = e.key;
 
       // Enter: toggle folder or connect session
@@ -254,6 +261,44 @@ export function SessionSidebar(): React.JSX.Element {
               },
             });
           }
+        }
+        return;
+      }
+
+      // Delete: trigger delete confirmation for selected item
+      if (key === "Delete" && selectedItemId) {
+        e.preventDefault();
+        if (selectedItemType === "folder") {
+          const folderId = selectedItemId;
+          const childCount = sessions.filter((s) => s.folder_id === folderId).length;
+          const msg =
+            childCount > 0
+              ? t("folder.deleteWithSessions", { count: String(childCount) })
+              : t("folder.deleteEmpty");
+          setConfirmDialog({
+            message: msg,
+            onConfirm: () => {
+              deleteFolder(folderId)
+                .then(() => {
+                  clearSelection();
+                  setConfirmDialog(null);
+                })
+                .catch(noop);
+            },
+          });
+        } else if (selectedItemType === "session") {
+          const session = sessions.find((s) => s.id === selectedItemId);
+          setConfirmDialog({
+            message: t("session.deleteConfirm", { name: session?.name ?? "" }),
+            onConfirm: () => {
+              deleteSession(selectedItemId)
+                .then(() => {
+                  clearSelection();
+                  setConfirmDialog(null);
+                })
+                .catch(noop);
+            },
+          });
         }
         return;
       }
@@ -314,6 +359,13 @@ export function SessionSidebar(): React.JSX.Element {
       toggleFolder,
       scrollItemIntoView,
       handleSessionDoubleClick,
+      confirmDialog,
+      folderDialog,
+      sessionDialog,
+      deleteFolder,
+      deleteSession,
+      clearSelection,
+      t,
     ],
   );
 
@@ -509,8 +561,12 @@ export function SessionSidebar(): React.JSX.Element {
             setConfirmDialog({
               message: msg,
               onConfirm: () => {
-                deleteFolder(folderId).catch(noop);
-                setConfirmDialog(null);
+                deleteFolder(folderId)
+                  .then(() => {
+                    clearSelection();
+                    setConfirmDialog(null);
+                  })
+                  .catch(noop);
               },
             });
           },
@@ -592,8 +648,12 @@ export function SessionSidebar(): React.JSX.Element {
           setConfirmDialog({
             message: t("session.deleteConfirm", { name: session?.name ?? "" }),
             onConfirm: () => {
-              deleteSession(sessionId).catch(noop);
-              setConfirmDialog(null);
+              deleteSession(sessionId)
+                .then(() => {
+                  clearSelection();
+                  setConfirmDialog(null);
+                })
+                .catch(noop);
             },
           });
         },
@@ -609,6 +669,7 @@ export function SessionSidebar(): React.JSX.Element {
       renameFolder(folderDialog.folderId, name).catch(noop);
     }
     setFolderDialog(null);
+    treeRef.current?.focus();
   };
 
   const handleSessionSubmit = (data: SessionFormData): void => {
@@ -661,6 +722,7 @@ export function SessionSidebar(): React.JSX.Element {
       doUpdate().catch(noop);
     }
     setSessionDialog(null);
+    treeRef.current?.focus();
   };
 
   const handleMoveSubmit = (targetFolderId: string): void => {
@@ -758,9 +820,32 @@ export function SessionSidebar(): React.JSX.Element {
             }
           }}
         />
+        {searchQuery && (
+          <button
+            type="button"
+            className="sidebar-search-clear"
+            onClick={() => {
+              clearSearch();
+            }}
+            title={t("sidebar.clearSearch")}
+          >
+            &times;
+          </button>
+        )}
       </div>
-      <DndContext sensors={sensors} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
-        <div className="sidebar-tree" role="tree" tabIndex={0} onKeyDown={handleTreeKeyDown}>
+      <DndContext
+        key={`dnd-${String(folders.length)}-${String(sessions.length)}`}
+        sensors={sensors}
+        onDragStart={handleDragStart}
+        onDragEnd={handleDragEnd}
+      >
+        <div
+          className="sidebar-tree"
+          role="tree"
+          tabIndex={0}
+          onKeyDown={handleTreeKeyDown}
+          ref={treeRef}
+        >
           {searchResults ? (
             displaySessions.map((s) => (
               <div
@@ -902,6 +987,7 @@ export function SessionSidebar(): React.JSX.Element {
           onSubmit={handleFolderSubmit}
           onCancel={() => {
             setFolderDialog(null);
+            treeRef.current?.focus();
           }}
         />
       )}
@@ -919,6 +1005,7 @@ export function SessionSidebar(): React.JSX.Element {
           onSubmit={handleSessionSubmit}
           onCancel={() => {
             setSessionDialog(null);
+            treeRef.current?.focus();
           }}
           onManageCredentials={() => {
             setShowCredentialManager(true);

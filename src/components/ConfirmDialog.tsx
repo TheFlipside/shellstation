@@ -1,4 +1,5 @@
 import React from "react";
+import ReactDOM from "react-dom";
 import { useTranslation } from "react-i18next";
 import { useEnterKey } from "../hooks/useEnterKey";
 import { useEscapeKey } from "../hooks/useEscapeKey";
@@ -20,7 +21,7 @@ export function ConfirmDialog({
   useEscapeKey(onCancel);
   useEnterKey(onConfirm);
 
-  return (
+  return ReactDOM.createPortal(
     <div className="dialog-overlay" onClick={onCancel} role="presentation">
       <div
         className="dialog"
@@ -40,6 +41,7 @@ export function ConfirmDialog({
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }

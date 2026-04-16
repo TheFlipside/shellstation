@@ -718,6 +718,7 @@ body,
 .sidebar-search {
   padding: 6px 8px;
   flex-shrink: 0;
+  position: relative;
 }
 
 .sidebar-search input {
@@ -725,7 +726,7 @@ body,
   background: var(--color-base);
   border: 1px solid var(--color-surface1);
   border-radius: 4px;
-  padding: 4px 8px;
+  padding: 4px 24px 4px 8px;
   font-size: 12px;
   color: var(--color-text);
   font-family: inherit;
@@ -735,6 +736,24 @@ body,
 
 .sidebar-search input:focus {
   border-color: var(--color-blue);
+}
+
+.sidebar-search-clear {
+  position: absolute;
+  right: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: none;
+  border: none;
+  color: var(--color-subtext0);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  padding: 0 2px;
+}
+
+.sidebar-search-clear:hover {
+  color: var(--color-text);
 }
 
 .sidebar-tree {
