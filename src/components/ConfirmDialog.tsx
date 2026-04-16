@@ -22,15 +22,8 @@ export function ConfirmDialog({
   useEnterKey(onConfirm);
 
   return ReactDOM.createPortal(
-    <div className="dialog-overlay" onClick={onCancel} role="presentation">
-      <div
-        className="dialog"
-        onClick={(e) => {
-          e.stopPropagation();
-        }}
-        role="dialog"
-        aria-modal="true"
-      >
+    <div className="dialog-overlay" role="presentation">
+      <div className="dialog" role="dialog" aria-modal="true">
         <p className="dialog-text">{message}</p>
         <div className="dialog-actions">
           <button type="button" className="dialog-btn dialog-btn-cancel" onClick={onCancel}>

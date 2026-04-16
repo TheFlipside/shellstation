@@ -123,12 +123,9 @@ export function SessionDialog({
   };
 
   return (
-    <div className="dialog-overlay" onClick={onCancel} role="presentation">
+    <div className="dialog-overlay" role="presentation">
       <div
         className="dialog dialog-wide"
-        onClick={(e) => {
-          e.stopPropagation();
-        }}
         role="dialog"
         aria-modal="true"
         aria-labelledby="sd-title"

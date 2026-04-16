@@ -25,6 +25,8 @@ All notable changes to this project are documented in this file.
 
 ### Removed
 
+- Close dialogues by clicking outside
+
 ### 0.9.4 - 2026-04-14
 
 ### Added

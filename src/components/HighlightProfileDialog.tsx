@@ -52,14 +52,8 @@ export function HighlightProfileDialog({
   };
 
   return (
-    <div className="dialog-overlay" onClick={onCancel} role="presentation">
-      <div
-        className="dialog dialog-wide"
-        onClick={(e) => {
-          e.stopPropagation();
-        }}
-        role="dialog"
-      >
+    <div className="dialog-overlay" role="presentation">
+      <div className="dialog dialog-wide" role="dialog">
         <h3>{title}</h3>
         <form onSubmit={handleSubmit}>
           <div className="dialog-field">

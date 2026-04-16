@@ -36,16 +36,8 @@ export function MoveDialog({
   useEnterKey(handleSubmit);
 
   return (
-    <div className="dialog-overlay" onClick={onCancel} role="presentation">
-      <div
-        className="dialog"
-        onClick={(e) => {
-          e.stopPropagation();
-        }}
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="mv-title"
-      >
+    <div className="dialog-overlay" role="presentation">
+      <div className="dialog" role="dialog" aria-modal="true" aria-labelledby="mv-title">
         <h3 className="dialog-title" id="mv-title">
           {t("dialog.moveTo")}
         </h3>

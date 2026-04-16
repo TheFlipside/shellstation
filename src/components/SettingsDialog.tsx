@@ -511,16 +511,9 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
   useEscapeKey(onClose);
 
   return (
-    <div className="dialog-overlay" onClick={onClose} role="presentation">
+    <div className="dialog-overlay" role="presentation">
       {importProgress && (
-        <div
-          className="dialog-overlay"
-          style={{ zIndex: 10000 }}
-          onClick={(e) => {
-            e.stopPropagation();
-          }}
-          role="presentation"
-        >
+        <div className="dialog-overlay" style={{ zIndex: 10000 }} role="presentation">
           <div className="dialog" style={{ minWidth: 320, textAlign: "center" }}>
             <div className="dialog-title">
               {t("settings.importInProgress", { defaultValue: "Importing…" })}
@@ -541,9 +534,6 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
       )}
       <div
         className="dialog dialog-wide"
-        onClick={(e) => {
-          e.stopPropagation();
-        }}
         role="dialog"
         aria-modal="true"
         aria-labelledby="settings-title"

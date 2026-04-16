@@ -76,13 +76,7 @@ export function CommandButtonDialog({
   useEnterKey(handleSave);
 
   return (
-    <div
-      className="dialog-overlay"
-      onClick={(e) => {
-        if (e.target === e.currentTarget) onCancel();
-      }}
-      role="presentation"
-    >
+    <div className="dialog-overlay" role="presentation">
       <div className="dialog" style={{ minWidth: 400 }}>
         <div className="dialog-title">{t("commandBar.dialogTitle")}</div>
 

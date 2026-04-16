@@ -26,16 +26,8 @@ export function FolderDialog({
   };
 
   return (
-    <div className="dialog-overlay" onClick={onCancel} role="presentation">
-      <div
-        className="dialog"
-        onClick={(e) => {
-          e.stopPropagation();
-        }}
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="fd-title"
-      >
+    <div className="dialog-overlay" role="presentation">
+      <div className="dialog" role="dialog" aria-modal="true" aria-labelledby="fd-title">
         <h3 className="dialog-title" id="fd-title">
           {title}
         </h3>
