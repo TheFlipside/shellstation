@@ -1,5 +1,6 @@
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { invoke } from "@tauri-apps/api/core";
 import {
   DndContext,
   DragOverlay,
@@ -24,6 +25,7 @@ import { SessionDialog, type SessionFormData } from "./SessionDialog";
 import { FolderIcon, SessionIconComponent } from "./SessionIcons";
 import { SettingsDialog } from "./SettingsDialog";
 import { CredentialManager } from "./CredentialManager";
+import { useAppStore } from "../stores/appStore";
 import { useSettingsStore } from "../stores/settingsStore";
 import { useHighlightStore } from "../stores/highlightStore";
 import { useCredentialProfilesStore } from "../stores/credentialProfilesStore";
@@ -419,8 +421,15 @@ export function SessionSidebar(): React.JSX.Element {
   const getContextItems = (): ContextMenuItem[] => {
     if (!ctx) return [];
 
+    const { dbBackend, pgUser } = useAppStore.getState();
+    const isPg = dbBackend === "postgres";
+
     if (ctx.type === "folder") {
       const folder = folders.find((f) => f.id === ctx.id);
+      const isOwner = isPg && folder?.owner === pgUser;
+      // When isOwner is true, folder is guaranteed to be defined (owner equality
+      // requires a non-undefined left side). Cast once for the visibility toggle.
+      const ownerFolder = isOwner ? folder : null;
       return [
         {
           label: t("contextMenu.newSession"),
@@ -469,6 +478,24 @@ export function SessionSidebar(): React.JSX.Element {
             setMoveTarget({ id: ctx.id, type: "folder" });
           },
         },
+        ...(ownerFolder
+          ? [
+              {
+                label:
+                  ownerFolder.visibility === "shared"
+                    ? t("contextMenu.makePersonal")
+                    : t("contextMenu.makeShared"),
+                onClick: () => {
+                  const toggled = ownerFolder.visibility === "shared" ? "personal" : "shared";
+                  invoke("set_visibility", { id: ctx.id, itemType: "folder", visibility: toggled })
+                    .then(() => loadAll().catch(noop))
+                    .catch((err: unknown) => {
+                      useToastStore.getState().addToast(String(err));
+                    });
+                },
+              },
+            ]
+          : []),
         {
           label: t("contextMenu.delete"),
           danger: true,
@@ -493,6 +520,8 @@ export function SessionSidebar(): React.JSX.Element {
 
     // Session context menu
     const session = sessions.find((s) => s.id === ctx.id);
+    const isSessionOwner = isPg && session?.owner === pgUser;
+    const ownerSession = isSessionOwner ? session : null;
     return [
       {
         label: t("contextMenu.connect"),
@@ -537,6 +566,24 @@ export function SessionSidebar(): React.JSX.Element {
           setMoveTarget({ id: ctx.id, type: "session" });
         },
       },
+      ...(ownerSession
+        ? [
+            {
+              label:
+                ownerSession.visibility === "shared"
+                  ? t("contextMenu.makePersonal")
+                  : t("contextMenu.makeShared"),
+              onClick: () => {
+                const toggled = ownerSession.visibility === "shared" ? "personal" : "shared";
+                invoke("set_visibility", { id: ctx.id, itemType: "session", visibility: toggled })
+                  .then(() => loadAll().catch(noop))
+                  .catch((err: unknown) => {
+                    useToastStore.getState().addToast(String(err));
+                  });
+              },
+            },
+          ]
+        : []),
       {
         label: t("contextMenu.delete"),
         danger: true,
@@ -628,6 +675,17 @@ export function SessionSidebar(): React.JSX.Element {
   };
 
   const displaySessions = searchResults ?? sessions;
+
+  // Orphan shared sessions: sessions whose folder_id doesn't match any loaded folder.
+  // In PG mode with RLS, this happens when another user shares a session but its folder
+  // is personal and therefore not visible.
+  const folderIds = useMemo(() => new Set(folders.map((f) => f.id)), [folders]);
+  const orphanShared = useMemo(
+    () => sessions.filter((s) => s.visibility === "shared" && !folderIds.has(s.folder_id)),
+    [sessions, folderIds],
+  );
+  const showSharedFolder = !searchResults && orphanShared.length > 0;
+  const [sharedExpanded, setSharedExpanded] = useState(false);
 
   return (
     <div className="session-sidebar">
@@ -738,8 +796,62 @@ export function SessionSidebar(): React.JSX.Element {
               onSessionDoubleClick={handleSessionDoubleClick}
             />
           )}
-          {!searchResults && folders.length === 0 && (
+          {!searchResults && folders.length === 0 && orphanShared.length === 0 && (
             <div className="sidebar-empty">{t("sidebar.empty")}</div>
+          )}
+          {showSharedFolder && (
+            <div role="group">
+              <div
+                className="tree-item tree-folder"
+                style={{ "--tree-depth": 0 } as React.CSSProperties}
+                onClick={() => {
+                  setSharedExpanded((v) => !v);
+                }}
+                role="treeitem"
+                aria-expanded={sharedExpanded ? "true" : "false"}
+                tabIndex={-1}
+              >
+                <span
+                  className="tree-chevron"
+                  role="button"
+                  aria-label={sharedExpanded ? "Collapse" : "Expand"}
+                >
+                  {sharedExpanded ? "\u25BE" : "\u25B8"}
+                </span>
+                <span className="tree-icon">{"\uD83C\uDF10"}</span>
+                <span className="tree-label">{t("sidebar.sharedFolder")}</span>
+              </div>
+              {sharedExpanded &&
+                orphanShared.map((s) => (
+                  <div
+                    key={s.id}
+                    className={`tree-item tree-session ${selectedItemId === s.id ? "tree-item-selected" : ""}`}
+                    style={{ "--tree-depth": 1 } as React.CSSProperties}
+                    data-item-id={s.id}
+                    onClick={() => {
+                      selectItem(s.id, "session");
+                    }}
+                    onDoubleClick={() => {
+                      handleSessionDoubleClick(s.id);
+                    }}
+                    onContextMenu={(e) => {
+                      e.preventDefault();
+                      selectItem(s.id, "session");
+                      handleContextMenu(e, s.id, "session");
+                    }}
+                    role="treeitem"
+                    tabIndex={-1}
+                  >
+                    <span className="tree-icon">
+                      <SessionIconComponent iconKey={s.icon} />
+                    </span>
+                    <span className="tree-label" title={`${s.name} (${s.hostname})`}>
+                      {s.name}
+                    </span>
+                    <span className="tree-meta">{s.hostname}</span>
+                  </div>
+                ))}
+            </div>
           )}
         </div>
         <DragOverlay>
@@ -802,6 +914,7 @@ export function SessionSidebar(): React.JSX.Element {
           folders={folders}
           sessions={sessions}
           defaultFolderId={sessionDialog.folderId}
+          sessionId={sessionDialog.sessionId}
           initial={sessionDialog.initial}
           onSubmit={handleSessionSubmit}
           onCancel={() => {

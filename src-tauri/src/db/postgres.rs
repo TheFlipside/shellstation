@@ -40,6 +40,8 @@ fn row_to_folder(row: &PgRow) -> DbResult<Folder> {
         name: row.get("name"),
         parent_id: parse_optional_uuid(row.get("parent_id"))?,
         sort_order: row.get("sort_order"),
+        owner: row.get("owner"),
+        visibility: row.get("visibility"),
     })
 }
 
@@ -60,6 +62,8 @@ fn row_to_session(row: &PgRow) -> DbResult<Session> {
         highlight_profile_id: parse_optional_uuid(row.get("highlight_profile_id"))?,
         credential_profile_id: parse_optional_uuid(row.get("credential_profile_id"))?,
         legacy_algorithms: row.get::<i32, _>("legacy_algorithms") != 0,
+        owner: row.get("owner"),
+        visibility: row.get("visibility"),
     })
 }
 
@@ -130,16 +134,22 @@ impl DatabaseProvider for PostgresProvider {
         .await
         .map_err(|e| format!("Failed to compute sort_order: {e}"))?;
 
-        sqlx::query(
-            "INSERT INTO folders (id, name, parent_id, sort_order) VALUES ($1, $2, $3, $4)",
+        // owner defaults to current_user; visibility defaults to 'personal'.
+        let row = sqlx::query(
+            "INSERT INTO folders (id, name, parent_id, sort_order, owner, visibility) \
+             VALUES ($1, $2, $3, $4, current_user, 'personal') \
+             RETURNING owner, visibility",
         )
         .bind(&id_str)
         .bind(&folder.name)
         .bind(&parent_str)
         .bind(sort_order)
-        .execute(&mut *tx)
+        .fetch_one(&mut *tx)
         .await
         .map_err(|e| format!("Failed to create folder: {e}"))?;
+
+        let owner: String = row.get("owner");
+        let visibility: String = row.get("visibility");
 
         tx.commit()
             .await
@@ -150,12 +160,15 @@ impl DatabaseProvider for PostgresProvider {
             name: folder.name,
             parent_id: folder.parent_id,
             sort_order,
+            owner,
+            visibility,
         })
     }
 
     async fn list_folders(&self) -> DbResult<Vec<Folder>> {
         let rows = sqlx::query(
-            "SELECT id, name, parent_id, sort_order FROM folders ORDER BY sort_order ASC, name ASC",
+            "SELECT id, name, parent_id, sort_order, owner, visibility \
+             FROM folders ORDER BY sort_order ASC, name ASC",
         )
         .fetch_all(&self.pool)
         .await
@@ -267,9 +280,15 @@ impl DatabaseProvider for PostgresProvider {
         .await
         .map_err(|e| format!("Failed to compute sort_order: {e}"))?;
 
-        sqlx::query(
-            "INSERT INTO sessions (id, folder_id, name, hostname, port, protocol, username, auth_method, jump_host_id, tags, icon, sort_order, highlight_profile_id, credential_profile_id, legacy_algorithms) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)",
+        let row = sqlx::query(
+            "INSERT INTO sessions \
+                (id, folder_id, name, hostname, port, protocol, username, \
+                 auth_method, jump_host_id, tags, icon, sort_order, \
+                 highlight_profile_id, credential_profile_id, legacy_algorithms, \
+                 owner, visibility) \
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15, \
+                     current_user, 'personal') \
+             RETURNING owner, visibility",
         )
         .bind(&id_str)
         .bind(&folder_str)
@@ -286,9 +305,12 @@ impl DatabaseProvider for PostgresProvider {
         .bind(session.highlight_profile_id.map(|u| u.to_string()))
         .bind(session.credential_profile_id.map(|u| u.to_string()))
         .bind(i32::from(session.legacy_algorithms))
-        .execute(&mut *tx)
+        .fetch_one(&mut *tx)
         .await
         .map_err(|e| format!("Failed to create session: {e}"))?;
+
+        let owner: String = row.get("owner");
+        let visibility: String = row.get("visibility");
 
         tx.commit()
             .await
@@ -310,12 +332,14 @@ impl DatabaseProvider for PostgresProvider {
             highlight_profile_id: session.highlight_profile_id,
             credential_profile_id: session.credential_profile_id,
             legacy_algorithms: session.legacy_algorithms,
+            owner,
+            visibility,
         })
     }
 
     async fn get_session(&self, id: Uuid) -> DbResult<Option<Session>> {
         let row = sqlx::query(
-            "SELECT id, folder_id, name, hostname, port, protocol, username, auth_method, jump_host_id, tags, icon, sort_order, highlight_profile_id, credential_profile_id, legacy_algorithms \
+            "SELECT id, folder_id, name, hostname, port, protocol, username, auth_method, jump_host_id, tags, icon, sort_order, highlight_profile_id, credential_profile_id, legacy_algorithms, owner, visibility \
              FROM sessions WHERE id = $1",
         )
         .bind(id.to_string())
@@ -331,7 +355,7 @@ impl DatabaseProvider for PostgresProvider {
 
     async fn list_all_sessions(&self) -> DbResult<Vec<Session>> {
         let rows = sqlx::query(
-            "SELECT id, folder_id, name, hostname, port, protocol, username, auth_method, jump_host_id, tags, icon, sort_order, highlight_profile_id, credential_profile_id, legacy_algorithms \
+            "SELECT id, folder_id, name, hostname, port, protocol, username, auth_method, jump_host_id, tags, icon, sort_order, highlight_profile_id, credential_profile_id, legacy_algorithms, owner, visibility \
              FROM sessions ORDER BY sort_order ASC, name ASC",
         )
         .fetch_all(&self.pool)
@@ -510,7 +534,7 @@ impl DatabaseProvider for PostgresProvider {
         let escaped = query.replace('%', "\\%").replace('_', "\\_");
         let pattern = format!("%{escaped}%");
         let rows = sqlx::query(
-            "SELECT id, folder_id, name, hostname, port, protocol, username, auth_method, jump_host_id, tags, icon, sort_order, highlight_profile_id, credential_profile_id, legacy_algorithms \
+            "SELECT id, folder_id, name, hostname, port, protocol, username, auth_method, jump_host_id, tags, icon, sort_order, highlight_profile_id, credential_profile_id, legacy_algorithms, owner, visibility \
              FROM sessions \
              WHERE name LIKE $1 ESCAPE '\\' \
                 OR hostname LIKE $1 ESCAPE '\\' \
@@ -1110,12 +1134,14 @@ impl DatabaseProvider for PostgresProvider {
     }
 
     async fn data_fingerprint(&self) -> DbResult<DataFingerprint> {
-        let folder_rows = sqlx::query("SELECT id, name, sort_order FROM folders ORDER BY id")
-            .fetch_all(&self.pool)
-            .await
-            .map_err(|e| format!("Failed to fingerprint folders: {e}"))?;
+        let folder_rows =
+            sqlx::query("SELECT id, name, sort_order, visibility FROM folders ORDER BY id")
+                .fetch_all(&self.pool)
+                .await
+                .map_err(|e| format!("Failed to fingerprint folders: {e}"))?;
         let session_rows = sqlx::query(
-            "SELECT id, name, hostname, port, folder_id, sort_order FROM sessions ORDER BY id",
+            "SELECT id, name, hostname, port, folder_id, sort_order, visibility \
+             FROM sessions ORDER BY id",
         )
         .fetch_all(&self.pool)
         .await
@@ -1127,9 +1153,11 @@ impl DatabaseProvider for PostgresProvider {
             let id: String = row.get("id");
             let name: String = row.get("name");
             let sort_order: i32 = row.get("sort_order");
+            let visibility: String = row.get("visibility");
             id.hash(&mut hasher);
             name.hash(&mut hasher);
             sort_order.hash(&mut hasher);
+            visibility.hash(&mut hasher);
         }
         session_rows.len().hash(&mut hasher);
         for row in &session_rows {
@@ -1139,12 +1167,14 @@ impl DatabaseProvider for PostgresProvider {
             let port: i32 = row.get("port");
             let folder_id: String = row.get("folder_id");
             let sort_order: i32 = row.get("sort_order");
+            let visibility: String = row.get("visibility");
             id.hash(&mut hasher);
             name.hash(&mut hasher);
             hostname.hash(&mut hasher);
             port.hash(&mut hasher);
             folder_id.hash(&mut hasher);
             sort_order.hash(&mut hasher);
+            visibility.hash(&mut hasher);
         }
         Ok(DataFingerprint {
             hash: format!("{:x}", hasher.finish()),

@@ -1,12 +1,26 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+fn default_owner() -> String {
+    "local".to_string()
+}
+
+fn default_visibility() -> String {
+    "personal".to_string()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Folder {
     pub id: Uuid,
     pub name: String,
     pub parent_id: Option<Uuid>,
     pub sort_order: i32,
+    /// PostgreSQL user who created this folder. `"local"` in SQLite mode.
+    #[serde(default = "default_owner")]
+    pub owner: String,
+    /// `"personal"` (default) or `"shared"`.
+    #[serde(default = "default_visibility")]
+    pub visibility: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -37,6 +51,12 @@ pub struct Session {
     /// Needed for old network gear that only supports those.
     #[serde(default)]
     pub legacy_algorithms: bool,
+    /// PostgreSQL user who created this session. `"local"` in SQLite mode.
+    #[serde(default = "default_owner")]
+    pub owner: String,
+    /// `"personal"` (default) or `"shared"`.
+    #[serde(default = "default_visibility")]
+    pub visibility: String,
 }
 
 #[derive(Debug, Deserialize)]

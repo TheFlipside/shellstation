@@ -40,6 +40,8 @@ fn row_to_folder(row: &SqliteRow) -> DbResult<Folder> {
         name: row.get("name"),
         parent_id: parse_optional_uuid(row.get("parent_id"))?,
         sort_order: row.get("sort_order"),
+        owner: row.get("owner"),
+        visibility: row.get("visibility"),
     })
 }
 
@@ -60,6 +62,8 @@ fn row_to_session(row: &SqliteRow) -> DbResult<Session> {
         highlight_profile_id: parse_optional_uuid(row.get("highlight_profile_id"))?,
         credential_profile_id: parse_optional_uuid(row.get("credential_profile_id"))?,
         legacy_algorithms: row.get::<i64, _>("legacy_algorithms") != 0,
+        owner: row.get("owner"),
+        visibility: row.get("visibility"),
     })
 }
 
@@ -126,12 +130,15 @@ impl DatabaseProvider for SqliteProvider {
             name: folder.name,
             parent_id: folder.parent_id,
             sort_order,
+            owner: "local".to_string(),
+            visibility: "personal".to_string(),
         })
     }
 
     async fn list_folders(&self) -> DbResult<Vec<Folder>> {
         let rows = sqlx::query(
-            "SELECT id, name, parent_id, sort_order FROM folders ORDER BY sort_order ASC, name ASC",
+            "SELECT id, name, parent_id, sort_order, owner, visibility \
+             FROM folders ORDER BY sort_order ASC, name ASC",
         )
         .fetch_all(&self.pool)
         .await
@@ -249,12 +256,14 @@ impl DatabaseProvider for SqliteProvider {
             highlight_profile_id: session.highlight_profile_id,
             credential_profile_id: session.credential_profile_id,
             legacy_algorithms: session.legacy_algorithms,
+            owner: "local".to_string(),
+            visibility: "personal".to_string(),
         })
     }
 
     async fn get_session(&self, id: Uuid) -> DbResult<Option<Session>> {
         let row = sqlx::query(
-            "SELECT id, folder_id, name, hostname, port, protocol, username, auth_method, jump_host_id, tags, icon, sort_order, highlight_profile_id, credential_profile_id, legacy_algorithms \
+            "SELECT id, folder_id, name, hostname, port, protocol, username, auth_method, jump_host_id, tags, icon, sort_order, highlight_profile_id, credential_profile_id, legacy_algorithms, owner, visibility \
              FROM sessions WHERE id = ?",
         )
         .bind(id.to_string())
@@ -270,7 +279,7 @@ impl DatabaseProvider for SqliteProvider {
 
     async fn list_all_sessions(&self) -> DbResult<Vec<Session>> {
         let rows = sqlx::query(
-            "SELECT id, folder_id, name, hostname, port, protocol, username, auth_method, jump_host_id, tags, icon, sort_order, highlight_profile_id, credential_profile_id, legacy_algorithms \
+            "SELECT id, folder_id, name, hostname, port, protocol, username, auth_method, jump_host_id, tags, icon, sort_order, highlight_profile_id, credential_profile_id, legacy_algorithms, owner, visibility \
              FROM sessions ORDER BY sort_order ASC, name ASC",
         )
         .fetch_all(&self.pool)
@@ -419,7 +428,7 @@ impl DatabaseProvider for SqliteProvider {
         let escaped = query.replace('%', "\\%").replace('_', "\\_");
         let pattern = format!("%{escaped}%");
         let rows = sqlx::query(
-            "SELECT id, folder_id, name, hostname, port, protocol, username, auth_method, jump_host_id, tags, icon, sort_order, highlight_profile_id, credential_profile_id, legacy_algorithms \
+            "SELECT id, folder_id, name, hostname, port, protocol, username, auth_method, jump_host_id, tags, icon, sort_order, highlight_profile_id, credential_profile_id, legacy_algorithms, owner, visibility \
              FROM sessions \
              WHERE name LIKE ? ESCAPE '\\' \
                 OR hostname LIKE ? ESCAPE '\\' \
@@ -953,12 +962,14 @@ impl DatabaseProvider for SqliteProvider {
 
     async fn data_fingerprint(&self) -> DbResult<DataFingerprint> {
         // Fetch only id + name from both tables — minimal data transfer.
-        let folder_rows = sqlx::query("SELECT id, name, sort_order FROM folders ORDER BY id")
-            .fetch_all(&self.pool)
-            .await
-            .map_err(|e| format!("Failed to fingerprint folders: {e}"))?;
+        let folder_rows =
+            sqlx::query("SELECT id, name, sort_order, visibility FROM folders ORDER BY id")
+                .fetch_all(&self.pool)
+                .await
+                .map_err(|e| format!("Failed to fingerprint folders: {e}"))?;
         let session_rows = sqlx::query(
-            "SELECT id, name, hostname, port, folder_id, sort_order FROM sessions ORDER BY id",
+            "SELECT id, name, hostname, port, folder_id, sort_order, visibility \
+             FROM sessions ORDER BY id",
         )
         .fetch_all(&self.pool)
         .await
@@ -970,9 +981,11 @@ impl DatabaseProvider for SqliteProvider {
             let id: String = row.get("id");
             let name: String = row.get("name");
             let sort_order: i32 = row.get("sort_order");
+            let visibility: String = row.get("visibility");
             id.hash(&mut hasher);
             name.hash(&mut hasher);
             sort_order.hash(&mut hasher);
+            visibility.hash(&mut hasher);
         }
         session_rows.len().hash(&mut hasher);
         for row in &session_rows {
@@ -982,12 +995,14 @@ impl DatabaseProvider for SqliteProvider {
             let port: i32 = row.get("port");
             let folder_id: String = row.get("folder_id");
             let sort_order: i32 = row.get("sort_order");
+            let visibility: String = row.get("visibility");
             id.hash(&mut hasher);
             name.hash(&mut hasher);
             hostname.hash(&mut hasher);
             port.hash(&mut hasher);
             folder_id.hash(&mut hasher);
             sort_order.hash(&mut hasher);
+            visibility.hash(&mut hasher);
         }
         Ok(DataFingerprint {
             hash: format!("{:x}", hasher.finish()),

@@ -4,6 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { useEscapeKey } from "../hooks/useEscapeKey";
+import { useAppStore } from "../stores/appStore";
 import { useSessionStore } from "../stores/sessionStore";
 import { useSettingsStore, ALLOWED_TERMINAL_FONTS } from "../stores/settingsStore";
 import {
@@ -129,6 +130,30 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
   const [dbError, setDbError] = useState<string | null>(null);
   const [dbOpResult, setDbOpResult] = useState<string | null>(null);
   const [dbDirty, setDbDirty] = useState(false);
+
+  // User identity (PG mode only)
+  const appDbBackend = useAppStore((s) => s.dbBackend);
+  const appUserIdent = useAppStore((s) => s.userIdent);
+  const [userIdentInput, setUserIdentInput] = useState(appUserIdent ?? "");
+  const [userIdentSaved, setUserIdentSaved] = useState(false);
+
+  useEffect(() => {
+    setUserIdentInput(appUserIdent ?? "");
+  }, [appUserIdent]);
+
+  const handleUserIdentSave = useCallback(async () => {
+    const trimmed = userIdentInput.trim();
+    if (!trimmed) return;
+    try {
+      await useAppStore.getState().setUserIdent(trimmed);
+      setUserIdentSaved(true);
+      setTimeout(() => {
+        setUserIdentSaved(false);
+      }, 3000);
+    } catch (err: unknown) {
+      useToastStore.getState().addToast(String(err));
+    }
+  }, [userIdentInput]);
 
   const [importProgress, setImportProgress] = useState<{
     phase: string;
@@ -1267,7 +1292,40 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
                 )}
             </div>
             <p className="settings-db-note">{t("settings.dbCredentialNote")}</p>
+            <p className="settings-db-note">{t("settings.pgIsolationNote")}</p>
           </>
+        )}
+        {appDbBackend === "postgres" && (
+          <div className="dialog-field">
+            <label htmlFor="settings-user-ident">{t("settings.userIdentLabel")}</label>
+            <div className="dialog-row">
+              <div className="dialog-field-grow">
+                <input
+                  id="settings-user-ident"
+                  type="text"
+                  value={userIdentInput}
+                  onChange={(e) => {
+                    setUserIdentInput(e.target.value);
+                  }}
+                  maxLength={128}
+                />
+              </div>
+              <button
+                type="button"
+                className="dialog-btn"
+                disabled={!userIdentInput.trim() || userIdentInput.trim() === appUserIdent}
+                onClick={() => {
+                  void handleUserIdentSave();
+                }}
+              >
+                {t("dialog.save")}
+              </button>
+            </div>
+            <span className="dialog-hint">{t("settings.userIdentHint")}</span>
+            {userIdentSaved && (
+              <span className="settings-db-success">{t("settings.userIdentSaved")}</span>
+            )}
+          </div>
         )}
         {dbDirty && (
           <div className="dialog-field">

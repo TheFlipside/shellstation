@@ -32,6 +32,16 @@ pub struct DbState(pub Arc<dyn DatabaseProvider>);
 /// so each user keeps their own secrets.
 pub struct CredentialDbState(pub Arc<dyn DatabaseProvider>);
 
+/// Direct access to the PostgreSQL connection pool for operations that
+/// bypass the `DatabaseProvider` trait (e.g. `session_credentials` table).
+/// `None` in SQLite mode.
+pub struct PgPoolState(pub Option<sqlx::PgPool>);
+
+/// The PostgreSQL `current_user` at connection time. Used by the frontend
+/// to determine item ownership. `None` in SQLite mode.
+#[allow(dead_code)]
+pub struct PgUserState(pub Option<String>);
+
 #[async_trait]
 pub trait DatabaseProvider: Send + Sync {
     // ── Folders ──────────────────────────────────────────────────────────

@@ -7,7 +7,8 @@
     "searchPlaceholder": "Поиск сессий…",
     "empty": "Папок пока нет. Нажмите +F, чтобы создать.",
     "refresh": "Обновить",
-    "sortAlphabetically": "Сортировать по алфавиту"
+    "sortAlphabetically": "Сортировать по алфавиту",
+    "sharedFolder": "Shared"
   },
   "contextMenu": {
     "newSession": "Новая сессия",
@@ -22,7 +23,9 @@
     "setCredentials": "Установить учётные данные…",
     "editSessions": "Редактировать сессии…",
     "applyCredentialProfile": "Применить профиль учётных данных…",
-    "bulkEdit": "Массовое редактирование сессий…"
+    "bulkEdit": "Массовое редактирование сессий…",
+    "makeShared": "Make Shared",
+    "makePersonal": "Make Personal"
   },
   "bulkEdit": {
     "title": "Массовое редактирование — {{name}}",
@@ -279,6 +282,10 @@
     "dbSaveRestart": "Сохранить и перезапустить",
     "dbRestartRequired": "Для применения изменений требуется перезапуск приложения.",
     "dbCredentialNote": "Учётные данные всегда хранятся локально для каждого пользователя, никогда в центральной базе.",
+    "pgIsolationNote": "Session isolation requires individual PostgreSQL accounts. With a shared database account, all sessions are visible to all users.",
+    "userIdentLabel": "User Identity",
+    "userIdentHint": "Used to map your credential profiles to sessions across machines. Must be unique per user.",
+    "userIdentSaved": "User identity saved.",
     "dbExport": "Экспорт данных",
     "dbImport": "Импорт данных",
     "dbImportSuccess": "{{message}}",
@@ -341,5 +348,10 @@
     "delete": "Удалить",
     "cancel": "Отмена",
     "save": "Сохранить"
+  },
+  "userIdent": {
+    "promptTitle": "Set User Identity",
+    "promptMessage": "Your user identity is used to map credential profiles to sessions. This must be unique per person and consistent across all your machines.",
+    "promptHint": "Enter your identity (e.g. your username)"
   }
 }

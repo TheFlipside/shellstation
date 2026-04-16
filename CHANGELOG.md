@@ -18,6 +18,7 @@ All notable changes to this project are documented in this file.
 
 - More verbose logging in debug mode
 - Position of GUI separator is saved persistently
+- Implementation of proper multi-user RLS system with shared databases
 
 ### Removed
 

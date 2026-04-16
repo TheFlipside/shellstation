@@ -7,7 +7,8 @@
     "searchPlaceholder": "セッションを検索…",
     "empty": "フォルダーがまだありません。+Fをクリックして作成してください。",
     "refresh": "更新",
-    "sortAlphabetically": "アルファベット順に並べ替え"
+    "sortAlphabetically": "アルファベット順に並べ替え",
+    "sharedFolder": "Shared"
   },
   "contextMenu": {
     "newSession": "新規セッション",
@@ -22,7 +23,9 @@
     "setCredentials": "認証情報を設定…",
     "editSessions": "セッションを編集…",
     "applyCredentialProfile": "認証プロファイルを適用…",
-    "bulkEdit": "セッションを一括編集…"
+    "bulkEdit": "セッションを一括編集…",
+    "makeShared": "Make Shared",
+    "makePersonal": "Make Personal"
   },
   "bulkEdit": {
     "title": "一括編集 — {{name}}",
@@ -279,6 +282,10 @@
     "dbSaveRestart": "保存して再起動",
     "dbRestartRequired": "変更を適用するにはアプリケーションの再起動が必要です。",
     "dbCredentialNote": "認証情報は常にユーザーごとにローカルに保存され、中央データベースには保存されません。",
+    "pgIsolationNote": "Session isolation requires individual PostgreSQL accounts. With a shared database account, all sessions are visible to all users.",
+    "userIdentLabel": "User Identity",
+    "userIdentHint": "Used to map your credential profiles to sessions across machines. Must be unique per user.",
+    "userIdentSaved": "User identity saved.",
     "dbExport": "データをエクスポート",
     "dbImport": "データをインポート",
     "dbImportSuccess": "{{message}}",
@@ -341,5 +348,10 @@
     "delete": "削除",
     "cancel": "キャンセル",
     "save": "保存"
+  },
+  "userIdent": {
+    "promptTitle": "Set User Identity",
+    "promptMessage": "Your user identity is used to map credential profiles to sessions. This must be unique per person and consistent across all your machines.",
+    "promptHint": "Enter your identity (e.g. your username)"
   }
 }

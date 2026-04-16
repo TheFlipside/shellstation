@@ -7,7 +7,8 @@
     "searchPlaceholder": "Cerca sessioni…",
     "empty": "Nessuna cartella presente. Clicca +F per crearne una.",
     "refresh": "Aggiorna",
-    "sortAlphabetically": "Ordina alfabeticamente"
+    "sortAlphabetically": "Ordina alfabeticamente",
+    "sharedFolder": "Shared"
   },
   "contextMenu": {
     "newSession": "Nuova sessione",
@@ -22,7 +23,9 @@
     "setCredentials": "Imposta credenziali…",
     "editSessions": "Modifica sessioni…",
     "applyCredentialProfile": "Applica profilo credenziali…",
-    "bulkEdit": "Modifica sessioni in blocco…"
+    "bulkEdit": "Modifica sessioni in blocco…",
+    "makeShared": "Make Shared",
+    "makePersonal": "Make Personal"
   },
   "bulkEdit": {
     "title": "Modifica in blocco — {{name}}",
@@ -279,6 +282,10 @@
     "dbSaveRestart": "Salva e riavvia",
     "dbRestartRequired": "È necessario riavviare l'applicazione per applicare le modifiche.",
     "dbCredentialNote": "Le credenziali sono sempre archiviate localmente per utente, mai nel database centrale.",
+    "pgIsolationNote": "Session isolation requires individual PostgreSQL accounts. With a shared database account, all sessions are visible to all users.",
+    "userIdentLabel": "User Identity",
+    "userIdentHint": "Used to map your credential profiles to sessions across machines. Must be unique per user.",
+    "userIdentSaved": "User identity saved.",
     "dbExport": "Esporta dati",
     "dbImport": "Importa dati",
     "dbImportSuccess": "{{message}}",
@@ -341,5 +348,10 @@
     "delete": "Elimina",
     "cancel": "Annulla",
     "save": "Salva"
+  },
+  "userIdent": {
+    "promptTitle": "Set User Identity",
+    "promptMessage": "Your user identity is used to map credential profiles to sessions. This must be unique per person and consistent across all your machines.",
+    "promptHint": "Enter your identity (e.g. your username)"
   }
 }

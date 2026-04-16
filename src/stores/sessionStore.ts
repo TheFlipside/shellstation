@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
+import { useAppStore } from "./appStore";
 import { useSettingsStore } from "./settingsStore";
 import { useTerminalStore } from "./terminalStore";
 
@@ -8,6 +9,8 @@ export interface Folder {
   name: string;
   parent_id: string | null;
   sort_order: number;
+  owner: string;
+  visibility: "personal" | "shared";
 }
 
 export interface Session {
@@ -26,6 +29,8 @@ export interface Session {
   highlight_profile_id: string | null;
   credential_profile_id: string | null;
   legacy_algorithms: boolean;
+  owner: string;
+  visibility: "personal" | "shared";
 }
 
 interface SessionState {
@@ -251,10 +256,19 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   // ── Bulk operations ─────────────────────────────────────────────────
 
   folderApplyCredentialProfile: async (folderId, profileId) => {
-    const count = await invoke<number>("folder_apply_credential_profile", {
-      folderId,
-      profileId: profileId ?? null,
-    });
+    const { dbBackend } = useAppStore.getState();
+    let count: number;
+    if (dbBackend === "postgres") {
+      count = await invoke<number>("bulk_set_session_credentials", {
+        folderId,
+        credentialProfileId: profileId ?? null,
+      });
+    } else {
+      count = await invoke<number>("folder_apply_credential_profile", {
+        folderId,
+        profileId: profileId ?? null,
+      });
+    }
     await get().loadAll();
     return count;
   },

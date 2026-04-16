@@ -345,6 +345,48 @@ pub async fn session_data_fingerprint(
     state.0.data_fingerprint().await
 }
 
+// ── Visibility (multi-user) ──────────────────────────────────────────
+
+/// Toggle an item's visibility between "personal" and "shared".
+/// Only meaningful in PostgreSQL mode where RLS enforces ownership.
+#[tauri::command]
+pub async fn set_visibility(
+    pg: State<'_, crate::db::PgPoolState>,
+    id: String,
+    item_type: String,
+    visibility: String,
+) -> Result<(), String> {
+    let pool =
+        pg.0.as_ref()
+            .ok_or("Visibility control is only available in PostgreSQL mode")?;
+    let id_uuid = parse_uuid(&id)?;
+    if visibility != "personal" && visibility != "shared" {
+        return Err(format!(
+            "Invalid visibility \"{visibility}\": must be \"personal\" or \"shared\""
+        ));
+    }
+    let sql = match item_type.as_str() {
+        "folder" => "UPDATE folders SET visibility = $1 WHERE id = $2",
+        "session" => "UPDATE sessions SET visibility = $1 WHERE id = $2",
+        _ => {
+            return Err(format!(
+                "Invalid item_type \"{item_type}\": must be \"folder\" or \"session\""
+            ))
+        }
+    };
+    let id_str = id_uuid.to_string();
+    let result = sqlx::query(sql)
+        .bind(&visibility)
+        .bind(&id_str)
+        .execute(pool)
+        .await
+        .map_err(|e| format!("Failed to set visibility: {e}"))?;
+    if result.rows_affected() == 0 {
+        return Err("Item not found or you are not the owner".to_string());
+    }
+    Ok(())
+}
+
 // ── Reordering commands ──────────────────────────────────────────────
 
 #[tauri::command]
@@ -442,6 +484,8 @@ pub async fn session_connect(
     telnet: State<'_, TelnetState>,
     ready_state: State<'_, TerminalReadyState>,
     logger_state: State<'_, SessionLogState>,
+    pg: State<'_, crate::db::PgPoolState>,
+    config: State<'_, crate::config::ConfigState>,
     id: String,
     cols: u16,
     rows: u16,
@@ -459,9 +503,9 @@ pub async fn session_connect(
             .ok_or_else(|| format!("Session {id} not found"))?;
 
     let restrict = restrict_private_ips.unwrap_or(false);
-    let timeout_secs = connect_timeout.unwrap_or(10);
-    let keepalive_secs = keepalive_interval.unwrap_or(15);
-    let keepalive_missed = keepalive_max.unwrap_or(3) as usize;
+    let timeout_secs = connect_timeout.unwrap_or(10).min(300);
+    let keepalive_secs = keepalive_interval.unwrap_or(15).min(3600);
+    let keepalive_missed = keepalive_max.unwrap_or(3).min(100) as usize;
 
     // Dispatch by protocol.
     if session.protocol == "telnet" {
@@ -531,12 +575,39 @@ pub async fn session_connect(
         return Ok(conn_id);
     }
 
-    // SSH path (default). Use the credential profile if assigned, otherwise
-    // fall back to keyboard-interactive with the session's own username.
-    let (username, auth_method, auth_credential) = match session.credential_profile_id {
+    // SSH path (default). In PG mode, resolve per-user credential mapping first;
+    // fall back to session's own credential_profile_id, then keyboard-interactive.
+    let user_ident = pg.0.as_ref().and_then(|_| {
+        config
+            .config
+            .lock()
+            .ok()
+            .and_then(|c| c.user_ident.clone())
+            .filter(|s| !s.is_empty())
+    });
+    let effective_credential_id = if let (Some(pool), Some(ref ident)) = (&pg.0, &user_ident) {
+        match super::session_credentials::query_user_credential(pool, &id, ident).await? {
+            Some(uuid) => Some(uuid),
+            None => session.credential_profile_id,
+        }
+    } else {
+        session.credential_profile_id
+    };
+
+    let (username, auth_method, auth_credential) = match effective_credential_id {
         Some(profile_id) => {
             debug!(session = %id, profile_id = %profile_id, "Resolving credential profile for session");
-            let profile = resolve_profile_for_session(&cred_db, &session).await?;
+            let profile = cred_db
+                .0
+                .get_credential_profile(profile_id)
+                .await?
+                .ok_or_else(|| {
+                    format!(
+                        "Credential profile for session \"{}\" no longer exists. \
+                         Edit the session and pick a different profile.",
+                        session.name
+                    )
+                })?;
             debug!(session = %id, auth_type = %profile.auth_type, user = %profile.username, "Credential profile resolved");
             profile_to_auth(&profile)?
         }
@@ -558,7 +629,14 @@ pub async fn session_connect(
     };
 
     // Resolve jump host chain.
-    let jump_hops = resolve_jump_chain(&db, &cred_db, &session).await?;
+    let jump_hops = resolve_jump_chain(
+        &db,
+        &cred_db,
+        &session,
+        pg.0.as_ref(),
+        user_ident.as_deref(),
+    )
+    .await?;
     if jump_hops.len() > MAX_JUMP_HOPS {
         return Err(format!("Too many jump hops (max {MAX_JUMP_HOPS})"));
     }
@@ -645,33 +723,6 @@ fn parse_uuid(s: &str) -> Result<Uuid, String> {
     Uuid::parse_str(s).map_err(|e| format!("Invalid UUID '{s}': {e}"))
 }
 
-/// Look up the credential profile assigned to a session, returning a clear
-/// error if none is set or the referenced profile has been deleted.
-async fn resolve_profile_for_session(
-    cred_db: &State<'_, CredentialDbState>,
-    session: &Session,
-) -> Result<CredentialProfile, String> {
-    let profile_id = session.credential_profile_id.ok_or_else(|| {
-        format!(
-            "No credential profile assigned to session \"{}\". \
-             Open the Credentials Manager to create one, then edit the \
-             session to link it.",
-            session.name
-        )
-    })?;
-    cred_db
-        .0
-        .get_credential_profile(profile_id)
-        .await?
-        .ok_or_else(|| {
-            format!(
-                "Credential profile for session \"{}\" no longer exists. \
-                 Edit the session and pick a different profile.",
-                session.name
-            )
-        })
-}
-
 /// Translate a profile into the (username, ssh auth_method, secret) triple
 /// expected by the SSH connection layer.
 fn profile_to_auth(
@@ -715,6 +766,8 @@ async fn resolve_jump_chain(
     db: &State<'_, DbState>,
     cred_db: &State<'_, CredentialDbState>,
     session: &Session,
+    pg_pool: Option<&sqlx::PgPool>,
+    user_ident: Option<&str>,
 ) -> Result<Vec<crate::ssh::JumpHop>, String> {
     let mut hops = Vec::new();
     let mut visited = HashSet::new();
@@ -730,10 +783,11 @@ async fn resolve_jump_chain(
             return Err("Jump host chain too deep".to_string());
         }
 
-        let jump_session =
-            db.0.get_session(jump_id)
-                .await?
-                .ok_or_else(|| format!("Jump host session {jump_id} not found"))?;
+        let jump_session = db.0.get_session(jump_id).await?.ok_or_else(|| {
+            "Jump host session not found. It may be a personal session belonging \
+             to another user — ask the owner to share it."
+                .to_string()
+        })?;
 
         debug!(
             hop = hops.len(),
@@ -743,7 +797,38 @@ async fn resolve_jump_chain(
             "Resolving jump hop"
         );
 
-        let jump_profile = resolve_profile_for_session(cred_db, &jump_session).await?;
+        // In PG mode, resolve per-user credential mapping for the hop.
+        let effective_profile_id = if let (Some(pool), Some(ident)) = (pg_pool, user_ident) {
+            let jump_id_str = jump_id.to_string();
+            match super::session_credentials::query_user_credential(pool, &jump_id_str, ident)
+                .await?
+            {
+                Some(uuid) => Some(uuid),
+                None => jump_session.credential_profile_id,
+            }
+        } else {
+            jump_session.credential_profile_id
+        };
+
+        let profile_id = effective_profile_id.ok_or_else(|| {
+            format!(
+                "No credential profile assigned to jump host \"{}\". \
+                 Open the Credentials Manager to create one, then edit the \
+                 session to link it.",
+                jump_session.name
+            )
+        })?;
+        let jump_profile = cred_db
+            .0
+            .get_credential_profile(profile_id)
+            .await?
+            .ok_or_else(|| {
+                format!(
+                    "Credential profile for jump host \"{}\" no longer exists. \
+                     Edit the session and pick a different profile.",
+                    jump_session.name
+                )
+            })?;
         let (username, auth_method, auth_credential) = profile_to_auth(&jump_profile)?;
 
         hops.push(crate::ssh::JumpHop {

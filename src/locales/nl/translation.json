@@ -7,7 +7,8 @@
     "searchPlaceholder": "Sessies zoeken…",
     "empty": "Nog geen mappen. Klik op +F om er een aan te maken.",
     "refresh": "Vernieuwen",
-    "sortAlphabetically": "Alfabetisch sorteren"
+    "sortAlphabetically": "Alfabetisch sorteren",
+    "sharedFolder": "Shared"
   },
   "contextMenu": {
     "newSession": "Nieuwe sessie",
@@ -22,7 +23,9 @@
     "setCredentials": "Inloggegevens instellen…",
     "editSessions": "Sessies bewerken…",
     "applyCredentialProfile": "Inloggegevensprofiel toepassen…",
-    "bulkEdit": "Sessies bulkbewerken…"
+    "bulkEdit": "Sessies bulkbewerken…",
+    "makeShared": "Make Shared",
+    "makePersonal": "Make Personal"
   },
   "bulkEdit": {
     "title": "Bulkbewerking — {{name}}",
@@ -279,6 +282,10 @@
     "dbSaveRestart": "Opslaan en herstarten",
     "dbRestartRequired": "Herstart van de applicatie vereist om de wijzigingen door te voeren.",
     "dbCredentialNote": "Inloggegevens worden altijd lokaal per gebruiker opgeslagen, nooit in de centrale database.",
+    "pgIsolationNote": "Session isolation requires individual PostgreSQL accounts. With a shared database account, all sessions are visible to all users.",
+    "userIdentLabel": "User Identity",
+    "userIdentHint": "Used to map your credential profiles to sessions across machines. Must be unique per user.",
+    "userIdentSaved": "User identity saved.",
     "dbExport": "Gegevens exporteren",
     "dbImport": "Gegevens importeren",
     "dbImportSuccess": "{{message}}",
@@ -341,5 +348,10 @@
     "delete": "Verwijderen",
     "cancel": "Annuleren",
     "save": "Opslaan"
+  },
+  "userIdent": {
+    "promptTitle": "Set User Identity",
+    "promptMessage": "Your user identity is used to map credential profiles to sessions. This must be unique per person and consistent across all your machines.",
+    "promptHint": "Enter your identity (e.g. your username)"
   }
 }

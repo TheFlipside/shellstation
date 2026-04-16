@@ -7,7 +7,8 @@
     "searchPlaceholder": "Search sessions…",
     "empty": "No folders yet. Click +F to create one.",
     "refresh": "Refresh",
-    "sortAlphabetically": "Sort Alphabetically"
+    "sortAlphabetically": "Sort Alphabetically",
+    "sharedFolder": "Shared"
   },
   "contextMenu": {
     "newSession": "New Session",
@@ -22,7 +23,9 @@
     "setCredentials": "Set Credentials…",
     "editSessions": "Edit Sessions…",
     "applyCredentialProfile": "Apply Credential Profile…",
-    "bulkEdit": "Bulk Edit Sessions…"
+    "bulkEdit": "Bulk Edit Sessions…",
+    "makeShared": "Make Shared",
+    "makePersonal": "Make Personal"
   },
   "bulkEdit": {
     "title": "Bulk Edit — {{name}}",
@@ -279,6 +282,10 @@
     "dbSaveRestart": "Save & Restart",
     "dbRestartRequired": "Application restart required for changes to take effect.",
     "dbCredentialNote": "Credentials are always stored locally per user, never in the central database.",
+    "pgIsolationNote": "Session isolation requires individual PostgreSQL accounts. With a shared database account, all sessions are visible to all users.",
+    "userIdentLabel": "User Identity",
+    "userIdentHint": "Used to map your credential profiles to sessions across machines. Must be unique per user.",
+    "userIdentSaved": "User identity saved.",
     "dbExport": "Export Data",
     "dbImport": "Import Data",
     "dbImportSuccess": "{{message}}",
@@ -341,5 +348,10 @@
     "delete": "Delete",
     "cancel": "Cancel",
     "save": "Save"
+  },
+  "userIdent": {
+    "promptTitle": "Set User Identity",
+    "promptMessage": "Your user identity is used to map credential profiles to sessions. This must be unique per person and consistent across all your machines.",
+    "promptHint": "Enter your identity (e.g. your username)"
   }
 }

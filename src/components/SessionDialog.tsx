@@ -1,7 +1,9 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { invoke } from "@tauri-apps/api/core";
 import { useEscapeKey } from "../hooks/useEscapeKey";
 import type { Folder, Session } from "../stores/sessionStore";
+import { useAppStore } from "../stores/appStore";
 import { useHighlightStore } from "../stores/highlightStore";
 import { useCredentialProfilesStore } from "../stores/credentialProfilesStore";
 import { SESSION_ICON_KEYS, SessionIconComponent } from "./SessionIcons";
@@ -27,6 +29,7 @@ interface SessionDialogProps {
   folders: Folder[];
   sessions: Session[];
   defaultFolderId: string;
+  sessionId?: string;
   initial?: Partial<SessionFormData>;
   onSubmit: (data: SessionFormData) => void;
   onCancel: () => void;
@@ -38,6 +41,7 @@ export function SessionDialog({
   folders,
   sessions,
   defaultFolderId,
+  sessionId,
   initial,
   onSubmit,
   onCancel,
@@ -45,6 +49,7 @@ export function SessionDialog({
 }: SessionDialogProps): React.JSX.Element {
   const { t } = useTranslation();
   useEscapeKey(onCancel);
+  const isPg = useAppStore((s) => s.dbBackend) === "postgres";
   const [folderId, setFolderId] = useState(initial?.folderId ?? defaultFolderId);
   const [name, setName] = useState(initial?.name ?? "");
   const [hostname, setHostname] = useState(initial?.hostname ?? "");
@@ -61,6 +66,20 @@ export function SessionDialog({
     initial?.credentialProfileId ?? "",
   );
   const [legacyAlgorithms, setLegacyAlgorithms] = useState(initial?.legacyAlgorithms ?? false);
+
+  // In PG mode, load the per-user credential mapping for this session.
+  useEffect(() => {
+    if (!isPg || !sessionId) return;
+    invoke<string | null>("get_session_credential", { sessionId })
+      .then((profileId) => {
+        if (profileId !== null) {
+          setCredentialProfileId(profileId);
+        }
+      })
+      .catch(() => {
+        // Ignore — fall back to session's own credential_profile_id
+      });
+  }, [isPg, sessionId]);
   const highlightProfiles = useHighlightStore((s) => s.profiles);
   const credentialProfiles = useCredentialProfilesStore((s) => s.profiles);
   const [error, setError] = useState("");
@@ -74,6 +93,18 @@ export function SessionDialog({
       setError(t("session.portRange"));
       return;
     }
+
+    // In PG mode, save credential mapping per-user and don't overwrite the
+    // shared session's credential_profile_id column.
+    if (isPg && sessionId && protocol !== "telnet") {
+      invoke("set_session_credential", {
+        sessionId,
+        credentialProfileId: credentialProfileId || null,
+      }).catch(() => {
+        // Best-effort — the main save will still proceed
+      });
+    }
+
     onSubmit({
       folderId,
       name: name.trim(),
@@ -85,7 +116,8 @@ export function SessionDialog({
       icon,
       jumpHostId: protocol === "telnet" ? null : jumpHostId || null,
       highlightProfileId: highlightProfileId || null,
-      credentialProfileId: protocol === "telnet" ? null : credentialProfileId || null,
+      // In PG mode, don't write credentialProfileId to the shared session row
+      credentialProfileId: isPg || protocol === "telnet" ? null : credentialProfileId || null,
       legacyAlgorithms: protocol === "ssh" ? legacyAlgorithms : false,
     });
   };

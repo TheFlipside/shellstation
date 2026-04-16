@@ -16,7 +16,7 @@ use commands::{DbStatusState, TerminalReadyState};
 use config::{ConfigState, DbBackend};
 use db::postgres::PostgresProvider;
 use db::sqlite::SqliteProvider;
-use db::{CredentialDbState, DbState};
+use db::{CredentialDbState, DbState, PgPoolState, PgUserState};
 use pty::PtyState;
 use sha2::{Digest, Sha384};
 use sqlx::postgres::PgPoolOptions;
@@ -263,6 +263,129 @@ fn sanitize_pg_error(raw: &str) -> String {
     // Fallback: generic message without leaking internals. Direct the user
     // to the logs since the real detail is there.
     "PostgreSQL initialization failed. See application logs for details.".to_string()
+}
+
+/// Idempotent RLS setup for PostgreSQL multi-user isolation.
+///
+/// Called after `sqlx::migrate!()` succeeds. Statements are written so that
+/// running them multiple times is harmless (`IF NOT EXISTS`, etc.).
+async fn setup_postgres_rls(pool: &sqlx::PgPool) -> Result<(), String> {
+    // Fix the placeholder owner from the migration DEFAULT.
+    sqlx::query("UPDATE folders SET owner = current_user WHERE owner = 'local'")
+        .execute(pool)
+        .await
+        .map_err(|e| format!("RLS setup (fix folder owners): {e}"))?;
+    sqlx::query("UPDATE sessions SET owner = current_user WHERE owner = 'local'")
+        .execute(pool)
+        .await
+        .map_err(|e| format!("RLS setup (fix session owners): {e}"))?;
+
+    // Enable RLS. FORCE ensures policies apply even to the table owner.
+    for stmt in [
+        "ALTER TABLE folders ENABLE ROW LEVEL SECURITY",
+        "ALTER TABLE folders FORCE ROW LEVEL SECURITY",
+        "ALTER TABLE sessions ENABLE ROW LEVEL SECURITY",
+        "ALTER TABLE sessions FORCE ROW LEVEL SECURITY",
+    ] {
+        sqlx::query(stmt)
+            .execute(pool)
+            .await
+            .map_err(|e| format!("RLS setup ({stmt}): {e}"))?;
+    }
+
+    // Policies — use DO blocks so CREATE POLICY IF NOT EXISTS works on PG < 17.
+    // PG 14+ supports IF NOT EXISTS directly; wrap in exception handler for safety.
+    let policies = [
+        // Folders
+        (
+            "folders_owner_all",
+            "folders",
+            "ALL",
+            "owner = current_user",
+            "",
+        ),
+        (
+            "folders_shared_read",
+            "folders",
+            "SELECT",
+            "visibility = 'shared'",
+            "",
+        ),
+        (
+            "folders_shared_update",
+            "folders",
+            "UPDATE",
+            "visibility = 'shared'",
+            "",
+        ),
+        (
+            "folders_shared_delete",
+            "folders",
+            "DELETE",
+            "visibility = 'shared' AND owner = current_user",
+            "",
+        ),
+        // Sessions
+        (
+            "sessions_owner_all",
+            "sessions",
+            "ALL",
+            "owner = current_user",
+            "",
+        ),
+        (
+            "sessions_shared_read",
+            "sessions",
+            "SELECT",
+            "visibility = 'shared'",
+            "",
+        ),
+        (
+            "sessions_shared_update",
+            "sessions",
+            "UPDATE",
+            "visibility = 'shared'",
+            "",
+        ),
+        (
+            "sessions_shared_delete",
+            "sessions",
+            "DELETE",
+            "visibility = 'shared' AND owner = current_user",
+            "",
+        ),
+    ];
+
+    for (name, table, cmd, using_expr, _) in &policies {
+        let sql = format!(
+            "DO $$ BEGIN \
+                 CREATE POLICY {name} ON {table} FOR {cmd} USING ({using_expr}); \
+             EXCEPTION WHEN duplicate_object THEN NULL; \
+             END $$"
+        );
+        sqlx::query(&sql)
+            .execute(pool)
+            .await
+            .map_err(|e| format!("RLS setup (policy {name}): {e}"))?;
+    }
+
+    // CHECK constraints on visibility values.
+    for table in ["folders", "sessions"] {
+        let sql = format!(
+            "DO $$ BEGIN \
+                 ALTER TABLE {table} ADD CONSTRAINT {table}_vis_ck \
+                     CHECK (visibility IN ('personal', 'shared')); \
+             EXCEPTION WHEN duplicate_object THEN NULL; \
+             END $$"
+        );
+        sqlx::query(&sql)
+            .execute(pool)
+            .await
+            .map_err(|e| format!("RLS setup (constraint {table}_vis_ck): {e}"))?;
+    }
+
+    tracing::info!("PostgreSQL RLS setup complete");
+    Ok(())
 }
 
 /// Build the application menu, mirroring the Tauri default but using a custom
@@ -632,10 +755,13 @@ pub fn run() {
                     }
                     app.manage(DbState(provider.clone() as Arc<dyn db::DatabaseProvider>));
                     app.manage(CredentialDbState(provider as Arc<dyn db::DatabaseProvider>));
+                    app.manage(PgPoolState(None));
+                    app.manage(PgUserState(None));
                     app.manage(DbStatusState(commands::DbStatus {
                         backend: "sqlite".to_string(),
                         healthy: db_error.is_none(),
                         error: db_error,
+                        pg_user: None,
                     }));
                 }
                 DbBackend::Postgres => {
@@ -671,8 +797,23 @@ pub fn run() {
                         Ok::<sqlx::PgPool, Box<dyn std::error::Error>>(pool)
                     }) {
                         Ok(pool) => {
+                            // Run post-migration RLS setup (idempotent).
+                            if let Err(e) =
+                                tauri::async_runtime::block_on(setup_postgres_rls(&pool))
+                            {
+                                tracing::error!("PostgreSQL RLS setup failed: {e}");
+                            }
+                            // Query current_user for ownership tracking.
+                            let pg_user = tauri::async_runtime::block_on(async {
+                                sqlx::query_scalar::<_, String>("SELECT current_user")
+                                    .fetch_one(&pool)
+                                    .await
+                                    .ok()
+                            });
+                            tracing::info!(pg_user = ?pg_user, "PostgreSQL current_user");
+
                             let provider: Arc<dyn db::DatabaseProvider> =
-                                Arc::new(PostgresProvider::new(pool));
+                                Arc::new(PostgresProvider::new(pool.clone()));
                             if let Err(e) = tauri::async_runtime::block_on(
                                 migrate_legacy::migrate_legacy_credentials(
                                     &provider,
@@ -682,10 +823,13 @@ pub fn run() {
                                 tracing::error!("Legacy credential migration failed: {e}");
                             }
                             app.manage(DbState(provider));
+                            app.manage(PgPoolState(Some(pool)));
+                            app.manage(PgUserState(pg_user.clone()));
                             app.manage(DbStatusState(commands::DbStatus {
                                 backend: "postgres".to_string(),
                                 healthy: true,
                                 error: None,
+                                pg_user,
                             }));
                         }
                         Err(e) => {
@@ -715,10 +859,13 @@ pub fn run() {
                             })?;
                             let provider = SqliteProvider::new(stub_pool);
                             app.manage(DbState(Arc::new(provider)));
+                            app.manage(PgPoolState(None));
+                            app.manage(PgUserState(None));
                             app.manage(DbStatusState(commands::DbStatus {
                                 backend: "postgres".to_string(),
                                 healthy: false,
                                 error: Some(safe_msg),
+                                pg_user: None,
                             }));
                         }
                     }
@@ -777,10 +924,19 @@ pub fn run() {
             // Bulk operations
             commands::folder_apply_credential_profile,
             commands::folder_bulk_edit_sessions,
+            // Visibility (multi-user)
+            commands::set_visibility,
+            // Session credentials (multi-user)
+            commands::set_session_credential,
+            commands::get_session_credential,
+            commands::bulk_set_session_credentials,
             // Database config & migration
             commands::app_restart,
             commands::db_get_config,
             commands::db_get_status,
+            commands::get_user_ident,
+            commands::set_user_ident,
+            commands::get_os_username,
             commands::db_test_connection,
             commands::db_create_database,
             commands::db_save_config,

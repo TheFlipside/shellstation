@@ -17,6 +17,11 @@ pub struct AppConfig {
     pub logging: LoggingConfig,
     #[serde(default)]
     pub app_logging: AppLoggingConfig,
+    /// User identity for multi-user PostgreSQL mode. Used to key per-user
+    /// credential mappings in the `session_credentials` table. Prompted on
+    /// first launch in PostgreSQL mode, pre-filled with the OS username.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user_ident: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

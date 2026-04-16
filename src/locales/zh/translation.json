@@ -7,7 +7,8 @@
     "searchPlaceholder": "搜索会话…",
     "empty": "还没有文件夹。点击 +F 创建一个。",
     "refresh": "刷新",
-    "sortAlphabetically": "按字母顺序排列"
+    "sortAlphabetically": "按字母顺序排列",
+    "sharedFolder": "Shared"
   },
   "contextMenu": {
     "newSession": "新建会话",
@@ -22,7 +23,9 @@
     "setCredentials": "设置凭据…",
     "editSessions": "编辑会话…",
     "applyCredentialProfile": "应用凭据配置文件…",
-    "bulkEdit": "批量编辑会话…"
+    "bulkEdit": "批量编辑会话…",
+    "makeShared": "Make Shared",
+    "makePersonal": "Make Personal"
   },
   "bulkEdit": {
     "title": "批量编辑 — {{name}}",
@@ -279,6 +282,10 @@
     "dbSaveRestart": "保存并重启",
     "dbRestartRequired": "需要重启应用程序以使更改生效。",
     "dbCredentialNote": "凭据始终按用户本地存储，不会存储在中央数据库中。",
+    "pgIsolationNote": "Session isolation requires individual PostgreSQL accounts. With a shared database account, all sessions are visible to all users.",
+    "userIdentLabel": "User Identity",
+    "userIdentHint": "Used to map your credential profiles to sessions across machines. Must be unique per user.",
+    "userIdentSaved": "User identity saved.",
     "dbExport": "导出数据",
     "dbImport": "导入数据",
     "dbImportSuccess": "{{message}}",
@@ -341,5 +348,10 @@
     "delete": "删除",
     "cancel": "取消",
     "save": "保存"
+  },
+  "userIdent": {
+    "promptTitle": "Set User Identity",
+    "promptMessage": "Your user identity is used to map credential profiles to sessions. This must be unique per person and consistent across all your machines.",
+    "promptHint": "Enter your identity (e.g. your username)"
   }
 }

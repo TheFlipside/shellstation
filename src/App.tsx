@@ -9,7 +9,9 @@ import { SessionSidebar } from "./components/SessionSidebar";
 import { SettingsDialog } from "./components/SettingsDialog";
 import { TerminalTabs } from "./components/TerminalTabs";
 import { ToastContainer } from "./components/ToastContainer";
+import { UserIdentDialog } from "./components/UserIdentDialog";
 import { useTheme } from "./hooks/useTheme";
+import { useAppStore } from "./stores/appStore";
 import { useSettingsStore } from "./stores/settingsStore";
 import { useTerminalStore } from "./stores/terminalStore";
 
@@ -17,6 +19,7 @@ interface DbStatus {
   backend: string;
   healthy: boolean;
   error: string | null;
+  pgUser: string | null;
 }
 
 function App(): React.JSX.Element {
@@ -30,18 +33,47 @@ function App(): React.JSX.Element {
   const [showSettingsFromBanner, setShowSettingsFromBanner] = useState(false);
   const dragging = useRef(false);
 
-  // Check DB status on mount
+  // Check DB status on mount and populate app store
   useEffect(() => {
     invoke<DbStatus>("db_get_status")
       .then((status) => {
         if (!status.healthy) {
           setDbStatus(status);
         }
+        const { setDbBackend, setPgUser, loadUserIdent } = useAppStore.getState();
+        const backend = status.backend === "postgres" ? "postgres" : "sqlite";
+        setDbBackend(backend);
+        setPgUser(status.pgUser ?? null);
+        if (backend === "postgres" && status.healthy) {
+          void loadUserIdent();
+        }
       })
       .catch(() => {
         // Status check failed — ignore
       });
   }, []);
+
+  // Show user identity prompt in PG mode when not yet configured
+  const dbBackend = useAppStore((s) => s.dbBackend);
+  const userIdent = useAppStore((s) => s.userIdent);
+  const [showIdentPrompt, setShowIdentPrompt] = useState(false);
+
+  useEffect(() => {
+    // Wait until DB status has been fetched and userIdent loaded
+    if (dbBackend !== "postgres" || dbStatus !== null) return;
+    // PG mode, healthy DB — check if we need the prompt
+    if (userIdent === null) {
+      const timer = setTimeout(() => {
+        const currentIdent = useAppStore.getState().userIdent;
+        if (currentIdent === null || currentIdent === "") {
+          setShowIdentPrompt(true);
+        }
+      }, 300);
+      return () => {
+        clearTimeout(timer);
+      };
+    }
+  }, [dbBackend, userIdent, dbStatus]);
 
   const handleMouseDown = useCallback(() => {
     dragging.current = true;
@@ -162,6 +194,13 @@ function App(): React.JSX.Element {
         <SettingsDialog
           onClose={() => {
             setShowSettingsFromBanner(false);
+          }}
+        />
+      )}
+      {showIdentPrompt && (
+        <UserIdentDialog
+          onDone={() => {
+            setShowIdentPrompt(false);
           }}
         />
       )}

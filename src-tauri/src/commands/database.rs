@@ -11,10 +11,13 @@ use crate::db::{CredentialDbState, DbState};
 
 /// Status of the database backend at startup.
 #[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DbStatus {
     pub backend: String,
     pub healthy: bool,
     pub error: Option<String>,
+    /// PostgreSQL `current_user` — populated only in PostgreSQL mode.
+    pub pg_user: Option<String>,
 }
 
 /// Tauri managed state for DB health status.
@@ -45,6 +48,60 @@ pub async fn db_get_config(state: State<'_, ConfigState>) -> Result<AppConfig, S
 #[tauri::command]
 pub async fn db_get_status(state: State<'_, DbStatusState>) -> Result<DbStatus, String> {
     Ok(state.0.clone())
+}
+
+// ── User identity commands (multi-user PostgreSQL mode) ─────────────
+
+/// Maximum length for the user identity string.
+const MAX_USER_IDENT_LEN: usize = 128;
+
+/// Return the configured user identity for multi-user credential mapping.
+#[tauri::command]
+pub async fn get_user_ident(state: State<'_, ConfigState>) -> Result<Option<String>, String> {
+    let config = state
+        .config
+        .lock()
+        .map_err(|e| format!("Config lock poisoned: {e}"))?;
+    Ok(config.user_ident.clone())
+}
+
+/// Set the user identity and persist it to config.json.
+#[tauri::command]
+pub async fn set_user_ident(
+    state: State<'_, ConfigState>,
+    user_ident: String,
+) -> Result<(), String> {
+    let trimmed = user_ident.trim().to_string();
+    if trimmed.is_empty() {
+        return Err("User identity must not be empty".to_string());
+    }
+    if trimmed.len() > MAX_USER_IDENT_LEN {
+        return Err(format!(
+            "User identity too long (max {MAX_USER_IDENT_LEN} characters)"
+        ));
+    }
+    if trimmed.chars().any(|c| c.is_control()) {
+        return Err("User identity must not contain control characters".to_string());
+    }
+    let mut config = state
+        .config
+        .lock()
+        .map_err(|e| format!("Config lock poisoned: {e}"))?;
+    config.user_ident = Some(trimmed);
+    config::save_config(&state.config_path, &config)
+}
+
+/// Return the current OS username for pre-filling the user identity prompt.
+#[tauri::command]
+pub async fn get_os_username() -> Result<String, String> {
+    #[cfg(unix)]
+    {
+        Ok(std::env::var("USER").unwrap_or_else(|_| "user".to_string()))
+    }
+    #[cfg(windows)]
+    {
+        Ok(std::env::var("USERNAME").unwrap_or_else(|_| "user".to_string()))
+    }
 }
 
 #[tauri::command]
@@ -305,6 +362,14 @@ pub async fn db_save_config(
         }
     }
 
+    // Preserve user_ident across config saves.
+    let existing_user_ident = state
+        .config
+        .lock()
+        .map_err(|e| format!("Config lock poisoned: {e}"))?
+        .user_ident
+        .clone();
+
     let new_config = AppConfig {
         db_backend,
         sqlite_path,
@@ -318,6 +383,7 @@ pub async fn db_save_config(
         },
         logging: existing_logging,
         app_logging: existing_app_logging,
+        user_ident: existing_user_ident,
     };
 
     config::save_config(&state.config_path, &new_config)?;

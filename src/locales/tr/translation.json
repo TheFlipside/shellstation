@@ -7,7 +7,8 @@
     "searchPlaceholder": "Oturumları ara…",
     "empty": "Henüz klasör yok. Oluşturmak için +F’ye tıklayın.",
     "refresh": "Yenile",
-    "sortAlphabetically": "Alfabetik sırala"
+    "sortAlphabetically": "Alfabetik sırala",
+    "sharedFolder": "Shared"
   },
   "contextMenu": {
     "newSession": "Yeni Oturum",
@@ -22,7 +23,9 @@
     "setCredentials": "Kimlik bilgilerini ayarla…",
     "editSessions": "Oturumları düzenle…",
     "applyCredentialProfile": "Kimlik profilini uygula…",
-    "bulkEdit": "Oturumları toplu düzenle…"
+    "bulkEdit": "Oturumları toplu düzenle…",
+    "makeShared": "Make Shared",
+    "makePersonal": "Make Personal"
   },
   "bulkEdit": {
     "title": "Toplu Düzenleme — {{name}}",
@@ -279,6 +282,10 @@
     "dbSaveRestart": "Kaydet ve yeniden başlat",
     "dbRestartRequired": "Değişikliklerin etkili olması için uygulamanın yeniden başlatılması gerekiyor.",
     "dbCredentialNote": "Kimlik bilgileri her zaman kullanıcı başına yerel olarak saklanır, asla merkezi veritabanında saklanmaz.",
+    "pgIsolationNote": "Session isolation requires individual PostgreSQL accounts. With a shared database account, all sessions are visible to all users.",
+    "userIdentLabel": "User Identity",
+    "userIdentHint": "Used to map your credential profiles to sessions across machines. Must be unique per user.",
+    "userIdentSaved": "User identity saved.",
     "dbExport": "Verileri dışa aktar",
     "dbImport": "Verileri içe aktar",
     "dbImportSuccess": "{{message}}",
@@ -341,5 +348,10 @@
     "delete": "Sil",
     "cancel": "İptal",
     "save": "Kaydet"
+  },
+  "userIdent": {
+    "promptTitle": "Set User Identity",
+    "promptMessage": "Your user identity is used to map credential profiles to sessions. This must be unique per person and consistent across all your machines.",
+    "promptHint": "Enter your identity (e.g. your username)"
   }
 }

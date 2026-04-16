@@ -4,6 +4,7 @@ mod highlight;
 mod logging;
 mod pty;
 mod session;
+mod session_credentials;
 mod ssh;
 mod telnet;
 
@@ -13,6 +14,7 @@ pub use highlight::*;
 pub use logging::*;
 pub use pty::*;
 pub use session::*;
+pub use session_credentials::*;
 pub use ssh::*;
 pub use telnet::*;
 
