@@ -4,7 +4,7 @@
     "newFolder": "New Folder",
     "newSession": "New Session",
     "createFolderFirst": "Create a folder first.",
-    "searchPlaceholder": "Search sessions\u2026",
+    "searchPlaceholder": "Search sessions…",
     "empty": "No folders yet. Click +F to create one.",
     "refresh": "Refresh",
     "sortAlphabetically": "Sort Alphabetically"
@@ -13,19 +13,19 @@
     "newSession": "New Session",
     "newSubfolder": "New Subfolder",
     "rename": "Rename",
-    "moveTo": "Move To\u2026",
+    "moveTo": "Move To…",
     "delete": "Delete",
     "connect": "Connect",
     "edit": "Edit",
     "clone": "Clone Session",
     "sortAlphabetically": "Sort Alphabetically",
-    "setCredentials": "Set Credentials\u2026",
-    "editSessions": "Edit Sessions\u2026",
-    "applyCredentialProfile": "Apply Credential Profile\u2026",
-    "bulkEdit": "Bulk Edit Sessions\u2026"
+    "setCredentials": "Set Credentials…",
+    "editSessions": "Edit Sessions…",
+    "applyCredentialProfile": "Apply Credential Profile…",
+    "bulkEdit": "Bulk Edit Sessions…"
   },
   "bulkEdit": {
-    "title": "Bulk Edit \u2014 {{name}}",
+    "title": "Bulk Edit — {{name}}",
     "info": "Apply changes to all sessions in this folder and subfolders. Only checked fields will be updated. Jump host only applies to SSH sessions.",
     "setJumpHost": "Set Jump Host",
     "setHighlightProfile": "Set Highlight Profile",
@@ -42,7 +42,7 @@
     "namePlaceholder": "Folder name"
   },
   "folderCredential": {
-    "title": "Apply Credential Profile \u2014 {{name}}",
+    "title": "Apply Credential Profile — {{name}}",
     "info": "Assigns a credential profile to all SSH sessions in this folder and subfolders. Telnet sessions are excluded.",
     "profileLabel": "Credential Profile",
     "profileNone": "(Clear assignment)",
@@ -67,12 +67,12 @@
     "passwordHint": "Leave blank to keep the existing secret.",
     "keyPathLabel": "Key Path",
     "keyPathPlaceholder": "~/.ssh/id_ed25519",
-    "keyPathBrowse": "Browse\u2026",
+    "keyPathBrowse": "Browse…",
     "noneYet": "No credential profiles yet.",
     "deleteConfirm": "Delete credential profile \"{{name}}\"? Sessions referencing it will need a new profile assigned.",
     "nameRequired": "Profile name is required.",
     "none": "(None)",
-    "manageLink": "Manage\u2026"
+    "manageLink": "Manage…"
   },
   "session": {
     "deleteConfirm": "Delete session \"{{name}}\"?",
@@ -95,7 +95,7 @@
     "keyPathLabel": "Key Path",
     "passwordPlaceholder": "password",
     "keyPathPlaceholder": "~/.ssh/id_ed25519",
-    "keyPathBrowse": "Browse\u2026",
+    "keyPathBrowse": "Browse…",
     "jumpHostLabel": "Jump Host",
     "jumpHostNone": "None",
     "legacyAlgorithmsLabel": "Enable legacy SSH algorithms",
@@ -127,7 +127,7 @@
     "cancel": "Cancel",
     "save": "Save",
     "move": "Move",
-    "moveTo": "Move To\u2026",
+    "moveTo": "Move To…",
     "targetFolder": "Target Folder",
     "root": "(Root)"
   },
@@ -149,7 +149,9 @@
     "scrollRight": "Scroll tabs right",
     "processExited": "[Process exited]",
     "connectionFailed": "Connection failed: {{message}}",
-    "sshConnectionFailed": "SSH connection failed: {{message}}"
+    "sshConnectionFailed": "SSH connection failed: {{message}}",
+    "tabContextReconnect": "Reconnect",
+    "reconnectHint": "[Press Enter to reconnect]"
   },
   "hostVerify": {
     "title": "Verify Host Key",
@@ -172,14 +174,14 @@
     "commandPlaceholder": "e.g. show running-config\\r",
     "escapeHintTitle": "Escape sequences:",
     "escapeHintItems": [
-      "\\r \u2014 Carriage return (CR)",
-      "\\n \u2014 Newline (LF)",
-      "\\t \u2014 Tab",
-      "\\b \u2014 Backspace",
-      "\\e \u2014 Escape (ESC)",
-      "\\\\ \u2014 Literal backslash",
-      "\\p \u2014 Pause for 1 second",
-      "\\v \u2014 Paste from clipboard"
+      "\\r — Carriage return (CR)",
+      "\\n — Newline (LF)",
+      "\\t — Tab",
+      "\\b — Backspace",
+      "\\e — Escape (ESC)",
+      "\\\\ — Literal backslash",
+      "\\p — Pause for 1 second",
+      "\\v — Paste from clipboard"
     ],
     "colorLabel": "Color",
     "clear": "Clear",
@@ -250,8 +252,8 @@
     "dbSqlitePathPlaceholder": "Default (sessions.db in config directory)",
     "dbSqlitePathHint": "Path to the SQLite database file. Leave empty to use the default location. Changing this requires a restart.",
     "dbSqlitePathError": "Invalid path: {{message}}",
-    "dbBrowse": "Browse\u2026",
-    "dbCreateNew": "Create New\u2026",
+    "dbBrowse": "Browse…",
+    "dbCreateNew": "Create New…",
     "dbPostgres": "PostgreSQL Server",
     "dbHostLabel": "Host",
     "dbHostPlaceholder": "db.example.com",

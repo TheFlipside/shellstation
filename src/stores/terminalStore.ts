@@ -37,6 +37,7 @@ interface TerminalState {
   setActiveTab: (id: string) => void;
   updateTabTitle: (id: string, title: string) => void;
   markTabExited: (id: string) => void;
+  replaceTab: (oldId: string, newId: string) => void;
   reorderTabs: (fromIndex: number, toIndex: number) => void;
 }
 
@@ -82,6 +83,13 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
   markTabExited: (id: string) => {
     set((state) => ({
       tabs: state.tabs.map((t) => (t.id === id ? { ...t, exited: true } : t)),
+    }));
+  },
+
+  replaceTab: (oldId: string, newId: string) => {
+    set((state) => ({
+      tabs: state.tabs.map((t) => (t.id === oldId ? { ...t, id: newId, exited: false } : t)),
+      activeTabId: state.activeTabId === oldId ? newId : state.activeTabId,
     }));
   },
 

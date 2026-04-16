@@ -7,6 +7,7 @@ All notable changes to this project are documented in this file.
 ### Added
 
 - Version info in "About" help menu
+- Ability to quickly reconnect disconnected sessions
 
 ### Fixed
 

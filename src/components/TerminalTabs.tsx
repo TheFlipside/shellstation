@@ -22,8 +22,16 @@ interface TerminalTabsProps {
 
 export function TerminalTabs({ uiScale }: TerminalTabsProps): React.JSX.Element {
   const { t } = useTranslation();
-  const { tabs, activeTabId, addTab, removeTab, setActiveTab, reorderTabs, markTabExited } =
-    useTerminalStore();
+  const {
+    tabs,
+    activeTabId,
+    addTab,
+    removeTab,
+    setActiveTab,
+    reorderTabs,
+    markTabExited,
+    replaceTab,
+  } = useTerminalStore();
   const addToast = useToastStore((s) => s.addToast);
   const dragIndexRef = useRef<number | null>(null);
   const dragStartXRef = useRef(0);
@@ -298,6 +306,43 @@ export function TerminalTabs({ uiScale }: TerminalTabsProps): React.JSX.Element 
     [tabs, createLocalTab, addToast, t],
   );
 
+  const reconnectTab = useCallback(
+    (tabId: string) => {
+      const tab = tabs.find((tb) => tb.id === tabId);
+      if (!tab?.sessionDbId || !tab.exited) return;
+      const session = useSessionStore.getState().sessions.find((s) => s.id === tab.sessionDbId);
+      if (!session) {
+        addToast(t("terminal.connectionFailed", { message: "Session not found" }));
+        return;
+      }
+
+      const settings = useSettingsStore.getState();
+      invoke<string>("session_connect", {
+        id: tab.sessionDbId,
+        cols: 80,
+        rows: 24,
+        restrictPrivateIps: settings.restrictPrivateIps,
+        connectTimeout: settings.connectTimeout,
+        keepaliveInterval: settings.keepaliveInterval,
+        keepaliveMax: settings.keepaliveMax,
+      })
+        .then((newConnId) => {
+          // Update stableTabIdsRef so the terminal keeps its DOM position.
+          const stableIds = stableTabIdsRef.current;
+          const idx = stableIds.indexOf(tabId);
+          if (idx !== -1) {
+            stableIds[idx] = newConnId;
+          }
+          replaceTab(tabId, newConnId);
+        })
+        .catch((err: unknown) => {
+          const msg = err instanceof Error ? err.message : String(err);
+          addToast(t("terminal.connectionFailed", { message: msg }));
+        });
+    },
+    [tabs, replaceTab, addToast, t],
+  );
+
   const getTabContextItems = useCallback(
     (tabId: string): ContextMenuItem[] => {
       const index = tabs.findIndex((tb) => tb.id === tabId);
@@ -329,6 +374,14 @@ export function TerminalTabs({ uiScale }: TerminalTabsProps): React.JSX.Element 
           },
         },
       ];
+      if (tab.exited && tab.sessionDbId) {
+        items.push({
+          label: t("terminal.tabContextReconnect"),
+          onClick: () => {
+            reconnectTab(tabId);
+          },
+        });
+      }
       if (tab.sessionDbId || tab.type === "local") {
         items.push({
           label: t("terminal.tabContextClone"),
@@ -339,7 +392,7 @@ export function TerminalTabs({ uiScale }: TerminalTabsProps): React.JSX.Element 
       }
       return items;
     },
-    [tabs, t, requestCloseTab, requestCloseMultipleTabs, cloneTab],
+    [tabs, t, requestCloseTab, requestCloseMultipleTabs, cloneTab, reconnectTab],
   );
 
   // Listen for host key verification events from any SSH session.
@@ -491,12 +544,20 @@ export function TerminalTabs({ uiScale }: TerminalTabsProps): React.JSX.Element 
               sessionType={tab.type}
               sessionDbId={tab.sessionDbId}
               visible={tab.id === activeTabId}
+              exited={tab.exited}
               onExit={() => {
                 markTabExited(tab.id);
                 if (closeOnDisconnect) {
                   destroyTab(tab.id).catch(noop);
                 }
               }}
+              onReconnect={
+                tab.sessionDbId
+                  ? () => {
+                      reconnectTab(tab.id);
+                    }
+                  : undefined
+              }
             />
           );
         })}

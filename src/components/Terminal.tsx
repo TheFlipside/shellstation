@@ -18,7 +18,9 @@ interface TerminalProps {
   sessionType: SessionType;
   sessionDbId?: string;
   visible: boolean;
+  exited?: boolean;
   onExit?: () => void;
+  onReconnect?: () => void;
 }
 
 /** Decode a base64 string to bytes using the built-in atob. */
@@ -98,7 +100,9 @@ export function Terminal({
   sessionType,
   sessionDbId,
   visible,
+  exited,
   onExit,
+  onReconnect,
 }: TerminalProps): React.JSX.Element {
   const containerRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<XTerm | null>(null);
@@ -106,6 +110,10 @@ export function Terminal({
   const highlightRef = useRef<HighlightEngine | null>(null);
   const onExitRef = useRef(onExit);
   onExitRef.current = onExit;
+  const exitedRef = useRef(exited);
+  exitedRef.current = exited;
+  const onReconnectRef = useRef(onReconnect);
+  onReconnectRef.current = onReconnect;
 
   const { terminalFontFamily, terminalFontSize, copyOnSelect, pasteOnRightClick } =
     useSettingsStore();
@@ -267,6 +275,14 @@ export function Terminal({
         return false;
       }
 
+      // Enter on a disconnected session — trigger reconnect if available,
+      // otherwise just block the input (the backend session is gone).
+      if (event.key === "Enter" && exitedRef.current) {
+        event.preventDefault();
+        onReconnectRef.current?.();
+        return false;
+      }
+
       return true;
     });
 
@@ -300,6 +316,9 @@ export function Terminal({
 
       exitUnlisten = await listen(`terminal-exit-${sessionId}`, () => {
         term.write(`\r\n${i18n.t("terminal.processExited")}\r\n`);
+        if (sessionDbId) {
+          term.write(`${i18n.t("terminal.reconnectHint")}\r\n`);
+        }
         if (onExitRef.current) {
           onExitRef.current();
         }
