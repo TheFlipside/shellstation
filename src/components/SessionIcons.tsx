@@ -91,23 +91,50 @@ function ServerIcon(props: SvgProps): React.JSX.Element {
   );
 }
 
-/** Network switch with bidirectional arrows. */
+/** Network switch — classic Cisco-style: rounded box with four directional arrows. */
 function SwitchIcon(props: SvgProps): React.JSX.Element {
   return (
-    <Svg viewBox="0 0 32 32" fill="currentColor" stroke="none" strokeWidth={0} {...props}>
-      <polygon points="16 26 16 24 5.83 24 8.41 21.41 7 20 2 25 7 30 8.41 28.59 5.83 26 16 26" />
-      <polygon points="16 14 16 12 5.83 12 8.41 9.41 7 8 2 13 7 18 8.41 16.59 5.83 14 16 14" />
-      <polygon points="16 6 16 8 26.17 8 23.59 10.59 25 12 30 7 25 2 23.59 3.41 26.17 6 16 6" />
-      <polygon points="16 18 16 20 26.17 20 23.59 22.59 25 24 30 19 25 14 23.59 15.41 26.17 18 16 18" />
+    <Svg viewBox="0 0 40 40" fill="currentColor" stroke="none" strokeWidth={0} {...props}>
+      {/* Rounded box outline */}
+      <rect
+        x="2"
+        y="2"
+        width="36"
+        height="36"
+        rx="3"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+      />
+      {/* Arrows scaled and centered inside the box with padding */}
+      <g transform="translate(7,7) scale(0.8)">
+        <polygon points="16 14 16 12 5.83 12 8.41 9.41 7 8 2 13 7 18 8.41 16.59 5.83 14 16 14" />
+        <polygon points="16 26 16 24 5.83 24 8.41 21.41 7 20 2 25 7 30 8.41 28.59 5.83 26 16 26" />
+        <polygon points="16 6 16 8 26.17 8 23.59 10.59 25 12 30 7 25 2 23.59 3.41 26.17 6 16 6" />
+        <polygon points="16 18 16 20 26.17 20 23.59 22.59 25 24 30 19 25 14 23.59 15.41 26.17 18 16 18" />
+      </g>
     </Svg>
   );
 }
 
-/** Router with directional arrows in a circle. */
+/** Router — classic Cisco-style: circle outline with four directional arrows. */
 function RouterIcon(props: SvgProps): React.JSX.Element {
   return (
-    <Svg viewBox="0 0 36 36" fill="currentColor" stroke="none" strokeWidth={0} {...props}>
-      <path d="M18,1.67a16,16,0,1,0,16,16A16,16,0,0,0,18,1.67ZM13.86,9.92a.8.8,0,0,1,1.13,0l2.21,2.19V5.93a.8.8,0,0,1,1.6,0v6.18L21,9.92a.8.8,0,1,1,1.13,1.14L18,15.15l-4.14-4.1A.8.8,0,0,1,13.86,9.92ZM10.32,21.74a.8.8,0,0,1-1.13,0L5,17.67l4.19-4.09a.8.8,0,1,1,1.12,1.14l-2.2,2.14h6.27a.8.8,0,0,1,0,1.6H8.11l2.2,2.15A.8.8,0,0,1,10.32,21.74Zm11.82,3.67a.8.8,0,0,1-1.13,0L18.8,23.23V29.4a.8.8,0,0,1-1.6,0V23.23L15,25.42a.8.8,0,1,1-1.13-1.14L18,20.18l4.14,4.1A.8.8,0,0,1,22.14,25.41Zm4.67-3.66a.8.8,0,1,1-1.12-1.14l2.2-2.15H21.63a.8.8,0,0,1,0-1.6h6.27l-2.2-2.14a.8.8,0,1,1,1.12-1.14L31,17.67Z" />
+    <Svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} {...props}>
+      {/* Circle outline */}
+      <circle cx="12" cy="12" r="10" />
+      {/* Up arrow */}
+      <line x1="12" y1="10" x2="12" y2="4.5" />
+      <polyline points="9.5 7 12 4.5 14.5 7" />
+      {/* Down arrow */}
+      <line x1="12" y1="14" x2="12" y2="19.5" />
+      <polyline points="9.5 17 12 19.5 14.5 17" />
+      {/* Left arrow */}
+      <line x1="10" y1="12" x2="4.5" y2="12" />
+      <polyline points="7 9.5 4.5 12 7 14.5" />
+      {/* Right arrow */}
+      <line x1="14" y1="12" x2="19.5" y2="12" />
+      <polyline points="17 9.5 19.5 12 17 14.5" />
     </Svg>
   );
 }

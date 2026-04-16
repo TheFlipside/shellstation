@@ -21,6 +21,7 @@ All notable changes to this project are documented in this file.
 - Position of GUI separator is saved persistently
 - Implementation of proper multi-user RLS system with shared databases
 - Multiple minor UX improvements
+- New icons for switch and router
 
 ### Removed
 
