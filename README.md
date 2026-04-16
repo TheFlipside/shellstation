@@ -13,6 +13,8 @@
 2. [Problem Analysis](#2-problem-analysis)
 3. [Technology Stack](#3-technology-stack)
 4. [Application Architecture](#4-application-architecture)
+   - [4.5 PostgreSQL Multi-User Setup (RLS)](#45-postgresql-multi-user-setup-row-level-security)
+   - [4.6 PostgreSQL Administration Guide](#46-postgresql-administration-guide)
 5. [Feature Specifications](#5-feature-specifications)
 6. [Project Structure](#6-project-structure)
 7. [Development Roadmap](#7-development-roadmap)
@@ -143,6 +145,210 @@ Switching between modes is a settings change with a one-time migration/import st
 ### 4.4 Credential Security
 
 Passwords and private key passphrases are never stored in the database. Instead, the application uses keyring-rs to interface with the operating system's native credential store: Keychain on macOS, Secret Service (GNOME Keyring / KWallet) on Linux, and Windows Credential Manager on Windows. The database stores only a reference identifier that maps to the keychain entry. SSH private keys are referenced by file path, with optional passphrase storage in the keychain.
+
+### 4.5 PostgreSQL Multi-User Setup (Row-Level Security)
+
+When using PostgreSQL as the backend, ShellStation enforces **Row-Level Security (RLS)** so that multiple users can share a single database while maintaining data isolation. Each user connects with their own PostgreSQL role, and RLS policies control what they can see and modify.
+
+#### 4.5.1 How RLS Works
+
+Every `folders` and `sessions` row has two columns added by the RLS migration:
+
+| Column       | Type | Purpose                                                         |
+| ------------ | ---- | --------------------------------------------------------------- |
+| `owner`      | TEXT | The PostgreSQL role name (`current_user`) that created the row. |
+| `visibility` | TEXT | `'personal'` (default) or `'shared'`.                           |
+
+**RLS policies enforced per table:**
+
+| Policy            | Operation | Rule                                             |
+| ----------------- | --------- | ------------------------------------------------ |
+| `*_owner_all`     | ALL       | Owner can read, insert, update, delete own rows. |
+| `*_shared_read`   | SELECT    | Any user can read shared rows.                   |
+| `*_shared_update` | UPDATE    | Any user can update shared rows.                 |
+| `*_shared_delete` | DELETE    | Only the owner can delete shared rows.           |
+
+`FORCE ROW LEVEL SECURITY` is enabled, meaning policies apply even to the table owner — no role bypasses RLS through ownership alone.
+
+**Per-user credential mapping:** The `session_credentials` table maps each user's credential profile to shared sessions. When user A shares a session with user B, each user connects with their own credentials — the session definition is shared, the authentication is not.
+
+#### 4.5.2 Permission Model
+
+ShellStation's startup runs `sqlx::migrate!()` and `setup_postgres_rls()` on every launch. These operations are idempotent, but they require different privilege levels depending on whether the schema already exists. There are two valid approaches to structuring permissions:
+
+**Option A — Separated roles (recommended for larger teams):**
+
+An admin role owns the schema; regular users get DML only. This follows the principle of least privilege.
+
+- **Admin role (table owner):** Required for the **first startup** and whenever a **new app version adds database migrations**. Needs full schema control: `CREATE TABLE`, `ALTER TABLE`, `CREATE POLICY`, plus DML on all tables.
+- **Regular user roles:** Sufficient for **everyday use** after the admin has initialized the schema. Needs only `SELECT`, `INSERT`, `UPDATE`, `DELETE` on all application tables, plus `SELECT` on `_sqlx_migrations` (so `sqlx::migrate!()` can verify all migrations are applied and return without error).
+
+When a regular user starts the app, `sqlx::migrate!()` sees all migrations are applied and does nothing. `setup_postgres_rls()` may fail on the `ALTER TABLE` statements (insufficient privileges), but this failure is **logged and non-fatal** — the policies already exist from the admin's initial run.
+
+The trade-off: when a new ShellStation version introduces schema changes, the admin must connect first so that new migrations apply. After that, regular users can connect normally. See section 4.6.5 for the update procedure.
+
+**Option B — All users can migrate (simpler for small teams):**
+
+Every user gets schema modification rights. Any user who launches a new app version automatically applies pending migrations — no admin coordination needed.
+
+- Each user role gets: `CREATE ON SCHEMA public`, `ALTER TABLE`, `CREATE POLICY`, plus DML on all tables.
+- The first user to start the new version runs the migration; subsequent users see it's already applied.
+
+The trade-off: every user has the privileges to modify or drop tables, not just read and write data. This is acceptable for small, trusted teams but inappropriate in environments where you want to limit who can alter the schema.
+
+### 4.6 PostgreSQL Administration Guide
+
+This section is intended for system administrators deploying ShellStation with a shared PostgreSQL backend.
+
+#### 4.6.1 Initial Database Setup
+
+Connect to PostgreSQL as a superuser (e.g., `postgres`) and create the database and admin role:
+
+```sql
+-- Create the database
+CREATE DATABASE shellstation;
+
+-- Create the admin role (owns the schema, runs migrations)
+CREATE ROLE shellstation_admin WITH LOGIN PASSWORD 'strong-random-password';
+GRANT ALL PRIVILEGES ON DATABASE shellstation TO shellstation_admin;
+
+-- On PostgreSQL 15+, grant schema permissions explicitly
+\c shellstation
+GRANT ALL ON SCHEMA public TO shellstation_admin;
+```
+
+Configure one ShellStation instance with the `shellstation_admin` credentials and start it once. This runs all migrations and sets up RLS policies.
+
+#### 4.6.2 Creating Regular Users
+
+After the admin has initialized the schema, create roles for each team member. Choose the grant set matching your permission model (see section 4.5.2).
+
+**Option A — DML-only users (separated roles):**
+
+```sql
+\c shellstation
+
+-- Create a regular user
+CREATE ROLE jdoe WITH LOGIN PASSWORD 'user-password';
+
+-- Grant connection access
+GRANT CONNECT ON DATABASE shellstation TO jdoe;
+GRANT USAGE ON SCHEMA public TO jdoe;
+
+-- Grant DML on all existing tables
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO jdoe;
+GRANT USAGE ON ALL SEQUENCES IN SCHEMA public TO jdoe;
+
+-- Ensure future tables (from migrations) are also accessible
+ALTER DEFAULT PRIVILEGES FOR ROLE shellstation_admin IN SCHEMA public
+    GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO jdoe;
+ALTER DEFAULT PRIVILEGES FOR ROLE shellstation_admin IN SCHEMA public
+    GRANT USAGE ON SEQUENCES TO jdoe;
+```
+
+**Option B — Users with migration rights (self-service updates):**
+
+```sql
+\c shellstation
+
+-- Create a user that can also run migrations
+CREATE ROLE jdoe WITH LOGIN PASSWORD 'user-password';
+
+-- Grant connection and schema modification access
+GRANT CONNECT ON DATABASE shellstation TO jdoe;
+GRANT USAGE, CREATE ON SCHEMA public TO jdoe;
+
+-- Grant DML + DDL on all existing tables
+GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO jdoe;
+GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO jdoe;
+
+-- Ensure future tables are also fully accessible
+ALTER DEFAULT PRIVILEGES FOR ROLE shellstation_admin IN SCHEMA public
+    GRANT ALL PRIVILEGES ON TABLES TO jdoe;
+ALTER DEFAULT PRIVILEGES FOR ROLE shellstation_admin IN SCHEMA public
+    GRANT ALL PRIVILEGES ON SEQUENCES TO jdoe;
+```
+
+Repeat for each user. The PostgreSQL role name becomes the `owner` value in RLS — each user sees their own personal items and all shared items.
+
+**Convenience — create a group role** to avoid repeating grants per user. The example below shows Option A (DML-only); for Option B, replace the individual grants with `ALL PRIVILEGES` and add `CREATE` to the schema grant:
+
+```sql
+-- One-time: create the group role
+CREATE ROLE shellstation_users NOLOGIN;
+GRANT CONNECT ON DATABASE shellstation TO shellstation_users;
+GRANT USAGE ON SCHEMA public TO shellstation_users;
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO shellstation_users;
+GRANT USAGE ON ALL SEQUENCES IN SCHEMA public TO shellstation_users;
+ALTER DEFAULT PRIVILEGES FOR ROLE shellstation_admin IN SCHEMA public
+    GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO shellstation_users;
+ALTER DEFAULT PRIVILEGES FOR ROLE shellstation_admin IN SCHEMA public
+    GRANT USAGE ON SEQUENCES TO shellstation_users;
+
+-- Per user: just add to the group
+CREATE ROLE jdoe WITH LOGIN PASSWORD 'user-password';
+GRANT shellstation_users TO jdoe;
+```
+
+#### 4.6.3 Resetting a User Password
+
+```sql
+ALTER ROLE jdoe WITH PASSWORD 'new-password';
+```
+
+The user must also update their password in ShellStation's settings (stored in the OS keychain, not the database).
+
+To force a password change on next login (PostgreSQL 17+):
+
+```sql
+ALTER ROLE jdoe WITH PASSWORD 'temporary-password' VALID UNTIL '2026-04-17';
+```
+
+For older PostgreSQL versions, set a short expiry and coordinate with the user to update promptly.
+
+#### 4.6.4 Removing a User
+
+```sql
+-- Reassign their personal items to the admin (optional — or let them be orphaned)
+\c shellstation
+UPDATE folders SET owner = 'shellstation_admin' WHERE owner = 'jdoe';
+UPDATE sessions SET owner = 'shellstation_admin' WHERE owner = 'jdoe';
+DELETE FROM session_credentials WHERE user_ident = 'jdoe';
+
+-- Revoke and drop
+REVOKE shellstation_users FROM jdoe;
+DROP ROLE jdoe;
+```
+
+#### 4.6.5 Applying Application Updates
+
+When a new ShellStation version includes database schema changes:
+
+**Option A — Separated roles (admin applies migrations):**
+
+1. **Stop all regular user instances** (or accept that they will fail to start until the migration is applied).
+2. **Start one instance using the admin credentials** (`shellstation_admin`). Migrations run automatically on startup.
+3. **If new tables were created**, re-run the default privilege grants (the `ALTER DEFAULT PRIVILEGES` from section 4.6.2 only covers tables created after the grant was set up — new tables from migrations executed by the admin role are covered).
+4. **Regular users can now connect** normally.
+
+**Option B — Self-service updates (any user can migrate):**
+
+1. Users update ShellStation independently. The **first user to launch the new version** automatically applies pending migrations.
+2. Subsequent users start normally — `sqlx::migrate!()` detects that all migrations are already applied.
+3. No admin coordination is required. In the unlikely event of two users starting simultaneously during a migration, `sqlx::migrate!()` uses the `_sqlx_migrations` lock table to serialize execution — only one instance runs the migration, the other waits.
+
+#### 4.6.6 Backup and Restore
+
+```bash
+# Backup (as a user with read access, or the admin)
+pg_dump -h localhost -U shellstation_admin -d shellstation -F c -f shellstation_backup.dump
+
+# Restore to a new database
+createdb -h localhost -U postgres shellstation_restored
+pg_restore -h localhost -U postgres -d shellstation_restored shellstation_backup.dump
+```
+
+RLS policies, constraints, and the `_sqlx_migrations` table are included in the dump. After restoring, the admin should connect once to verify the schema is intact.
 
 ---
 
