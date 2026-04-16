@@ -867,7 +867,11 @@ export function SessionSidebar(): React.JSX.Element {
                 <span className="tree-icon">
                   <SessionIconComponent iconKey={s.icon} />
                 </span>
-                <span className="tree-label">{s.name}</span>
+                <span
+                  className={`tree-label${s.visibility === "shared" ? " tree-label-shared" : ""}`}
+                >
+                  {s.name}
+                </span>
                 <span className="tree-meta">{s.hostname}</span>
               </div>
             ))
@@ -930,7 +934,10 @@ export function SessionSidebar(): React.JSX.Element {
                     <span className="tree-icon">
                       <SessionIconComponent iconKey={s.icon} />
                     </span>
-                    <span className="tree-label" title={`${s.name} (${s.hostname})`}>
+                    <span
+                      className="tree-label tree-label-shared"
+                      title={`${s.name} (${s.hostname})`}
+                    >
                       {s.name}
                     </span>
                     <span className="tree-meta">{s.hostname}</span>

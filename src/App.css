@@ -1081,6 +1081,14 @@ body,
   white-space: nowrap;
 }
 
+.tree-icon-shared {
+  color: var(--color-sapphire);
+}
+
+.tree-label-shared {
+  color: var(--color-sapphire);
+}
+
 .tree-meta {
   color: var(--color-overlay0);
   font-size: 11px;

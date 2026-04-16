@@ -202,6 +202,28 @@ export function FolderIcon(props: SvgProps): React.JSX.Element {
   );
 }
 
+/** Shared folder icon — folder with two-person badge in the bottom-right. */
+export function SharedFolderIcon(props: SvgProps): React.JSX.Element {
+  return (
+    <Svg {...props}>
+      <path d="M2 6 C2 5 3 4 4 4 L10 4 L12 6 L20 6 C21 6 22 7 22 8 L22 18 C22 19 21 20 20 20 L4 20 C3 20 2 19 2 18Z" />
+      {/* Two-person badge */}
+      <circle cx="16" cy="14.5" r="1.5" fill="currentColor" stroke="none" />
+      <path
+        d="M13.5 19.5 C13.5 17.5 14.5 16.5 16 16.5 C17.5 16.5 18.5 17.5 18.5 19.5"
+        fill="currentColor"
+        stroke="none"
+      />
+      <circle cx="19.5" cy="13.5" r="1.5" fill="currentColor" stroke="none" />
+      <path
+        d="M17 18.5 C17 16.5 18 15.5 19.5 15.5 C21 15.5 22 16.5 22 18.5"
+        fill="currentColor"
+        stroke="none"
+      />
+    </Svg>
+  );
+}
+
 const ICON_MAP: Record<SessionIcon, React.FC<SvgProps>> = {
   desktop: DesktopIcon,
   linux: LinuxIcon,

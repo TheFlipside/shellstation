@@ -3,7 +3,7 @@ import { SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-
 import { CSS } from "@dnd-kit/utilities";
 import type { Folder, Session } from "../stores/sessionStore";
 import { useSessionStore } from "../stores/sessionStore";
-import { FolderIcon, SessionIconComponent } from "./SessionIcons";
+import { FolderIcon, SharedFolderIcon, SessionIconComponent } from "./SessionIcons";
 
 interface SessionTreeProps {
   parentId: string | null;
@@ -133,8 +133,8 @@ function SortableFolder({
         >
           {isExpanded ? "\u25BE" : "\u25B8"}
         </span>
-        <span className="tree-icon">
-          <FolderIcon />
+        <span className={`tree-icon${folder.visibility === "shared" ? " tree-icon-shared" : ""}`}>
+          {folder.visibility === "shared" ? <SharedFolderIcon /> : <FolderIcon />}
         </span>
         <span className="tree-label" title={folder.name}>
           {folder.name}
@@ -207,7 +207,10 @@ function SortableSession({
       <span className="tree-icon">
         <SessionIconComponent iconKey={session.icon} />
       </span>
-      <span className="tree-label" title={`${session.name} (${session.hostname})`}>
+      <span
+        className={`tree-label${session.visibility === "shared" ? " tree-label-shared" : ""}`}
+        title={`${session.name} (${session.hostname})`}
+      >
         {session.name}
       </span>
       <span className="tree-meta">{session.hostname}</span>
