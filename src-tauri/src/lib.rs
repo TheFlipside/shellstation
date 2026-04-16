@@ -12,7 +12,7 @@ mod telnet;
 
 use std::sync::Arc;
 
-use commands::DbStatusState;
+use commands::{DbStatusState, TerminalReadyState};
 use config::{ConfigState, DbBackend};
 use db::postgres::PostgresProvider;
 use db::sqlite::SqliteProvider;
@@ -480,6 +480,7 @@ pub fn run() {
         .manage(PtyState::default())
         .manage(SshState::default())
         .manage(TelnetState::default())
+        .manage(TerminalReadyState::default())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .setup(move |app| {
@@ -727,6 +728,8 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            // Terminal ready signal (all protocols)
+            commands::terminal_ready,
             // PTY
             commands::pty_spawn,
             commands::pty_write,

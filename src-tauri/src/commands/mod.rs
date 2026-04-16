@@ -16,6 +16,41 @@ pub use session::*;
 pub use ssh::*;
 pub use telnet::*;
 
+use std::collections::HashMap;
+
+/// Senders for the "terminal ready" signal. Each protocol's reader task/thread
+/// waits on the corresponding receiver before entering its read loop. This
+/// prevents early terminal output (banner, MOTD, prompt) from being emitted
+/// before the frontend listener is registered.
+///
+/// Uses `Box<dyn FnOnce() + Send>` so both tokio oneshot (SSH/Telnet) and
+/// std mpsc (PTY) senders can be stored uniformly.
+pub type ReadySenders = std::sync::Mutex<HashMap<String, Box<dyn FnOnce() + Send>>>;
+
+/// Tauri-managed state holding pending terminal-ready signals.
+#[derive(Default)]
+pub struct TerminalReadyState(pub ReadySenders);
+
+/// Signal that the frontend event listener for a terminal session is ready.
+/// The backend reader task/thread will start streaming output after this call.
+#[tauri::command]
+pub fn terminal_ready(
+    state: tauri::State<'_, TerminalReadyState>,
+    id: String,
+) -> Result<(), String> {
+    let sender = {
+        let mut senders = state
+            .0
+            .lock()
+            .map_err(|e| format!("Ready sender lock poisoned: {e}"))?;
+        senders.remove(&id)
+    };
+    if let Some(signal) = sender {
+        signal();
+    }
+    Ok(())
+}
+
 /// Maximum terminal dimensions to prevent resource exhaustion.
 const MAX_COLS: u16 = 500;
 const MAX_ROWS: u16 = 500;

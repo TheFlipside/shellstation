@@ -4,13 +4,14 @@ use uuid::Uuid;
 use crate::pty::PtyState;
 use crate::session_logger::SessionLogState;
 
-use super::{validate_dimensions, MAX_WRITE_SIZE};
+use super::{validate_dimensions, TerminalReadyState, MAX_WRITE_SIZE};
 
 /// Spawn a new local PTY session. Returns the session ID.
 #[tauri::command]
 pub fn pty_spawn(
     app_handle: AppHandle,
     state: State<'_, PtyState>,
+    ready_state: State<'_, TerminalReadyState>,
     logger_state: State<'_, SessionLogState>,
     cols: u16,
     rows: u16,
@@ -27,9 +28,24 @@ pub fn pty_spawn(
         }
     }
 
+    // Create ready signal so the reader thread waits for the frontend listener.
+    let (ready_tx, ready_rx) = std::sync::mpsc::channel::<()>();
+    {
+        let mut senders = ready_state
+            .0
+            .lock()
+            .map_err(|e| format!("Ready sender lock poisoned: {e}"))?;
+        senders.insert(
+            id.clone(),
+            Box::new(move || {
+                let _ = ready_tx.send(());
+            }),
+        );
+    }
+
     let logger = Some(std::sync::Arc::clone(&logger_state.0));
     let mut manager = state.0.lock().map_err(|e| e.to_string())?;
-    manager.spawn(&id, cols, rows, app_handle, logger)?;
+    manager.spawn(&id, cols, rows, app_handle, logger, ready_rx)?;
     Ok(id)
 }
 

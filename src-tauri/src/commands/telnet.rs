@@ -4,7 +4,7 @@ use uuid::Uuid;
 use crate::session_logger::SessionLogState;
 use crate::telnet::{establish_telnet_connection, TelnetConnectParams, TelnetState};
 
-use super::{validate_dimensions, MAX_WRITE_SIZE};
+use super::{validate_dimensions, TerminalReadyState, MAX_WRITE_SIZE};
 
 /// Connect to a remote host via Telnet. Returns the session ID.
 #[tauri::command]
@@ -12,6 +12,7 @@ use super::{validate_dimensions, MAX_WRITE_SIZE};
 pub async fn telnet_connect(
     app_handle: AppHandle,
     state: State<'_, TelnetState>,
+    ready_state: State<'_, TerminalReadyState>,
     logger_state: State<'_, SessionLogState>,
     host: String,
     port: u16,
@@ -41,6 +42,21 @@ pub async fn telnet_connect(
         manager.check_capacity()?;
     }
 
+    // Create ready signal so the reader task waits for the frontend listener.
+    let (ready_tx, ready_rx) = tokio::sync::oneshot::channel::<()>();
+    {
+        let mut senders = ready_state
+            .0
+            .lock()
+            .map_err(|e| format!("Ready sender lock poisoned: {e}"))?;
+        senders.insert(
+            id.clone(),
+            Box::new(move || {
+                let _ = ready_tx.send(());
+            }),
+        );
+    }
+
     // Establish connection WITHOUT holding the manager lock so other
     // sessions remain fully usable during the (potentially slow) handshake.
     let session = match establish_telnet_connection(TelnetConnectParams {
@@ -53,11 +69,15 @@ pub async fn telnet_connect(
         restrict_private_ips: restrict_private_ips.unwrap_or(false),
         connect_timeout_secs: connect_timeout.unwrap_or(10),
         logger,
+        ready_rx,
     })
     .await
     {
         Ok(s) => s,
         Err(e) => {
+            if let Ok(mut senders) = ready_state.0.lock() {
+                senders.remove(&id);
+            }
             if let Ok(mut mgr) = logger_state.0.lock() {
                 mgr.close_log(&id);
             }

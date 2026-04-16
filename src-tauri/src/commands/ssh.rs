@@ -5,7 +5,7 @@ use zeroize::Zeroizing;
 use crate::session_logger::SessionLogState;
 use crate::ssh::{establish_ssh_connection, JumpHop, SshConnectParams, SshState};
 
-use super::{validate_dimensions, MAX_JUMP_HOPS, MAX_WRITE_SIZE};
+use super::{validate_dimensions, TerminalReadyState, MAX_JUMP_HOPS, MAX_WRITE_SIZE};
 
 /// Connect to a remote host via SSH. Returns the session ID.
 #[tauri::command]
@@ -13,6 +13,7 @@ use super::{validate_dimensions, MAX_JUMP_HOPS, MAX_WRITE_SIZE};
 pub async fn ssh_connect(
     app_handle: AppHandle,
     state: State<'_, SshState>,
+    ready_state: State<'_, TerminalReadyState>,
     logger_state: State<'_, SessionLogState>,
     host: String,
     port: u16,
@@ -52,6 +53,21 @@ pub async fn ssh_connect(
         }
     }
 
+    // Create ready signal so the reader task waits for the frontend listener.
+    let (ready_tx, ready_rx) = tokio::sync::oneshot::channel::<()>();
+    {
+        let mut senders = ready_state
+            .0
+            .lock()
+            .map_err(|e| format!("Ready sender lock poisoned: {e}"))?;
+        senders.insert(
+            id.clone(),
+            Box::new(move || {
+                let _ = ready_tx.send(());
+            }),
+        );
+    }
+
     // Establish connection WITHOUT holding the manager lock so other
     // sessions remain fully usable during the (potentially slow) handshake.
     let session = match establish_ssh_connection(
@@ -73,6 +89,7 @@ pub async fn ssh_connect(
             keepalive_max: keepalive_max.unwrap_or(3) as usize,
             logger,
             kbd_interactive_senders: std::sync::Arc::clone(&state.kbd_interactive_senders),
+            ready_rx,
         },
         &state.host_verify_senders,
     )
@@ -80,6 +97,10 @@ pub async fn ssh_connect(
     {
         Ok(s) => s,
         Err(e) => {
+            // Clean up ready sender on connection failure.
+            if let Ok(mut senders) = ready_state.0.lock() {
+                senders.remove(&id);
+            }
             if let Ok(mut mgr) = logger_state.0.lock() {
                 mgr.close_log(&id);
             }

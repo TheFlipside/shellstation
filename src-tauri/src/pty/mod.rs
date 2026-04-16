@@ -34,6 +34,7 @@ impl PtyManager {
         rows: u16,
         app_handle: AppHandle,
         logger: Option<std::sync::Arc<std::sync::Mutex<crate::session_logger::SessionLogManager>>>,
+        ready_rx: std::sync::mpsc::Receiver<()>,
     ) -> Result<(), String> {
         if self.sessions.len() >= Self::MAX_SESSIONS {
             return Err(format!(
@@ -67,6 +68,19 @@ impl PtyManager {
         let session_id = id.to_string();
 
         thread::spawn(move || {
+            // Wait for the frontend listener to be registered before reading.
+            // Timeout after 5 seconds as a safety net.
+            match ready_rx.recv_timeout(std::time::Duration::from_secs(5)) {
+                Ok(()) => {
+                    info!(session_id = %session_id, "Frontend listener ready, starting PTY reader")
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                    info!(session_id = %session_id, "Frontend ready signal timed out after 5s, starting PTY reader anyway");
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                    info!(session_id = %session_id, "Ready signal sender dropped, starting PTY reader anyway");
+                }
+            }
             let mut buf = [0u8; 4096];
             loop {
                 match reader.read(&mut buf) {

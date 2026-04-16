@@ -325,7 +325,9 @@ export function Terminal({
       });
     };
 
-    setupListeners().catch(noop);
+    setupListeners()
+      .then(() => invoke("terminal_ready", { id: sessionId }))
+      .catch(noop);
 
     // Handle window resize.  Skip when the container is hidden
     // (display: none → 0×0) to prevent xterm.js from reflowing

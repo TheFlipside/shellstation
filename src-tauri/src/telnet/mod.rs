@@ -7,7 +7,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::{mpsc, Mutex};
 use tokio::task::JoinHandle;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use crate::ssh::ResizeRequest;
 
@@ -37,6 +37,9 @@ pub struct TelnetConnectParams {
     pub restrict_private_ips: bool,
     pub connect_timeout_secs: u64,
     pub logger: Option<std::sync::Arc<std::sync::Mutex<crate::session_logger::SessionLogManager>>>,
+    /// Receiver for the "terminal ready" signal. The reader task waits on this
+    /// before entering its read loop.
+    pub ready_rx: tokio::sync::oneshot::Receiver<()>,
 }
 
 /// Per-connection Telnet session state.
@@ -132,6 +135,7 @@ pub async fn establish_telnet_connection(
         restrict_private_ips,
         connect_timeout_secs,
         logger,
+        ready_rx,
     } = params;
 
     // Validate against restricted IP ranges if enabled.
@@ -162,6 +166,17 @@ pub async fn establish_telnet_connection(
     let app = app_handle;
 
     let reader_task = tokio::spawn(async move {
+        match tokio::time::timeout(std::time::Duration::from_secs(5), ready_rx).await {
+            Ok(Ok(())) => {
+                debug!(session_id = %session_id, "Frontend listener ready, starting Telnet reader")
+            }
+            Ok(Err(_)) => {
+                debug!(session_id = %session_id, "Ready signal sender dropped, starting Telnet reader anyway")
+            }
+            Err(_) => {
+                warn!(session_id = %session_id, "Frontend ready signal timed out after 5s, starting Telnet reader anyway")
+            }
+        }
         telnet_io_loop(
             read_half,
             write_half,

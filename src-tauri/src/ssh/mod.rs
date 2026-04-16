@@ -104,6 +104,10 @@ pub struct SshConnectParams {
     pub legacy_algorithms: bool,
     pub logger: Option<std::sync::Arc<std::sync::Mutex<crate::session_logger::SessionLogManager>>>,
     pub kbd_interactive_senders: KbdInteractiveSenders,
+    /// Receiver for the "terminal ready" signal. The reader task waits on this
+    /// before entering its read loop, preventing early output from being emitted
+    /// before the frontend event listener is registered.
+    pub ready_rx: oneshot::Receiver<()>,
 }
 
 /// Manages all active SSH sessions.
@@ -203,6 +207,7 @@ pub async fn establish_ssh_connection(
         keepalive_max,
         logger,
         kbd_interactive_senders,
+        ready_rx,
     } = params;
 
     info!(session_id = %id, host = %host, port = %port, hops = jump_hops.len(), legacy_algorithms, "Connecting via SSH");
@@ -277,6 +282,20 @@ pub async fn establish_ssh_connection(
     let app = app_handle;
 
     let reader_task = tokio::spawn(async move {
+        // Wait for the frontend to signal that its event listener is registered.
+        // Timeout after 5 seconds as a safety net — better to possibly miss early
+        // output than to hang the reader indefinitely if the frontend never signals.
+        match tokio::time::timeout(std::time::Duration::from_secs(5), ready_rx).await {
+            Ok(Ok(())) => {
+                debug!(session_id = %session_id, "Frontend listener ready, starting SSH reader")
+            }
+            Ok(Err(_)) => {
+                debug!(session_id = %session_id, "Ready signal sender dropped, starting SSH reader anyway")
+            }
+            Err(_) => {
+                warn!(session_id = %session_id, "Frontend ready signal timed out after 5s, starting SSH reader anyway")
+            }
+        }
         let mut channel = channel;
         loop {
             tokio::select! {

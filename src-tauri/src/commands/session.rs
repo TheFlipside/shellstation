@@ -15,7 +15,9 @@ use crate::session_logger::SessionLogState;
 use crate::ssh::{establish_ssh_connection, SshConnectParams, SshState};
 use crate::telnet::{establish_telnet_connection, TelnetConnectParams, TelnetState};
 
-use super::{validate_dimensions, validate_port, validate_session_fields, MAX_JUMP_HOPS};
+use super::{
+    validate_dimensions, validate_port, validate_session_fields, TerminalReadyState, MAX_JUMP_HOPS,
+};
 
 // ── Folder commands ──────────────────────────────────────────────────
 
@@ -438,6 +440,7 @@ pub async fn session_connect(
     cred_db: State<'_, CredentialDbState>,
     ssh: State<'_, SshState>,
     telnet: State<'_, TelnetState>,
+    ready_state: State<'_, TerminalReadyState>,
     logger_state: State<'_, SessionLogState>,
     id: String,
     cols: u16,
@@ -479,6 +482,21 @@ pub async fn session_connect(
             manager.check_capacity()?;
         }
 
+        // Create ready signal so the reader task waits for the frontend listener.
+        let (ready_tx, ready_rx) = tokio::sync::oneshot::channel::<()>();
+        {
+            let mut senders = ready_state
+                .0
+                .lock()
+                .map_err(|e| format!("Ready sender lock poisoned: {e}"))?;
+            senders.insert(
+                conn_id.clone(),
+                Box::new(move || {
+                    let _ = ready_tx.send(());
+                }),
+            );
+        }
+
         let telnet_session = match establish_telnet_connection(TelnetConnectParams {
             id: conn_id.clone(),
             host: session.hostname,
@@ -489,11 +507,15 @@ pub async fn session_connect(
             restrict_private_ips: restrict,
             connect_timeout_secs: timeout_secs,
             logger,
+            ready_rx,
         })
         .await
         {
             Ok(s) => s,
             Err(e) => {
+                if let Ok(mut senders) = ready_state.0.lock() {
+                    senders.remove(&conn_id);
+                }
                 if let Ok(mut mgr) = logger_state.0.lock() {
                     mgr.close_log(&conn_id);
                 }
@@ -557,6 +579,21 @@ pub async fn session_connect(
         manager.check_capacity()?;
     }
 
+    // Create ready signal so the reader task waits for the frontend listener.
+    let (ready_tx, ready_rx) = tokio::sync::oneshot::channel::<()>();
+    {
+        let mut senders = ready_state
+            .0
+            .lock()
+            .map_err(|e| format!("Ready sender lock poisoned: {e}"))?;
+        senders.insert(
+            conn_id.clone(),
+            Box::new(move || {
+                let _ = ready_tx.send(());
+            }),
+        );
+    }
+
     let ssh_session = match establish_ssh_connection(
         SshConnectParams {
             id: conn_id.clone(),
@@ -576,6 +613,7 @@ pub async fn session_connect(
             keepalive_max: keepalive_missed,
             logger,
             kbd_interactive_senders: std::sync::Arc::clone(&ssh.kbd_interactive_senders),
+            ready_rx,
         },
         &ssh.host_verify_senders,
     )
@@ -583,6 +621,9 @@ pub async fn session_connect(
     {
         Ok(s) => s,
         Err(e) => {
+            if let Ok(mut senders) = ready_state.0.lock() {
+                senders.remove(&conn_id);
+            }
             if let Ok(mut mgr) = logger_state.0.lock() {
                 mgr.close_log(&conn_id);
             }
