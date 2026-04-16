@@ -269,19 +269,19 @@ fn sanitize_pg_error(raw: &str) -> String {
 /// Help submenu passed by the caller.
 fn build_app_menu(
     app: &tauri::AppHandle,
+    #[cfg_attr(
+        any(
+            target_os = "linux",
+            target_os = "dragonfly",
+            target_os = "freebsd",
+            target_os = "netbsd",
+            target_os = "openbsd"
+        ),
+        allow(unused_variables)
+    )]
+    about: &tauri::menu::AboutMetadata,
     help_menu: &Submenu<tauri::Wry>,
 ) -> Result<Menu<tauri::Wry>, Box<dyn std::error::Error>> {
-    #[cfg(target_os = "macos")]
-    let pkg = app.package_info();
-    #[cfg(target_os = "macos")]
-    let about = tauri::menu::AboutMetadata {
-        name: Some(pkg.name.clone()),
-        version: Some(pkg.version.to_string()),
-        copyright: app.config().bundle.copyright.clone(),
-        authors: app.config().bundle.publisher.clone().map(|p| vec![p]),
-        ..Default::default()
-    };
-
     #[cfg(not(any(
         target_os = "linux",
         target_os = "dragonfly",
@@ -308,7 +308,7 @@ fn build_app_menu(
             #[cfg(target_os = "macos")]
             &Submenu::with_items(
                 app,
-                pkg.name.clone(),
+                about.name.clone().unwrap_or_default(),
                 true,
                 &[
                     &PredefinedMenuItem::about(app, None, Some(about.clone()))?,
@@ -486,6 +486,22 @@ pub fn run() {
             // Build custom menu: replicate Tauri defaults but with a
             // functional Help submenu that links to our project pages.
             let app_handle = app.handle();
+            let pkg = app_handle.package_info();
+            let about_meta = tauri::menu::AboutMetadata {
+                name: Some(pkg.name.clone()),
+                version: Some(pkg.version.to_string()),
+                copyright: app_handle.config().bundle.copyright.clone(),
+                authors: app_handle
+                    .config()
+                    .bundle
+                    .publisher
+                    .clone()
+                    .map(|p| vec![p]),
+                icon: tauri::image::Image::from_bytes(include_bytes!("../icons/32x32.png"))
+                    .ok(),
+                ..Default::default()
+            };
+
             let help_docs =
                 MenuItemBuilder::with_id("help_docs", "ShellStation Help").build(app_handle)?;
             let help_issues =
@@ -498,10 +514,20 @@ pub fn run() {
                     &help_docs,
                     &PredefinedMenuItem::separator(app_handle)?,
                     &help_issues,
+                    // On macOS, About lives in the app submenu; everywhere else
+                    // add it at the bottom of the Help menu.
+                    #[cfg(not(target_os = "macos"))]
+                    &PredefinedMenuItem::separator(app_handle)?,
+                    #[cfg(not(target_os = "macos"))]
+                    &PredefinedMenuItem::about(
+                        app_handle,
+                        Some("About ShellStation"),
+                        Some(about_meta.clone()),
+                    )?,
                 ],
             )?;
 
-            let menu = build_app_menu(app_handle, &help_menu)?;
+            let menu = build_app_menu(app_handle, &about_meta, &help_menu)?;
             app.set_menu(menu)?;
 
             app.on_menu_event(|handle, event| {
