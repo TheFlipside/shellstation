@@ -591,8 +591,11 @@ fn restrict_windows_acl(path: &std::path::Path, is_dir: bool) {
     } else {
         format!("{username}:F")
     };
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
     let _ = std::process::Command::new("icacls")
         .args([&path_str, "/inheritance:r", "/grant:r", &grant])
+        .creation_flags(CREATE_NO_WINDOW)
         .output();
 }
 
