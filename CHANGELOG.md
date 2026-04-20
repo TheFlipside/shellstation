@@ -18,6 +18,7 @@ All notable changes to this project are documented in this file.
 - Application freeze when closing local sessions on Windows (ConPTY reader thread not unblocked)
 - Potential deadlock from nested mutex acquisition in PTY session kill path
 - Fleeting cmd windows on Windows when accepting SSH host key for the first time
+- Compiler warning for unused variable on Windows builds
 
 ### Changed
 

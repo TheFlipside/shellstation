@@ -392,16 +392,7 @@ async fn setup_postgres_rls(pool: &sqlx::PgPool) -> Result<(), String> {
 /// Help submenu passed by the caller.
 fn build_app_menu(
     app: &tauri::AppHandle,
-    #[cfg_attr(
-        any(
-            target_os = "linux",
-            target_os = "dragonfly",
-            target_os = "freebsd",
-            target_os = "netbsd",
-            target_os = "openbsd"
-        ),
-        allow(unused_variables)
-    )]
+    #[cfg_attr(not(target_os = "macos"), allow(unused_variables))]
     about: &tauri::menu::AboutMetadata,
     help_menu: &Submenu<tauri::Wry>,
 ) -> Result<Menu<tauri::Wry>, Box<dyn std::error::Error>> {
