@@ -70,6 +70,51 @@ body,
   font-family: "JetBrains Mono", "Fira Code", "Cascadia Code", monospace;
 }
 
+/* ── Scrollbars ──────────────────────────────────────────────────── */
+
+.dialog-overlay,
+.dialog,
+.sidebar-tree,
+.custom-select-dropdown,
+.highlight-rules-list {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-surface2) transparent;
+}
+
+.dialog-overlay::-webkit-scrollbar,
+.dialog::-webkit-scrollbar,
+.sidebar-tree::-webkit-scrollbar,
+.custom-select-dropdown::-webkit-scrollbar,
+.highlight-rules-list::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.dialog-overlay::-webkit-scrollbar-track,
+.dialog::-webkit-scrollbar-track,
+.sidebar-tree::-webkit-scrollbar-track,
+.custom-select-dropdown::-webkit-scrollbar-track,
+.highlight-rules-list::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.dialog-overlay::-webkit-scrollbar-thumb,
+.dialog::-webkit-scrollbar-thumb,
+.sidebar-tree::-webkit-scrollbar-thumb,
+.custom-select-dropdown::-webkit-scrollbar-thumb,
+.highlight-rules-list::-webkit-scrollbar-thumb {
+  background-color: var(--color-surface2);
+  border-radius: 4px;
+}
+
+.dialog-overlay::-webkit-scrollbar-thumb:hover,
+.dialog::-webkit-scrollbar-thumb:hover,
+.sidebar-tree::-webkit-scrollbar-thumb:hover,
+.custom-select-dropdown::-webkit-scrollbar-thumb:hover,
+.highlight-rules-list::-webkit-scrollbar-thumb:hover {
+  background-color: var(--color-overlay0);
+}
+
 .app {
   width: 100%;
   height: 100%;
