@@ -6,6 +6,18 @@ All notable changes to this project are documented in this file.
 
 ### Added
 
+### Fixed
+
+- Compiler warning for unused variable on Windows builds
+
+### Changed
+
+### Removed
+
+### 0.10.0 - 2026-04-20
+
+### Added
+
 - Version info in "About" help menu
 - Ability to quickly reconnect disconnected sessions
 - Visual indication for shared objects
@@ -18,7 +30,6 @@ All notable changes to this project are documented in this file.
 - Application freeze when closing local sessions on Windows (ConPTY reader thread not unblocked)
 - Potential deadlock from nested mutex acquisition in PTY session kill path
 - Fleeting cmd windows on Windows when accepting SSH host key for the first time
-- Compiler warning for unused variable on Windows builds
 
 ### Changed
 
