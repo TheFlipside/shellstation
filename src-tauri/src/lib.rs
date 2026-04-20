@@ -783,10 +783,10 @@ pub fn run() {
                         port = app_config.postgres.port,
                         database = %app_config.postgres.database,
                         ssl_mode = %app_config.postgres.ssl_mode,
-                        password_len = app_config.postgres.password.len(),
+                        password_configured = !app_config.postgres.password.is_empty(),
                         "Connecting to PostgreSQL…"
                     );
-                    let password_was_empty = app_config.postgres.password.is_empty();
+                    let password_configured = !app_config.postgres.password.is_empty();
                     let pg_opts = app_config.postgres.connect_options();
                     match tauri::async_runtime::block_on(async {
                         let pool = PgPoolOptions::new()
@@ -840,13 +840,12 @@ pub fn run() {
                         Err(e) => {
                             // Sanitize before logging — raw errors may contain
                             // connection strings or credentials.
-                            let safe_msg = if password_was_empty {
-                                "PostgreSQL password missing from keychain at startup. \
-                                 Open Settings and re-save the database configuration to \
-                                 restore it."
-                                    .to_string()
-                            } else {
+                            let safe_msg = if password_configured {
                                 sanitize_pg_error(&e.to_string())
+                            } else {
+                                "PostgreSQL connection failed. Check your database \
+                                 configuration in Settings."
+                                    .to_string()
                             };
                             tracing::error!("PostgreSQL connection failed: {safe_msg}");
 

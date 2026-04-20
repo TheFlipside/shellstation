@@ -335,18 +335,18 @@ pub async fn db_save_config(
             return Err(format!("Failed to store database password securely: {e}"));
         }
         match crate::credentials::retrieve(config::PG_PASSWORD_KEYCHAIN_REF) {
-            Ok(round_tripped) if round_tripped == password => {
-                tracing::info!(
-                    "PostgreSQL password stored and verified in keychain ({} bytes)",
-                    password.len()
-                );
+            Ok(round_tripped)
+                if round_tripped.len() == password.len()
+                    && subtle::ConstantTimeEq::ct_eq(
+                        round_tripped.as_bytes(),
+                        password.as_bytes(),
+                    )
+                    .into() =>
+            {
+                tracing::info!("PostgreSQL password stored and verified in keychain");
             }
-            Ok(round_tripped) => {
-                tracing::error!(
-                    "PostgreSQL keychain round-trip mismatch: stored {} bytes, read back {} bytes",
-                    password.len(),
-                    round_tripped.len()
-                );
+            Ok(_) => {
+                tracing::error!("PostgreSQL keychain round-trip verification failed");
                 return Err(
                     "Keychain round-trip verification failed: the OS keychain returned a \
                      different value than what was stored. Database password not saved."
