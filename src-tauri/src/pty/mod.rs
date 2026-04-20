@@ -1,7 +1,9 @@
 use std::collections::HashMap;
 use std::io::{Read, Write};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::Duration;
 
 use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
 use tauri::{AppHandle, Emitter};
@@ -12,6 +14,7 @@ struct PtyHandle {
     writer: Box<dyn Write + Send>,
     pair: Box<dyn MasterPty + Send>,
     child: Box<dyn portable_pty::Child + Send>,
+    shutdown: Arc<AtomicBool>,
 }
 
 /// Manages all active PTY sessions, keyed by session ID.
@@ -64,34 +67,55 @@ impl PtyManager {
         let writer = pair.master.take_writer().map_err(|e| e.to_string())?;
         let mut reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
 
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let shutdown_flag = Arc::clone(&shutdown);
+
         let event_name = format!("terminal-output-{id}");
         let session_id = id.to_string();
 
         thread::spawn(move || {
-            // Wait for the frontend listener to be registered before reading.
-            // Timeout after 5 seconds as a safety net.
-            match ready_rx.recv_timeout(std::time::Duration::from_secs(5)) {
-                Ok(()) => {
-                    info!(session_id = %session_id, "Frontend listener ready, starting PTY reader")
+            // Wait for the frontend listener before reading. The PTY pipe
+            // buffers any output the shell produces during this wait, so
+            // nothing is lost. Check shutdown flag periodically so the thread
+            // can exit promptly if the session is killed during setup.
+            // Cap the wait at 10s as a safety net — if the frontend never
+            // signals, start reading anyway to avoid a permanently stuck session.
+            let start = std::time::Instant::now();
+            let max_wait = Duration::from_secs(10);
+            let ready = loop {
+                if shutdown_flag.load(Ordering::Relaxed) {
+                    break false;
                 }
-                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                    info!(session_id = %session_id, "Frontend ready signal timed out after 5s, starting PTY reader anyway");
+                match ready_rx.recv_timeout(Duration::from_millis(100)) {
+                    Ok(()) => {
+                        info!(session_id = %session_id, "Frontend listener ready, starting PTY reader");
+                        break true;
+                    }
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                        if start.elapsed() >= max_wait {
+                            info!(session_id = %session_id, "Frontend ready signal timed out, starting PTY reader anyway");
+                            break true;
+                        }
+                    }
+                    Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                        info!(session_id = %session_id, "Ready signal sender dropped, starting PTY reader anyway");
+                        break true;
+                    }
                 }
-                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-                    info!(session_id = %session_id, "Ready signal sender dropped, starting PTY reader anyway");
-                }
+            };
+            if !ready {
+                return;
             }
+
             let mut buf = [0u8; 4096];
             loop {
+                if shutdown_flag.load(Ordering::Relaxed) {
+                    info!(session_id = %session_id, "PTY reader received shutdown signal");
+                    break;
+                }
                 match reader.read(&mut buf) {
                     Ok(0) => {
                         info!(session_id = %session_id, "PTY reader EOF");
-                        if let Some(ref lg) = logger {
-                            if let Ok(mut mgr) = lg.lock() {
-                                mgr.close_log(&session_id);
-                            }
-                        }
-                        let _ = app_handle.emit(&format!("terminal-exit-{session_id}"), ());
                         break;
                     }
                     Ok(n) => {
@@ -106,24 +130,31 @@ impl PtyManager {
                             break;
                         }
                     }
+                    Err(ref e) if is_timeout_error(e) => {
+                        continue;
+                    }
                     Err(e) => {
-                        error!(session_id = %session_id, error = %e, "PTY read error");
-                        if let Some(ref lg) = logger {
-                            if let Ok(mut mgr) = lg.lock() {
-                                mgr.close_log(&session_id);
-                            }
+                        if !shutdown_flag.load(Ordering::Relaxed) {
+                            error!(session_id = %session_id, error = %e, "PTY read error");
                         }
-                        let _ = app_handle.emit(&format!("terminal-exit-{session_id}"), ());
                         break;
                     }
                 }
             }
+
+            if let Some(ref lg) = logger {
+                if let Ok(mut mgr) = lg.lock() {
+                    mgr.close_log(&session_id);
+                }
+            }
+            let _ = app_handle.emit(&format!("terminal-exit-{session_id}"), ());
         });
 
         let handle = PtyHandle {
             writer,
             pair: pair.master,
             child,
+            shutdown,
         };
         self.sessions.insert(id.to_string(), handle);
 
@@ -164,7 +195,23 @@ impl PtyManager {
             .sessions
             .remove(id)
             .ok_or_else(|| format!("Session {id} not found"))?;
-        handle.child.kill().map_err(|e| e.to_string())?;
+
+        // Signal the reader thread to stop.
+        handle.shutdown.store(true, Ordering::Relaxed);
+
+        // Kill may fail if the child already exited — that's fine.
+        if let Err(e) = handle.child.kill() {
+            info!(session_id = %id, error = %e, "Child kill returned error (may have already exited)");
+        }
+        let _ = handle.child.wait();
+
+        // Drop the master PTY handle explicitly. On Windows (ConPTY) this
+        // closes the pseudoconsole output pipe, which unblocks the reader
+        // thread's read() call. On Unix, killing the child already causes
+        // the slave side to hang up, but dropping the master ensures cleanup.
+        drop(handle.writer);
+        drop(handle.pair);
+
         info!(session_id = %id, "PTY session killed");
         Ok(())
     }
@@ -195,4 +242,12 @@ fn default_shell() -> String {
 fn base64_encode(data: &[u8]) -> String {
     use base64::prelude::{Engine, BASE64_STANDARD};
     BASE64_STANDARD.encode(data)
+}
+
+/// Check if an IO error is a timeout/would-block error.
+fn is_timeout_error(e: &std::io::Error) -> bool {
+    matches!(
+        e.kind(),
+        std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+    )
 }

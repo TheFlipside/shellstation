@@ -15,6 +15,8 @@ All notable changes to this project are documented in this file.
 - Implement proper keyboard-interactive authentication
 - Race condition between backend data emission and frontend listener registration
 - Clipboard paste from external applications not working on Linux (WebKitGTK)
+- Application freeze when closing local sessions on Windows (ConPTY reader thread not unblocked)
+- Potential deadlock from nested mutex acquisition in PTY session kill path
 
 ### Changed
 

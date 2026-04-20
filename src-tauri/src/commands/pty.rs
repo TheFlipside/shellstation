@@ -79,8 +79,10 @@ pub fn pty_kill(
     logger_state: State<'_, SessionLogState>,
     id: String,
 ) -> Result<(), String> {
-    let mut manager = state.0.lock().map_err(|e| e.to_string())?;
-    manager.kill(&id)?;
+    {
+        let mut manager = state.0.lock().map_err(|e| e.to_string())?;
+        manager.kill(&id)?;
+    }
     if let Ok(mut mgr) = logger_state.0.lock() {
         mgr.close_log(&id);
     }
