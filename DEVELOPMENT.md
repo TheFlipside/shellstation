@@ -868,6 +868,30 @@ After installation, open a new terminal and verify:
 git --version
 ```
 
+### Install NASM (Netwide Assembler)
+
+NASM is required because `aws-lc-sys` (pulled in transitively via `russh` → `rustls` → `aws-lc-rs`) assembles its crypto primitives from `.asm` sources at build time on Windows. Without `nasm.exe` on `PATH`, the Rust build panics with `NASM command not found! Build cannot continue.`
+
+```powershell
+winget install --id NASM.NASM -e
+```
+
+The winget package does not add NASM to `PATH` automatically. Add it manually:
+
+```powershell
+[Environment]::SetEnvironmentVariable(
+  "Path",
+  [Environment]::GetEnvironmentVariable("Path", "Machine") + ";C:\Program Files\NASM",
+  "Machine"
+)
+```
+
+Restart your terminal, then verify:
+
+```powershell
+nasm --version
+```
+
 ### Optional: Windows Terminal
 
 Windows Terminal provides a better experience than the default console. Install via:
