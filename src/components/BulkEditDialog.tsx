@@ -2,6 +2,7 @@ import React, { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useEscapeKey } from "../hooks/useEscapeKey";
 import type { Session, BulkSessionEdit } from "../stores/sessionStore";
+import { sessionHasTag } from "../stores/sessionStore";
 import { useHighlightStore } from "../stores/highlightStore";
 import { SESSION_ICON_KEYS, SessionIconComponent } from "./SessionIcons";
 import { CustomSelect } from "./CustomSelect";
@@ -72,10 +73,12 @@ export function BulkEditDialog({
                 onChange={setJumpHostId}
                 options={[
                   { value: "", label: t("bulkEdit.clearValue") },
-                  ...jumpHostCandidates.map((s) => ({
-                    value: s.id,
-                    label: `${s.name} (${s.hostname})`,
-                  })),
+                  ...jumpHostCandidates
+                    .filter((s) => sessionHasTag(s, "jumphost"))
+                    .map((s) => ({
+                      value: s.id,
+                      label: `${s.name} (${s.hostname})`,
+                    })),
                 ]}
               />
             )}

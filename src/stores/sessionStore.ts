@@ -33,6 +33,18 @@ export interface Session {
   visibility: "personal" | "shared";
 }
 
+export function sessionHasTag(session: Session, tag: string): boolean {
+  try {
+    const parsed: unknown = JSON.parse(session.tags || "[]");
+    return (
+      Array.isArray(parsed) &&
+      parsed.some((t) => typeof t === "string" && t.toLowerCase() === tag.toLowerCase())
+    );
+  } catch {
+    return false;
+  }
+}
+
 interface SessionState {
   folders: Folder[];
   sessions: Session[];

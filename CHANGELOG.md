@@ -21,6 +21,7 @@ All notable changes to this project are documented in this file.
 
 ### Changed
 
+- Jump host selection filtered to sessions tagged "jumphost" for better UX at scale
 - More verbose logging in debug mode
 - Position of GUI separator is saved persistently
 - Implementation of proper multi-user RLS system with shared databases

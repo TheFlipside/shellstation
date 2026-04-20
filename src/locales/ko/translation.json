@@ -122,6 +122,7 @@
     "icon_lock": "VPN / 보안",
     "tagsLabel": "태그",
     "tagsPlaceholder": "prod, eu, web (쉼표로 구분)",
+    "tagsJumpHostNote": "Add the tag \"jumphost\" to make this session available as a jump host in the session properties of other sessions.",
     "highlightProfileLabel": "하이라이트 프로필",
     "highlightProfileNone": "없음",
     "credentialProfileLabel": "자격 증명 프로필",
