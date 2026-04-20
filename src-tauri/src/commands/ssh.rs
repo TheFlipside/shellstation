@@ -190,7 +190,7 @@ pub async fn ssh_kbd_interactive_response(
         .remove(&id)
         .ok_or_else(|| format!("No pending kbd-interactive prompt for session {id}"))?;
     sender
-        .send(responses)
+        .send(Zeroizing::new(responses))
         .map_err(|_| "Kbd-interactive channel closed".to_string())
 }
 

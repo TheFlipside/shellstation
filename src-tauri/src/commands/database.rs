@@ -730,7 +730,10 @@ fn topological_sort_folders(folders: &[Folder]) -> Vec<Folder> {
     let mut visited = HashSet::new();
     let mut queue: VecDeque<&Folder> = folders
         .iter()
-        .filter(|f| f.parent_id.is_none() || !by_id.contains_key(&f.parent_id.unwrap()))
+        .filter(|f| match f.parent_id {
+            None => true,
+            Some(pid) => !by_id.contains_key(&pid),
+        })
         .collect();
 
     while let Some(folder) = queue.pop_front() {

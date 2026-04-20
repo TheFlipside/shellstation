@@ -700,7 +700,11 @@ pub fn run() {
 
             // Initialize session logger
             let log_dir = match &app_config.logging.log_directory {
-                Some(p) if !p.is_empty() => std::path::PathBuf::from(p),
+                Some(p) if !p.is_empty() => validate_config_path(p, "Session log directory")
+                    .unwrap_or_else(|e| {
+                        eprintln!("{e} — using default log directory.");
+                        config_dir.join("logs")
+                    }),
                 _ => config_dir.join("logs"),
             };
             let log_manager = session_logger::SessionLogManager::new(

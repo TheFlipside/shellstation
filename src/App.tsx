@@ -82,7 +82,8 @@ function App(): React.JSX.Element {
 
     const handleMouseMove = (e: MouseEvent): void => {
       if (!dragging.current) return;
-      const newWidth = Math.max(160, Math.min(600, e.clientX));
+      const zoomFactor = uiScale / 100;
+      const newWidth = Math.max(160, Math.min(600, e.clientX / zoomFactor));
       setSidebarWidth(newWidth);
     };
 
@@ -96,7 +97,7 @@ function App(): React.JSX.Element {
 
     document.addEventListener("mousemove", handleMouseMove);
     document.addEventListener("mouseup", handleMouseUp);
-  }, [setSidebarWidth]);
+  }, [setSidebarWidth, uiScale]);
 
   const requestQuit = useCallback(() => {
     const tabs = useTerminalStore.getState().tabs;

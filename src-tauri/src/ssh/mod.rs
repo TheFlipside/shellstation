@@ -23,7 +23,7 @@ type HostVerifySenders = Arc<std::sync::Mutex<HashMap<String, oneshot::Sender<bo
 /// Pending keyboard-interactive auth senders. Same pattern as host verify:
 /// uses `std::sync::Mutex` to avoid deadlock with the manager's tokio Mutex.
 pub type KbdInteractiveSenders =
-    Arc<std::sync::Mutex<HashMap<String, oneshot::Sender<Vec<String>>>>>;
+    Arc<std::sync::Mutex<HashMap<String, oneshot::Sender<Zeroizing<Vec<String>>>>>>;
 
 /// Payload emitted to the frontend when the server key needs user verification.
 #[derive(Clone, Serialize)]
@@ -1186,7 +1186,7 @@ async fn authenticate_keyboard_interactive(
                 };
 
                 // Create a oneshot channel for the frontend response.
-                let (tx, rx) = oneshot::channel::<Vec<String>>();
+                let (tx, rx) = oneshot::channel::<Zeroizing<Vec<String>>>();
                 kbd_interactive_senders
                     .lock()
                     .map_err(|e| format!("Kbd-interactive sender lock poisoned: {e}"))?
@@ -1223,8 +1223,9 @@ async fn authenticate_keyboard_interactive(
                     "Sending keyboard-interactive responses"
                 );
 
+                let mut responses = responses;
                 response = handle
-                    .authenticate_keyboard_interactive_respond(responses)
+                    .authenticate_keyboard_interactive_respond(std::mem::take(&mut *responses))
                     .await
                     .map_err(|e| format!("Keyboard-interactive auth failed: {e}"))?;
             }
