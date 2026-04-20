@@ -1129,6 +1129,21 @@ Open **Windows Security > Virus & threat protection > Manage settings > Exclusio
 
 If the application window opens but shows a blank white screen, WebView2 may need reinstalling. Download the Evergreen Standalone Installer from the Microsoft Edge WebView2 page and run it.
 
+### Application icon not showing in Task Manager
+
+Windows aggressively caches executable icons. After rebuilding with a new or updated icon, Task Manager (and sometimes Explorer) may continue showing a generic icon even though the taskbar displays the correct one. This is a Windows icon cache issue, not a build problem.
+
+To force a refresh, run the following in an elevated PowerShell and then reboot:
+
+```powershell
+Stop-Process -Name explorer -Force
+Remove-Item "$env:LOCALAPPDATA\IconCache.db" -ErrorAction SilentlyContinue
+Remove-Item "$env:LOCALAPPDATA\Microsoft\Windows\Explorer\iconcache_*" -Force -ErrorAction SilentlyContinue
+Start-Process explorer.exe
+```
+
+If the icon still does not appear after rebooting, verify it is embedded in the executable: right-click the `.exe` in Explorer → Properties — the custom icon should be visible on the General tab. If it shows a generic icon there as well, the issue is in the build (check that `icon.ico` in `src-tauri/icons/` contains the expected sizes and that `tauri.conf.json` references it).
+
 ---
 
 ## 22. Building for Release
