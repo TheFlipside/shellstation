@@ -14,6 +14,7 @@ All notable changes to this project are documented in this file.
 
 - Implement proper keyboard-interactive authentication
 - Race condition between backend data emission and frontend listener registration
+- Clipboard paste from external applications not working on Linux (WebKitGTK)
 
 ### Changed
 

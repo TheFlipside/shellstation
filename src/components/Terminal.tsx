@@ -6,6 +6,7 @@ import { WebglAddon } from "@xterm/addon-webgl";
 import { SearchAddon } from "@xterm/addon-search";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { readText, writeText } from "@tauri-apps/plugin-clipboard-manager";
 import type { SessionType } from "../stores/terminalStore";
 import { useSettingsStore, ALLOWED_TERMINAL_FONTS } from "../stores/settingsStore";
 import { useSessionStore } from "../stores/sessionStore";
@@ -222,7 +223,7 @@ export function Terminal({
       if (copyOnSelectRef.current) {
         const selection = term.getSelection();
         if (selection) {
-          void navigator.clipboard.writeText(selection);
+          void writeText(selection).catch(noop);
         }
       }
     });
@@ -238,7 +239,7 @@ export function Terminal({
         event.preventDefault();
         const selection = term.getSelection();
         if (selection) {
-          void navigator.clipboard.writeText(selection);
+          void writeText(selection).catch(noop);
         }
         return false;
       }
@@ -246,9 +247,13 @@ export function Terminal({
       // Ctrl+Shift+V — paste from clipboard
       if (event.ctrlKey && event.shiftKey && event.key === "V") {
         event.preventDefault();
-        void navigator.clipboard.readText().then((text) => {
-          invoke(writeCmd, { id: sessionId, data: text }).catch(noop);
-        });
+        void readText()
+          .then((text) => {
+            if (text) {
+              invoke(writeCmd, { id: sessionId, data: text }).catch(noop);
+            }
+          })
+          .catch(noop);
         return false;
       }
 
@@ -304,11 +309,13 @@ export function Terminal({
       if (event.button === 2 && pasteOnRightClickRef.current) {
         event.preventDefault();
         event.stopPropagation();
-        void navigator.clipboard.readText().then((text) => {
-          if (text) {
-            invoke(writeCmd, { id: sessionId, data: text }).catch(noop);
-          }
-        });
+        void readText()
+          .then((text) => {
+            if (text) {
+              invoke(writeCmd, { id: sessionId, data: text }).catch(noop);
+            }
+          })
+          .catch(noop);
       }
     };
     container.addEventListener("mousedown", handleRightClick, true);

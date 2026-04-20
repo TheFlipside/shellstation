@@ -1,6 +1,7 @@
 import React, { useCallback, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
+import { readText } from "@tauri-apps/plugin-clipboard-manager";
 import { useSettingsStore, type CommandButton } from "../stores/settingsStore";
 import { useTerminalStore, type SessionType } from "../stores/terminalStore";
 import {
@@ -114,7 +115,7 @@ async function executeCommand(
     } else {
       // seg.type === "clipboard"
       try {
-        const text = await navigator.clipboard.readText();
+        const text = await readText();
         if (text) {
           await invoke(cmd, { id: sessionId, data: text });
         }

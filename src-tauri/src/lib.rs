@@ -606,6 +606,7 @@ pub fn run() {
         .manage(TerminalReadyState::default())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_clipboard_manager::init())
         .setup(move |app| {
             // Build custom menu: replicate Tauri defaults but with a
             // functional Help submenu that links to our project pages.
