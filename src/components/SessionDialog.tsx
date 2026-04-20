@@ -266,10 +266,26 @@ export function SessionDialog({
                   onChange={setJumpHostId}
                   options={[
                     { value: "", label: t("session.jumpHostNone") },
-                    ...sessions.map((s) => ({
-                      value: s.id,
-                      label: `${s.name} (${s.hostname})`,
-                    })),
+                    ...sessions
+                      .filter((s) => {
+                        if (s.protocol !== "ssh") return false;
+                        if (s.id === jumpHostId) return true;
+                        try {
+                          const parsed: unknown = JSON.parse(s.tags || "[]");
+                          return (
+                            Array.isArray(parsed) &&
+                            parsed.some(
+                              (tag) => typeof tag === "string" && tag.toLowerCase() === "jumphost",
+                            )
+                          );
+                        } catch {
+                          return false;
+                        }
+                      })
+                      .map((s) => ({
+                        value: s.id,
+                        label: `${s.name} (${s.hostname})`,
+                      })),
                   ]}
                 />
               </div>
@@ -318,6 +334,7 @@ export function SessionDialog({
               }}
               placeholder={t("session.tagsPlaceholder")}
             />
+            <p className="dialog-field-note">{t("session.tagsJumpHostNote")}</p>
           </div>
           {error && <p className="dialog-error">{error}</p>}
           <div className="dialog-actions">

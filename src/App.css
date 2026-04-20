@@ -557,6 +557,12 @@ body,
   border-color: var(--color-blue);
 }
 
+.dialog-field-note {
+  font-size: 11px;
+  color: var(--color-subtext0);
+  margin: 2px 0 0;
+}
+
 .dialog-error {
   color: var(--color-red);
   font-size: 12px;

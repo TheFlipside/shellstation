@@ -122,6 +122,7 @@
     "icon_lock": "VPN / Güvenli",
     "tagsLabel": "Etiketler",
     "tagsPlaceholder": "prod, eu, web (virgülle ayrılmış)",
+    "tagsJumpHostNote": "Add the tag \"jumphost\" to make this session available as a jump host in the session properties of other sessions.",
     "highlightProfileLabel": "Vurgulama Profili",
     "highlightProfileNone": "Yok",
     "credentialProfileLabel": "Kimlik profili",

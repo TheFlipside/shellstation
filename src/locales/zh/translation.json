@@ -122,6 +122,7 @@
     "icon_lock": "VPN / 安全",
     "tagsLabel": "标签",
     "tagsPlaceholder": "prod, eu, web（逗号分隔）",
+    "tagsJumpHostNote": "Add the tag \"jumphost\" to make this session available as a jump host in the session properties of other sessions.",
     "highlightProfileLabel": "高亮配置文件",
     "highlightProfileNone": "无",
     "credentialProfileLabel": "凭据配置文件",

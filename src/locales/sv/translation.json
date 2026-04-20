@@ -122,6 +122,7 @@
     "icon_lock": "VPN / Säker",
     "tagsLabel": "Taggar",
     "tagsPlaceholder": "prod, eu, web (kommaseparerade)",
+    "tagsJumpHostNote": "Add the tag \"jumphost\" to make this session available as a jump host in the session properties of other sessions.",
     "highlightProfileLabel": "Markeringsprofil",
     "highlightProfileNone": "Ingen",
     "credentialProfileLabel": "Inloggningsprofil",

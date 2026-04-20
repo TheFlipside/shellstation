@@ -72,10 +72,24 @@ export function BulkEditDialog({
                 onChange={setJumpHostId}
                 options={[
                   { value: "", label: t("bulkEdit.clearValue") },
-                  ...jumpHostCandidates.map((s) => ({
-                    value: s.id,
-                    label: `${s.name} (${s.hostname})`,
-                  })),
+                  ...jumpHostCandidates
+                    .filter((s) => {
+                      try {
+                        const parsed: unknown = JSON.parse(s.tags || "[]");
+                        return (
+                          Array.isArray(parsed) &&
+                          parsed.some(
+                            (tag) => typeof tag === "string" && tag.toLowerCase() === "jumphost",
+                          )
+                        );
+                      } catch {
+                        return false;
+                      }
+                    })
+                    .map((s) => ({
+                      value: s.id,
+                      label: `${s.name} (${s.hostname})`,
+                    })),
                 ]}
               />
             )}

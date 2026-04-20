@@ -122,6 +122,7 @@
     "icon_lock": "VPN / セキュア",
     "tagsLabel": "タグ",
     "tagsPlaceholder": "prod, eu, web（カンマ区切り）",
+    "tagsJumpHostNote": "Add the tag \"jumphost\" to make this session available as a jump host in the session properties of other sessions.",
     "highlightProfileLabel": "ハイライトプロファイル",
     "highlightProfileNone": "なし",
     "credentialProfileLabel": "認証プロファイル",

@@ -122,6 +122,7 @@
     "icon_lock": "VPN / Защищённый",
     "tagsLabel": "Теги",
     "tagsPlaceholder": "prod, eu, web (через запятую)",
+    "tagsJumpHostNote": "Add the tag \"jumphost\" to make this session available as a jump host in the session properties of other sessions.",
     "highlightProfileLabel": "Профиль подсветки",
     "highlightProfileNone": "Нет",
     "credentialProfileLabel": "Профиль учётных данных",
