@@ -8,6 +8,14 @@ All notable changes to this project are documented in this file.
 
 ### Fixed
 
+### Changed
+
+### Removed
+
+### 0.10.1 - 2026-04-21
+
+### Fixed
+
 - SSH connections to legacy Cisco devices failing with "early eof" through jump hosts
 - Compiler warning for unused variable on Windows builds
 
@@ -20,8 +28,6 @@ All notable changes to this project are documented in this file.
 - Import parsers enforce maximum folder nesting depth (100 levels)
 - Session log file creation verifies path stays within configured directory after open
 - Highlight engine rejects regex patterns prone to catastrophic backtracking (ReDoS)
-
-### Removed
 
 ### 0.10.0 - 2026-04-20
 
