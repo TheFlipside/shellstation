@@ -8,6 +8,7 @@ All notable changes to this project are documented in this file.
 
 ### Fixed
 
+- SSH connections to legacy Cisco devices failing with "early eof" through jump hosts
 - Compiler warning for unused variable on Windows builds
 
 ### Changed

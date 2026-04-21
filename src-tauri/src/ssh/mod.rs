@@ -693,11 +693,11 @@ fn legacy_preferred() -> russh::Preferred {
     let base = russh::Preferred::DEFAULT;
 
     let mut kex: Vec<russh::kex::Name> = base.kex.iter().copied().collect();
-    for extra in [
-        russh::kex::DH_GEX_SHA1,
-        russh::kex::DH_G14_SHA1,
-        russh::kex::DH_G1_SHA1,
-    ] {
+    // DH_GEX_SHA1 is intentionally excluded: old Cisco (SSH-1.99) uses the
+    // RFC 2409 old-format GEX message while russh sends RFC 4419 new-format,
+    // causing the device to drop the connection with "early eof".
+    // DH_G14_SHA1 provides equivalent security and works universally.
+    for extra in [russh::kex::DH_G14_SHA1, russh::kex::DH_G1_SHA1] {
         if !kex.contains(&extra) {
             kex.push(extra);
         }
