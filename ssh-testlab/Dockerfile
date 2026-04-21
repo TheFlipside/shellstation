@@ -1,15 +1,18 @@
 FROM alpine:3.20
 
+# hadolint ignore=DL3018
 RUN apk add --no-cache \
         openssh-server \
         openssh-client \
         shadow \
+        fastfetch \
     && mkdir -p /var/run/sshd \
     && ssh-keygen -A
 
 ARG TEST_USER=testuser
 ARG TEST_PASSWORD=testpass
 
+SHELL ["/bin/ash", "-eo", "pipefail", "-c"]
 RUN useradd \
         --create-home \
         --shell /bin/sh \

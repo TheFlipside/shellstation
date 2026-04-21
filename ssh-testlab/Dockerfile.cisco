@@ -1,5 +1,6 @@
 FROM alpine:3.20
 
+# hadolint ignore=DL3018
 RUN apk add --no-cache \
         openssh-server \
         shadow \
@@ -13,6 +14,7 @@ ARG TEST_PASSWORD=testpass
 COPY scripts/fake_cisco.sh /usr/local/bin/fake_cisco.sh
 RUN chmod 755 /usr/local/bin/fake_cisco.sh
 
+SHELL ["/bin/ash", "-eo", "pipefail", "-c"]
 RUN useradd \
         --create-home \
         --shell /usr/local/bin/fake_cisco.sh \
