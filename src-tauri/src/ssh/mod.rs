@@ -693,10 +693,11 @@ fn legacy_preferred() -> russh::Preferred {
     let base = russh::Preferred::DEFAULT;
 
     let mut kex: Vec<russh::kex::Name> = base.kex.iter().copied().collect();
-    // DH_GEX_SHA1 is intentionally excluded: old Cisco (SSH-1.99) uses the
-    // RFC 2409 old-format GEX message while russh sends RFC 4419 new-format,
-    // causing the device to drop the connection with "early eof".
-    // DH_G14_SHA1 provides equivalent security and works universally.
+    // Remove DH group-exchange algorithms: devices with missing/empty moduli
+    // files (e.g. Cisco Small Business) negotiate GEX then hang. DH_GEX_SHA1
+    // also fails because old Cisco SSH-1.99 sends RFC 2409 old-format messages
+    // while russh uses RFC 4419, causing "early eof".
+    kex.retain(|k| *k != russh::kex::DH_GEX_SHA256 && *k != russh::kex::DH_GEX_SHA1);
     for extra in [russh::kex::DH_G14_SHA1, russh::kex::DH_G1_SHA1] {
         if !kex.contains(&extra) {
             kex.push(extra);
@@ -957,10 +958,14 @@ async fn connect_with_hops(
     // Chain through remaining hops (if any).
     for (i, hop) in jump_hops.iter().enumerate().skip(1) {
         debug!(session_id, hop = i, host = %hop.host, port = hop.port, "Opening tunnel to next hop");
-        let tunnel = current_handle
-            .channel_open_direct_tcpip(&hop.host, hop.port.into(), "127.0.0.1", 0)
-            .await
-            .map_err(|e| format!("Failed to open tunnel to {}:{}: {e}", hop.host, hop.port))?;
+        let hop_timeout = std::time::Duration::from_secs(connect_timeout_secs);
+        let tunnel = tokio::time::timeout(
+            hop_timeout,
+            current_handle.channel_open_direct_tcpip(&hop.host, hop.port.into(), "127.0.0.1", 0),
+        )
+        .await
+        .map_err(|_| format!("Tunnel to {}:{} timed out", hop.host, hop.port))?
+        .map_err(|e| format!("Failed to open tunnel to {}:{}: {e}", hop.host, hop.port))?;
 
         let stream = tunnel.into_stream();
         let config = ssh_config(keepalive_interval_secs, keepalive_max, legacy_algorithms);
@@ -981,16 +986,26 @@ async fn connect_with_hops(
 
         bastion_handles.push(current_handle);
 
-        current_handle = client::connect_stream(config, stream, handler)
-            .await
-            .map_err(|e| {
-                cleanup_verify_sender(verify_senders, &hop_id);
-                error!(host = %hop.host, port = %hop.port, hop = i, error = %e, error_debug = ?e, "SSH hop handshake failed");
-                format!(
-                    "SSH jump host connection failed: {}",
-                    sanitize_ssh_error(&e.to_string())
-                )
-            })?;
+        current_handle = tokio::time::timeout(
+            hop_timeout,
+            client::connect_stream(config, stream, handler),
+        )
+        .await
+        .map_err(|_| {
+            cleanup_verify_sender(verify_senders, &hop_id);
+            format!(
+                "SSH handshake with {}:{} through tunnel timed out",
+                hop.host, hop.port
+            )
+        })?
+        .map_err(|e| {
+            cleanup_verify_sender(verify_senders, &hop_id);
+            error!(host = %hop.host, port = %hop.port, hop = i, error = %e, error_debug = ?e, "SSH hop handshake failed");
+            format!(
+                "SSH jump host connection failed: {}",
+                sanitize_ssh_error(&e.to_string())
+            )
+        })?;
 
         authenticate_handle(
             &mut current_handle,
@@ -1013,10 +1028,15 @@ async fn connect_with_hops(
         port = target_port,
         "Opening tunnel to final target"
     );
-    let tunnel = current_handle
-        .channel_open_direct_tcpip(target_host, target_port.into(), "127.0.0.1", 0)
-        .await
-        .map_err(|e| format!("Failed to open tunnel to {target_host}:{target_port}: {e}"))?;
+    let timeout = std::time::Duration::from_secs(connect_timeout_secs);
+
+    let tunnel = tokio::time::timeout(
+        timeout,
+        current_handle.channel_open_direct_tcpip(target_host, target_port.into(), "127.0.0.1", 0),
+    )
+    .await
+    .map_err(|_| format!("Tunnel to {target_host}:{target_port} timed out"))?
+    .map_err(|e| format!("Failed to open tunnel to {target_host}:{target_port}: {e}"))?;
 
     let stream = tunnel.into_stream();
     let config = ssh_config(keepalive_interval_secs, keepalive_max, legacy_algorithms);
@@ -1036,13 +1056,20 @@ async fn connect_with_hops(
 
     bastion_handles.push(current_handle);
 
-    let target_handle = client::connect_stream(config, stream, handler)
-        .await
-        .map_err(|e| {
-            cleanup_verify_sender(verify_senders, session_id);
-            error!(host = %target_host, port = %target_port, error = %e, error_debug = ?e, "SSH target handshake through tunnel failed");
-            sanitize_ssh_error(&e.to_string())
-        })?;
+    let target_handle = tokio::time::timeout(
+        timeout,
+        client::connect_stream(config, stream, handler),
+    )
+    .await
+    .map_err(|_| {
+        cleanup_verify_sender(verify_senders, session_id);
+        format!("SSH handshake with {target_host}:{target_port} through tunnel timed out")
+    })?
+    .map_err(|e| {
+        cleanup_verify_sender(verify_senders, session_id);
+        error!(host = %target_host, port = %target_port, error = %e, error_debug = ?e, "SSH target handshake through tunnel failed");
+        sanitize_ssh_error(&e.to_string())
+    })?;
 
     debug!(
         session_id,

@@ -30,7 +30,7 @@ All notable changes to this project are documented in this file.
 - Clipboard paste from external applications not working on Linux (WebKitGTK)
 - Application freeze when closing local sessions on Windows (ConPTY reader thread not unblocked)
 - Potential deadlock from nested mutex acquisition in PTY session kill path
-- SSH to legacy Cisco devices (Small Business) that only accept keyboard-interactive auth
+- SSH to legacy Cisco devices through jump hosts
 - Fleeting cmd windows on Windows when accepting SSH host key for the first time
 
 ### Changed
