@@ -4,7 +4,7 @@
 
 ShellStation replaces tools like mRemoteNG and SecureCRT with a modern, open-source alternative that runs on Linux, macOS, and Windows.
 
-<!-- Screenshot placeholder: add a screenshot of the main UI here -->
+![ShellStation main interface](shellstation.png)
 
 ## Why ShellStation?
 
@@ -96,4 +96,4 @@ Contributions are welcome. Please ensure all linters pass with zero warnings bef
 
 ## License
 
-Copyright LuminaApps. See [LICENSE](LICENSE) for details.
+This project is licensed under the [GNU General Public License v3.0](LICENSE).
