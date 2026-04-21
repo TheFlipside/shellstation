@@ -660,9 +660,11 @@ fn ssh_config(
         nodelay: true,
         ..Default::default()
     };
-    if legacy_algorithms {
-        config.preferred = legacy_preferred();
-    }
+    config.preferred = if legacy_algorithms {
+        legacy_preferred()
+    } else {
+        base_preferred()
+    };
     log_algorithm_proposal(&config.preferred, legacy_algorithms);
     Arc::new(config)
 }
@@ -684,13 +686,43 @@ fn log_algorithm_proposal(pref: &russh::Preferred, legacy: bool) {
     );
 }
 
+/// Extend the defaults with secure algorithms that russh implements but
+/// excludes from `Preferred::DEFAULT`. Devices like Cisco IOS XE may only
+/// offer ecdh-sha2-nistp384 for kex or aes128-gcm for cipher.
+fn base_preferred() -> russh::Preferred {
+    use std::borrow::Cow;
+    let base = russh::Preferred::DEFAULT;
+
+    let mut kex: Vec<russh::kex::Name> = base.kex.iter().copied().collect();
+    for extra in [
+        russh::kex::ECDH_SHA2_NISTP256,
+        russh::kex::ECDH_SHA2_NISTP384,
+        russh::kex::ECDH_SHA2_NISTP521,
+    ] {
+        if !kex.contains(&extra) {
+            kex.push(extra);
+        }
+    }
+
+    let mut cipher: Vec<russh::cipher::Name> = base.cipher.iter().copied().collect();
+    if !cipher.contains(&russh::cipher::AES_128_GCM) {
+        cipher.push(russh::cipher::AES_128_GCM);
+    }
+
+    russh::Preferred {
+        kex: Cow::Owned(kex),
+        cipher: Cow::Owned(cipher),
+        ..base
+    }
+}
+
 /// Build a `Preferred` algorithm set that appends legacy kex, ciphers and
 /// MACs to the modern defaults. Secure algorithms remain first in the list so
 /// a legacy-capable switch won't downgrade a modern server, but old gear that
 /// only speaks group14-sha1 / aes-cbc / hmac-sha1 can now be reached.
 fn legacy_preferred() -> russh::Preferred {
     use std::borrow::Cow;
-    let base = russh::Preferred::DEFAULT;
+    let base = base_preferred();
 
     let mut kex: Vec<russh::kex::Name> = base.kex.iter().copied().collect();
     // Remove DH group-exchange algorithms: devices with missing/empty moduli

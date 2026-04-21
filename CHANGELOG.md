@@ -13,6 +13,8 @@ All notable changes to this project are documented in this file.
 
 ### Changed
 
+- Broader SSH algorithm support (ECDH NIST P curves, AES-128-GCM) for modern Cisco IOS XE devices
+
 ### Removed
 
 ### 0.10.0 - 2026-04-20
