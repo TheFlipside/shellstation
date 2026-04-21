@@ -47,4 +47,4 @@ npx tsc --noEmit
 
 ## See Also
 
-@README.md
+@DESIGN.md
