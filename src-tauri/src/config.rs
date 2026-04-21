@@ -111,9 +111,10 @@ pub struct PostgresConfig {
     #[serde(default)]
     pub username: String,
     /// Password is stored in the OS keychain, not in config.json.
-    /// This field is populated at runtime from the keychain.
-    /// `skip_serializing` prevents accidental leaks via any serialization path.
-    #[serde(default, skip_serializing)]
+    /// This field is populated at runtime from the keychain and cleared
+    /// before writing to disk in `save_config`. It must remain serializable
+    /// because Tauri IPC uses serde to return the config to the frontend.
+    #[serde(default)]
     pub password: String,
     /// SSL mode for the PostgreSQL connection.
     /// Accepted values: "disable", "prefer" (default), "require".
