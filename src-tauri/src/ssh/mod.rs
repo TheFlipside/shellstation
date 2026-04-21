@@ -1069,7 +1069,7 @@ async fn authenticate_handle(
     let auth_ok = match auth_method {
         "password" => {
             debug!(session_id = %session_id, user = %username, "Attempting password authentication");
-            handle
+            let pw_ok = handle
                 .authenticate_password(username, auth_credential)
                 .await
                 .map(|res| {
@@ -1079,7 +1079,15 @@ async fn authenticate_handle(
                 .map_err(|e| {
                     debug!(session_id = %session_id, error = %e, error_debug = ?e, "Password auth error");
                     format!("Auth failed: {e}")
-                })?
+                })?;
+            if !pw_ok {
+                debug!(session_id = %session_id, "Password auth rejected, falling back to keyboard-interactive");
+                return authenticate_keyboard_interactive_with_password(
+                    handle, username, auth_credential, session_id,
+                )
+                .await;
+            }
+            true
         }
         "publickey" => {
             let (key_path, passphrase) = parse_key_credential(auth_credential)?;
@@ -1231,6 +1239,49 @@ async fn authenticate_keyboard_interactive(
                     .authenticate_keyboard_interactive_respond(std::mem::take(&mut *responses))
                     .await
                     .map_err(|e| format!("Keyboard-interactive auth failed: {e}"))?;
+            }
+        }
+    }
+}
+
+/// Keyboard-interactive fallback that auto-responds with a stored password.
+///
+/// Some devices (e.g. Cisco Small Business) reject `userauth_password` and only
+/// accept `keyboard-interactive`. When password auth fails, this function
+/// retries via keyboard-interactive and answers every prompt with the password.
+async fn authenticate_keyboard_interactive_with_password(
+    handle: &mut client::Handle<SshHandler>,
+    username: &str,
+    password: &str,
+    session_id: &str,
+) -> Result<(), String> {
+    debug!(session_id = %session_id, "Attempting keyboard-interactive fallback with stored password");
+
+    let mut response = handle
+        .authenticate_keyboard_interactive_start(username, None::<String>)
+        .await
+        .map_err(|e| format!("Keyboard-interactive fallback failed: {e}"))?;
+
+    loop {
+        match response {
+            KeyboardInteractiveAuthResponse::Success => {
+                debug!(session_id = %session_id, "Keyboard-interactive fallback succeeded");
+                return Ok(());
+            }
+            KeyboardInteractiveAuthResponse::Failure { .. } => {
+                return Err("Authentication rejected by server".to_string());
+            }
+            KeyboardInteractiveAuthResponse::InfoRequest { prompts, .. } => {
+                let answers: Vec<String> = prompts.iter().map(|_| password.to_string()).collect();
+                debug!(
+                    session_id = %session_id,
+                    prompt_count = prompts.len(),
+                    "Auto-responding to keyboard-interactive prompts"
+                );
+                response = handle
+                    .authenticate_keyboard_interactive_respond(answers)
+                    .await
+                    .map_err(|e| format!("Keyboard-interactive fallback failed: {e}"))?;
             }
         }
     }
