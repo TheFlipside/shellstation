@@ -40,8 +40,9 @@ pub async fn db_get_config(state: State<'_, ConfigState>) -> Result<AppConfig, S
         .map_err(|e| format!("Config lock poisoned: {e}"))?
         .clone();
     // Populate PostgreSQL password from OS keychain for the settings UI.
-    config.postgres.password =
-        crate::credentials::retrieve(config::PG_PASSWORD_KEYCHAIN_REF).unwrap_or_default();
+    config.postgres.password = crate::credentials::retrieve(config::PG_PASSWORD_KEYCHAIN_REF)
+        .map(|z| (*z).clone())
+        .unwrap_or_default();
     Ok(config)
 }
 

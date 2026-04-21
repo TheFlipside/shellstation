@@ -111,9 +111,9 @@ pub struct PostgresConfig {
     #[serde(default)]
     pub username: String,
     /// Password is stored in the OS keychain, not in config.json.
-    /// This field is populated at runtime from the keychain and
-    /// excluded when writing to disk via `save_config`.
-    #[serde(default)]
+    /// This field is populated at runtime from the keychain.
+    /// `skip_serializing` prevents accidental leaks via any serialization path.
+    #[serde(default, skip_serializing)]
     pub password: String,
     /// SSL mode for the PostgreSQL connection.
     /// Accepted values: "disable", "prefer" (default), "require".
@@ -233,7 +233,7 @@ pub fn load_config(config_dir: &Path) -> AppConfig {
                     "Retrieved PostgreSQL password from keychain ({} bytes)",
                     pw.len()
                 );
-                config.postgres.password = pw;
+                config.postgres.password = (*pw).clone();
             }
             Err(e) => {
                 tracing::error!(

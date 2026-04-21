@@ -14,11 +14,24 @@ function hexToRgb(hex: string): string | null {
   return `${String(r)};${String(g)};${String(b)}`;
 }
 
+const MAX_PATTERN_LEN = 1024;
+const NESTED_QUANTIFIER_RE = /(\+|\*|\{[\d,]+\})\)?(\+|\*|\{[\d,]+\})/;
+const ALTERNATION_QUANTIFIER_RE = /\([^)]*\|[^)]*\)[+*]/;
+
+function isSafePattern(pattern: string): boolean {
+  if (pattern.length > MAX_PATTERN_LEN) return false;
+  if (NESTED_QUANTIFIER_RE.test(pattern)) return false;
+  if (ALTERNATION_QUANTIFIER_RE.test(pattern)) return false;
+  return true;
+}
+
 function compileRule(rule: HighlightRule): CompiledRule | null {
   try {
     const rgb = hexToRgb(rule.color);
     if (rgb === null) return null;
+    if (!isSafePattern(rule.pattern)) return null;
     const flags = `gm${rule.case_sensitive ? "" : "i"}`;
+    // eslint-disable-next-line security/detect-non-literal-regexp -- validated by isSafePattern()
     const regex = new RegExp(rule.pattern, flags);
     const boldPrefix = rule.bold ? "1;" : "";
     const boldSuffix = rule.bold ? "22;" : "";

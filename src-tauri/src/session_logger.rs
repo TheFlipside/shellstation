@@ -146,6 +146,24 @@ impl SessionLogManager {
                 format!("Failed to open log file {}: {e}", path.display())
             })?;
 
+        // Post-open verification: confirm the created file resolves within
+        // log_dir. Guards against symlink races between path validation and
+        // file creation.
+        let canonical_file = path.canonicalize().map_err(|e| {
+            let _ = fs::remove_file(&path);
+            format!("Failed to canonicalize created log file: {e}")
+        })?;
+        let canonical_dir = self.log_dir.canonicalize().map_err(|e| {
+            let _ = fs::remove_file(&path);
+            format!("Failed to canonicalize log directory during post-open check: {e}")
+        })?;
+        if !canonical_file.starts_with(&canonical_dir) {
+            let _ = fs::remove_file(&path);
+            return Err(
+                "Log file path escapes the configured log directory (post-open check)".to_string(),
+            );
+        }
+
         // Set restrictive permissions on Unix (owner read/write only).
         #[cfg(unix)]
         {

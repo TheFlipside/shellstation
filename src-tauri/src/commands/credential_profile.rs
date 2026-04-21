@@ -114,6 +114,7 @@ pub async fn credential_profile_get_secret(
         .await?
         .ok_or_else(|| format!("Credential profile {id} not found"))?;
     crate::credentials::retrieve(&profile.keychain_ref)
+        .map(|z| (*z).clone())
         .map_err(|e| format!("Failed to retrieve secret from keychain: {e}"))
 }
 

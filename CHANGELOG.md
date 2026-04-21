@@ -14,6 +14,12 @@ All notable changes to this project are documented in this file.
 ### Changed
 
 - Broader SSH algorithm support (ECDH NIST P curves, AES-128-GCM) for modern Cisco IOS XE devices
+- Credential retrieval returns zeroized memory wrapper to prevent secrets lingering in RAM
+- Keychain error messages sanitized to prevent leaking OS keychain backend details
+- PostgreSQL password field excluded from serialization to prevent accidental leaks
+- Import parsers enforce maximum folder nesting depth (100 levels)
+- Session log file creation verifies path stays within configured directory after open
+- Highlight engine rejects regex patterns prone to catastrophic backtracking (ReDoS)
 
 ### Removed
 

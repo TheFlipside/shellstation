@@ -732,11 +732,7 @@ fn profile_to_auth(
         "password" => {
             let secret = crate::credentials::retrieve(&profile.keychain_ref)
                 .map_err(|e| format!("Failed to retrieve profile secret: {e}"))?;
-            Ok((
-                profile.username.clone(),
-                "password".to_string(),
-                Zeroizing::new(secret),
-            ))
+            Ok((profile.username.clone(), "password".to_string(), secret))
         }
         "key" => {
             // Private-key path is stored on the profile row; any passphrase

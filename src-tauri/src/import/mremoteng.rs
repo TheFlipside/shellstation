@@ -5,6 +5,10 @@ use quick_xml::Reader;
 
 use super::{ImportedFolder, ImportedSession, ParseResult};
 
+/// Maximum allowed folder nesting depth to prevent stack exhaustion from
+/// pathologically deep XML structures.
+const MAX_NESTING_DEPTH: usize = 100;
+
 /// Parse an mRemoteNG `confCons.xml` file into folders and sessions.
 ///
 /// The format uses `<Node>` elements with attributes:
@@ -36,6 +40,11 @@ pub fn parse(xml: &str) -> Result<ParseResult, String> {
 
                 match node_type {
                     "Container" => {
+                        if folder_stack.len() >= MAX_NESTING_DEPTH {
+                            return Err(format!(
+                                "Folder nesting exceeds maximum depth of {MAX_NESTING_DEPTH}"
+                            ));
+                        }
                         let parent = folder_stack.last().copied().unwrap_or(root_temp_id);
                         let temp_id = next_temp_id;
                         next_temp_id += 1;

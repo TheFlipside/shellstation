@@ -3,6 +3,10 @@ use quick_xml::Reader;
 
 use super::{ImportedFolder, ImportedSession, ParseResult};
 
+/// Maximum allowed folder nesting depth to prevent stack exhaustion from
+/// pathologically deep XML structures.
+const MAX_NESTING_DEPTH: usize = 100;
+
 /// Names of built-in SecureCRT sessions to skip during import.
 const SKIP_SESSIONS: &[&str] = &[
     "Default",
@@ -39,6 +43,7 @@ pub fn parse(xml: &str) -> Result<ParseResult, String> {
         &mut folders,
         &mut sessions,
         &mut warnings,
+        0,
     )?;
 
     Ok((folders, sessions, warnings))
@@ -75,6 +80,8 @@ fn find_sessions_key(reader: &mut Reader<&[u8]>) -> Result<bool, String> {
 
 /// Parse immediate `<key>` children of the current block until the
 /// matching `</key>` end tag is reached.
+// Mutable output vectors must be threaded through the recursive descent.
+#[allow(clippy::too_many_arguments)]
 fn parse_key_children(
     reader: &mut Reader<&[u8]>,
     parent_temp_id: usize,
@@ -82,6 +89,7 @@ fn parse_key_children(
     folders: &mut Vec<ImportedFolder>,
     sessions: &mut Vec<ImportedSession>,
     warnings: &mut Vec<String>,
+    depth: usize,
 ) -> Result<(), String> {
     loop {
         match reader.read_event() {
@@ -96,6 +104,7 @@ fn parse_key_children(
                             folders,
                             sessions,
                             warnings,
+                            depth,
                         )?,
                         None => {
                             warnings.push("Skipped <key> element without name attribute".into());
@@ -125,6 +134,8 @@ fn parse_key_children(
 /// Collects typed properties and processes child `<key>` blocks recursively.
 /// After reading all children, determines whether this block is a session
 /// or a folder based on the `Is Session` property.
+// Mutable output vectors must be threaded through the recursive descent.
+#[allow(clippy::too_many_arguments)]
 fn parse_key_block(
     reader: &mut Reader<&[u8]>,
     key_name: &str,
@@ -133,7 +144,14 @@ fn parse_key_block(
     folders: &mut Vec<ImportedFolder>,
     sessions: &mut Vec<ImportedSession>,
     warnings: &mut Vec<String>,
+    depth: usize,
 ) -> Result<(), String> {
+    if depth >= MAX_NESTING_DEPTH {
+        return Err(format!(
+            "Folder nesting exceeds maximum depth of {MAX_NESTING_DEPTH}"
+        ));
+    }
+
     // Skip built-in default sessions early.
     if SKIP_SESSIONS.contains(&key_name) {
         skip_through_end(reader, b"key")?;
@@ -174,6 +192,7 @@ fn parse_key_block(
                                 folders,
                                 sessions,
                                 warnings,
+                                depth + 1,
                             )?,
                             None => {
                                 warnings.push(format!(

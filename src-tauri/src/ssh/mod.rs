@@ -1142,7 +1142,10 @@ async fn authenticate_handle(
             if !pw_ok {
                 debug!(session_id = %session_id, "Password auth rejected, falling back to keyboard-interactive");
                 return authenticate_keyboard_interactive_with_password(
-                    handle, username, auth_credential, session_id,
+                    handle,
+                    username,
+                    auth_credential,
+                    session_id,
                 )
                 .await;
             }
@@ -1339,8 +1342,7 @@ async fn authenticate_keyboard_interactive_with_password(
                 round += 1;
                 if round > MAX_ROUNDS {
                     return Err(
-                        "Keyboard-interactive fallback exceeded maximum prompt rounds"
-                            .to_string(),
+                        "Keyboard-interactive fallback exceeded maximum prompt rounds".to_string(),
                     );
                 }
                 let answers: Vec<String> = prompts.iter().map(|_| password.to_string()).collect();

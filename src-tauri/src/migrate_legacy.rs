@@ -50,7 +50,9 @@ pub async fn migrate_legacy_credentials(
     let mut groups: HashMap<DedupKey, Vec<usize>> = HashMap::new();
     let mut secrets: Vec<String> = Vec::with_capacity(legacy.len());
     for (i, cred) in legacy.iter().enumerate() {
-        let secret = crate::credentials::retrieve(&cred.keychain_ref).unwrap_or_default();
+        let secret = crate::credentials::retrieve(&cred.keychain_ref)
+            .map(|z| (*z).clone())
+            .unwrap_or_default();
         let key = (
             cred.auth_type.clone(),
             cred.username.clone(),
