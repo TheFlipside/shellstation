@@ -32,7 +32,7 @@ ShellStation replaces tools like mRemoteNG and SecureCRT with a modern, open-sou
 
 ## Installation
 
-Download the latest release for your platform from the [Releases](../../releases) page:
+Download the latest release for your platform from the [Releases](../releases) page:
 
 - **Linux**: `.deb` or `.AppImage`
 - **macOS**: `.dmg`
