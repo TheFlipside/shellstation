@@ -1262,6 +1262,8 @@ async fn authenticate_keyboard_interactive_with_password(
         .await
         .map_err(|e| format!("Keyboard-interactive fallback failed: {e}"))?;
 
+    const MAX_ROUNDS: u8 = 3;
+    let mut round = 0u8;
     loop {
         match response {
             KeyboardInteractiveAuthResponse::Success => {
@@ -1269,12 +1271,23 @@ async fn authenticate_keyboard_interactive_with_password(
                 return Ok(());
             }
             KeyboardInteractiveAuthResponse::Failure { .. } => {
-                return Err("Authentication rejected by server".to_string());
+                return Err(
+                    "Authentication rejected by server (password and keyboard-interactive fallback both failed)"
+                        .to_string(),
+                );
             }
             KeyboardInteractiveAuthResponse::InfoRequest { prompts, .. } => {
+                round += 1;
+                if round > MAX_ROUNDS {
+                    return Err(
+                        "Keyboard-interactive fallback exceeded maximum prompt rounds"
+                            .to_string(),
+                    );
+                }
                 let answers: Vec<String> = prompts.iter().map(|_| password.to_string()).collect();
                 debug!(
                     session_id = %session_id,
+                    round,
                     prompt_count = prompts.len(),
                     "Auto-responding to keyboard-interactive prompts"
                 );
