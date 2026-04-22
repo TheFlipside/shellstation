@@ -8,6 +8,14 @@ All notable changes to this project are documented in this file.
 
 ### Fixed
 
+### Changed
+
+### Removed
+
+### 0.10.2 - 2026-04-22
+
+### Fixed
+
 - SSH connections to Cisco Small Business switches (SG350, Catalyst 1300) failing with "Channel send error" through jump hosts
 - Dropdown menus positioned incorrectly when UI scale is not 100% (cross-engine CSS zoom compensation)
 - Highlight profile dialog buttons using unstyled default HTML appearance instead of themed dialog buttons
@@ -17,8 +25,6 @@ All notable changes to this project are documented in this file.
 - Credential manager profile list now shows dividers between name and username, and separator lines between entries
 - Improved translations across all 14 languages: fixed awkward wording, translated missing keys, added hint texts for settings sections
 - Session log and application log hint texts now use tooltip icons consistent with the rest of the settings UI
-
-### Removed
 
 ### 0.10.1 - 2026-04-21
 
