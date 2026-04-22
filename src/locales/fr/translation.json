@@ -24,6 +24,7 @@
     "setCredentials": "Définir les identifiants…",
     "editSessions": "Modifier les sessions…",
     "applyCredentialProfile": "Appliquer un profil d'identifiants…",
+    "applyLoginSequence": "Appliquer une séquence de connexion…",
     "bulkEdit": "Édition en masse des sessions…",
     "makeShared": "Make Shared",
     "makePersonal": "Make Personal"
@@ -33,6 +34,7 @@
     "info": "Applique les changements à toutes les sessions de ce dossier et de ses sous-dossiers. Seuls les champs cochés sont mis à jour. Le jump host ne s'applique qu'aux sessions SSH.",
     "setJumpHost": "Définir le jump host",
     "setHighlightProfile": "Définir le profil de surlignage",
+    "setLoginSequence": "Définir la séquence de connexion",
     "setIcon": "Définir l'icône",
     "clearValue": "(Effacer)",
     "success": "{{count}} session(s) mise(s) à jour"
@@ -44,6 +46,13 @@
     "dialogRename": "Renommer le dossier",
     "nameLabel": "Nom",
     "namePlaceholder": "Nom du dossier"
+  },
+  "folderLoginSequence": {
+    "title": "Appliquer la séquence de connexion — {{name}}",
+    "info": "Attribue une séquence de connexion à toutes les sessions de ce dossier et de ses sous-dossiers.",
+    "sequenceLabel": "Séquence de connexion",
+    "sequenceNone": "(Effacer l'attribution)",
+    "success": "{{count}} session(s) mise(s) à jour"
   },
   "folderCredential": {
     "title": "Appliquer le profil d'identifiants — {{name}}",
@@ -77,6 +86,43 @@
     "nameRequired": "Le nom du profil est requis.",
     "none": "(Aucun)",
     "manageLink": "Gérer…"
+  },
+  "loginSequences": {
+    "title": "Gestionnaire de séquences de connexion",
+    "info": "Les séquences de connexion automatisent les invites post-connexion (ex. nom d'utilisateur/mot de passe au niveau de l'appareil). Chaque séquence est une liste d'étapes attendre/envoyer.",
+    "open": "Séquences de connexion",
+    "newSequence": "Nouvelle séquence",
+    "nameLabel": "Nom de la séquence",
+    "namePlaceholder": "ex. Cisco Switch Login",
+    "sendInitialCr": "Envoyer un retour chariot initial",
+    "sendInitialCrHint": "Envoie un CR avant d'attendre la première invite. Utile pour les appareils qui nécessitent une touche pour afficher l'invite de connexion.",
+    "stepsLabel": "Étapes",
+    "stepNumber": "Étape {{n}}",
+    "patternLabel": "Attendre (regex)",
+    "patternPlaceholder": "ex. [Uu]sername:",
+    "responseLabel": "Envoyer",
+    "responsePlaceholder": "ex. \\s",
+    "appendCr": "Ajouter un retour chariot",
+    "addStep": "Ajouter une étape",
+    "moveUp": "Monter",
+    "moveDown": "Descendre",
+    "escapeTitle": "Séquences d'échappement",
+    "esc_s": "Nom d'utilisateur",
+    "esc_w": "Mot de passe",
+    "esc_r": "CR",
+    "esc_n": "LF",
+    "esc_t": "Tab",
+    "esc_b": "Retour arrière",
+    "esc_e": "ESC",
+    "esc_backslash": "Barre oblique inversée",
+    "esc_p": "Pause 1 s",
+    "noneYet": "Aucune séquence de connexion.",
+    "deleteConfirm": "Supprimer la séquence de connexion \"{{name}}\" ? Les sessions qui l'utilisent devront en réassigner une nouvelle.",
+    "nameRequired": "Le nom de la séquence est requis.",
+    "needOneStep": "Au moins une étape avec un motif est requise.",
+    "stepCount": "{{count}} étape(s)",
+    "manageLink": "Gérer…",
+    "none": "(Aucune)"
   },
   "session": {
     "deleteConfirm": "Supprimer la session « {{name}} » ?",
@@ -127,6 +173,8 @@
     "highlightProfileNone": "Aucun",
     "credentialProfileLabel": "Profil d'identifiants",
     "credentialProfileNone": "(Aucun — repli clavier interactif)",
+    "loginSequenceLabel": "Séquence de connexion",
+    "loginSequenceNone": "Aucune",
     "usernameHintKbd": "Requis pour l'authentification keyboard-interactive lorsqu'aucun profil d'identifiants n'est attribué."
   },
   "dialog": {

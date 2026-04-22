@@ -53,6 +53,7 @@ quick-xml = "0.39.2"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 tauri-plugin-clipboard-manager = "2.3.2"
 subtle = "2.6.1"
+regex = "1"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 keyring = { version = "3", features = ["linux-native-sync-persistent", "crypto-rust"] }

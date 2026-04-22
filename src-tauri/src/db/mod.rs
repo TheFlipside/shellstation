@@ -8,9 +8,9 @@ use async_trait::async_trait;
 use uuid::Uuid;
 
 use models::{
-    Credential, CredentialProfile, DataFingerprint, Folder, HighlightProfile, NewCredentialProfile,
-    NewFolder, NewHighlightProfile, NewSession, Session, UpdateCredentialProfile,
-    UpdateHighlightProfile, UpdateSession,
+    Credential, CredentialProfile, DataFingerprint, Folder, HighlightProfile, LoginSequence,
+    NewCredentialProfile, NewFolder, NewHighlightProfile, NewLoginSequence, NewSession, Session,
+    UpdateCredentialProfile, UpdateHighlightProfile, UpdateLoginSequence, UpdateSession,
 };
 
 pub type DbResult<T> = Result<T, String>;
@@ -21,6 +21,7 @@ pub type DbResult<T> = Result<T, String>;
 pub struct BulkSessionEdit {
     pub jump_host_id: Option<Option<Uuid>>,
     pub highlight_profile_id: Option<Option<Uuid>>,
+    pub login_sequence_id: Option<Option<Uuid>>,
     pub icon: Option<String>,
 }
 
@@ -31,6 +32,10 @@ pub struct DbState(pub Arc<dyn DatabaseProvider>);
 /// Credentials are always stored locally (never in a shared central DB)
 /// so each user keeps their own secrets.
 pub struct CredentialDbState(pub Arc<dyn DatabaseProvider>);
+
+/// Tauri managed state wrapping the local login sequence provider.
+/// Login sequences are always stored locally, same as credentials.
+pub struct LoginSequenceDbState(pub Arc<dyn DatabaseProvider>);
 
 /// Direct access to the PostgreSQL connection pool for operations that
 /// bypass the `DatabaseProvider` trait (e.g. `session_credentials` table).
@@ -137,6 +142,22 @@ pub trait DatabaseProvider: Send + Sync {
         update: UpdateHighlightProfile,
     ) -> DbResult<()>;
     async fn delete_highlight_profile(&self, id: Uuid) -> DbResult<()>;
+
+    // ── Login Sequences ───────────────────────────────────────────────
+
+    async fn create_login_sequence(&self, sequence: NewLoginSequence) -> DbResult<LoginSequence>;
+    async fn list_login_sequences(&self) -> DbResult<Vec<LoginSequence>>;
+    async fn get_login_sequence(&self, id: Uuid) -> DbResult<Option<LoginSequence>>;
+    async fn update_login_sequence(&self, id: Uuid, update: UpdateLoginSequence) -> DbResult<()>;
+    async fn delete_login_sequence(&self, id: Uuid) -> DbResult<()>;
+
+    /// Assign `sequence_id` to every session in `folder_id` and its descendants.
+    /// Returns the number of sessions updated.
+    async fn bulk_set_session_login_sequence(
+        &self,
+        folder_id: Uuid,
+        sequence_id: Option<Uuid>,
+    ) -> DbResult<u32>;
 
     /// Return a lightweight fingerprint derived from row counts and a hash of
     /// all folder/session IDs and names.  The frontend polls this to decide

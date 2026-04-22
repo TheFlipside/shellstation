@@ -6,6 +6,13 @@ All notable changes to this project are documented in this file.
 
 ### Added
 
+- Login sequence profiles: automate post-connection device prompts (e.g. username/password on Cisco switches) with regex-based expect/send steps, assignable per session
+- Login sequence manager accessible from the sidebar and session dialogs
+- Escape sequences in login responses: `\s` (username), `\w` (password), `\r`, `\n`, `\t`, `\b`, `\e`, `\\`, `\p` (1s pause)
+- Bulk-assign login sequences to folders via context menu and bulk edit dialog
+- Per-user login sequence mapping in PostgreSQL shared mode
+- Login sequence export/import support
+
 ### Fixed
 
 - Settings status messages (save confirmations, errors) appearing indented due to stray left margin

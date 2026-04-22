@@ -24,6 +24,7 @@
     "setCredentials": "Zugangsdaten setzen…",
     "editSessions": "Sitzungen bearbeiten…",
     "applyCredentialProfile": "Anmeldeprofil anwenden…",
+    "applyLoginSequence": "Login-Sequenz anwenden…",
     "bulkEdit": "Verbindungen bearbeiten…",
     "makeShared": "Freigeben",
     "makePersonal": "Persönlich machen"
@@ -33,6 +34,7 @@
     "info": "Änderungen auf alle Sitzungen in diesem Ordner und Unterordnern anwenden. Nur markierte Felder werden aktualisiert. Jump-Host gilt nur für SSH-Sitzungen.",
     "setJumpHost": "Jump-Host setzen",
     "setHighlightProfile": "Hervorhebungsprofil setzen",
+    "setLoginSequence": "Login-Sequenz setzen",
     "setIcon": "Symbol setzen",
     "clearValue": "(Leeren)",
     "success": "{{count}} Sitzung(en) aktualisiert"
@@ -44,6 +46,13 @@
     "dialogRename": "Ordner umbenennen",
     "nameLabel": "Name",
     "namePlaceholder": "Ordnername"
+  },
+  "folderLoginSequence": {
+    "title": "Login-Sequenz anwenden — {{name}}",
+    "info": "Weist allen Sitzungen in diesem Ordner und Unterordnern eine Login-Sequenz zu.",
+    "sequenceLabel": "Login-Sequenz",
+    "sequenceNone": "(Zuweisung aufheben)",
+    "success": "{{count}} Sitzung(en) aktualisiert"
   },
   "folderCredential": {
     "title": "Anmeldeprofil anwenden — {{name}}",
@@ -77,6 +86,43 @@
     "nameRequired": "Profilname ist erforderlich.",
     "none": "(Keines)",
     "manageLink": "Verwalten…"
+  },
+  "loginSequences": {
+    "title": "Login-Sequenz-Verwaltung",
+    "info": "Login-Sequenzen automatisieren Eingabeaufforderungen nach dem Verbindungsaufbau (z. B. gerätespezifischer Benutzername/Passwort). Jede Sequenz ist eine Liste von Erwarten/Senden-Schritten.",
+    "open": "Login-Sequenzen",
+    "newSequence": "Neue Sequenz",
+    "nameLabel": "Sequenzname",
+    "namePlaceholder": "z. B. Cisco Switch Login",
+    "sendInitialCr": "Anfänglichen Wagenrücklauf senden",
+    "sendInitialCrHint": "Sendet einen CR, bevor auf die erste Eingabeaufforderung gewartet wird. Nützlich für Geräte, die einen Tastendruck benötigen, um die Login-Eingabeaufforderung anzuzeigen.",
+    "stepsLabel": "Schritte",
+    "stepNumber": "Schritt {{n}}",
+    "patternLabel": "Erwarten (regex)",
+    "patternPlaceholder": "z. B. [Uu]sername:",
+    "responseLabel": "Senden",
+    "responsePlaceholder": "z. B. \\s",
+    "appendCr": "Wagenrücklauf anhängen",
+    "addStep": "Schritt hinzufügen",
+    "moveUp": "Nach oben",
+    "moveDown": "Nach unten",
+    "escapeTitle": "Escape-Sequenzen",
+    "esc_s": "Benutzername",
+    "esc_w": "Passwort",
+    "esc_r": "CR",
+    "esc_n": "LF",
+    "esc_t": "Tab",
+    "esc_b": "Rücktaste",
+    "esc_e": "ESC",
+    "esc_backslash": "Backslash",
+    "esc_p": "Pause 1 s",
+    "noneYet": "Noch keine Login-Sequenzen.",
+    "deleteConfirm": "Login-Sequenz \"{{name}}\" löschen? Sitzungen, die sie verwenden, benötigen eine neue Sequenz.",
+    "nameRequired": "Sequenzname ist erforderlich.",
+    "needOneStep": "Mindestens ein Schritt mit einem Muster ist erforderlich.",
+    "stepCount": "{{count}} Schritt(e)",
+    "manageLink": "Verwalten…",
+    "none": "(Keine)"
   },
   "session": {
     "deleteConfirm": "Sitzung \"{{name}}\" löschen?",
@@ -127,6 +173,8 @@
     "highlightProfileNone": "Keines",
     "credentialProfileLabel": "Anmeldeprofil",
     "credentialProfileNone": "(Keines — Tastatur-Interaktiv Fallback)",
+    "loginSequenceLabel": "Login-Sequenz",
+    "loginSequenceNone": "Keine",
     "usernameHintKbd": "Erforderlich für Keyboard-Interactive-Authentifizierung, wenn kein Anmeldeprofil zugewiesen ist."
   },
   "dialog": {

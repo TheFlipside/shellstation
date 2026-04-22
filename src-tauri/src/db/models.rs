@@ -51,6 +51,8 @@ pub struct Session {
     /// Needed for old network gear that only supports those.
     #[serde(default)]
     pub legacy_algorithms: bool,
+    #[serde(default)]
+    pub login_sequence_id: Option<Uuid>,
     /// PostgreSQL user who created this session. `"local"` in SQLite mode.
     #[serde(default = "default_owner")]
     pub owner: String,
@@ -76,6 +78,8 @@ pub struct NewSession {
     pub credential_profile_id: Option<Uuid>,
     #[serde(default)]
     pub legacy_algorithms: bool,
+    #[serde(default)]
+    pub login_sequence_id: Option<Uuid>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -92,6 +96,7 @@ pub struct UpdateSession {
     pub highlight_profile_id: Option<Option<Uuid>>,
     pub credential_profile_id: Option<Option<Uuid>>,
     pub legacy_algorithms: Option<bool>,
+    pub login_sequence_id: Option<Option<Uuid>>,
 }
 
 // ── Credential Profiles (shared, not per-session) ────────────────────────
@@ -161,6 +166,43 @@ pub struct UpdateHighlightProfile {
     pub rules: Option<String>,
 }
 
+// ── Login Sequences ───────────────────────────────────────────────────
+
+fn default_true() -> bool {
+    true
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LoginSequenceStep {
+    pub pattern: String,
+    pub response: String,
+    #[serde(default = "default_true")]
+    pub append_cr: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LoginSequence {
+    pub id: Uuid,
+    pub name: String,
+    pub send_initial_cr: bool,
+    pub steps: Vec<LoginSequenceStep>,
+    pub sort_order: i32,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct NewLoginSequence {
+    pub name: String,
+    pub send_initial_cr: bool,
+    pub steps: Vec<LoginSequenceStep>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub struct UpdateLoginSequence {
+    pub name: Option<String>,
+    pub send_initial_cr: Option<bool>,
+    pub steps: Option<Vec<LoginSequenceStep>>,
+}
+
 /// Lightweight fingerprint for polling-based change detection.
 /// The frontend compares this string across polls — if it changes,
 /// a full `loadAll()` is triggered.
@@ -180,4 +222,6 @@ pub struct ExportData {
     pub highlight_profiles: Vec<HighlightProfile>,
     #[serde(default)]
     pub credential_profiles: Vec<CredentialProfile>,
+    #[serde(default)]
+    pub login_sequences: Vec<LoginSequence>,
 }

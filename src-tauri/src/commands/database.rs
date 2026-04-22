@@ -403,12 +403,14 @@ pub async fn db_save_config(
 async fn build_export_data(
     state: &DbState,
     cred_db: &CredentialDbState,
+    login_seq_db: &crate::db::LoginSequenceDbState,
 ) -> Result<ExportData, String> {
     let folders = state.0.list_folders().await?;
     let sessions = state.0.list_all_sessions().await?;
     let credentials = cred_db.0.list_all_credentials().await?;
     let highlight_profiles = state.0.list_highlight_profiles().await?;
     let credential_profiles = cred_db.0.list_credential_profiles().await?;
+    let login_sequences = login_seq_db.0.list_login_sequences().await?;
 
     // Credentials contain only metadata (username, auth_type, keychain_ref).
     // Secrets are stored in the OS keychain and never exported.
@@ -418,6 +420,7 @@ async fn build_export_data(
         credentials,
         highlight_profiles,
         credential_profiles,
+        login_sequences,
     })
 }
 
@@ -425,14 +428,16 @@ async fn build_export_data(
 pub async fn db_export(
     state: State<'_, DbState>,
     cred_db: State<'_, CredentialDbState>,
+    login_seq_db: State<'_, crate::db::LoginSequenceDbState>,
 ) -> Result<ExportData, String> {
-    build_export_data(&state, &cred_db).await
+    build_export_data(&state, &cred_db, &login_seq_db).await
 }
 
 #[tauri::command]
 pub async fn db_export_file(
     state: State<'_, DbState>,
     cred_db: State<'_, CredentialDbState>,
+    login_seq_db: State<'_, crate::db::LoginSequenceDbState>,
     path: String,
 ) -> Result<String, String> {
     let dest = std::path::Path::new(&path);
@@ -464,7 +469,7 @@ pub async fn db_export_file(
 
     let final_path = canonical_parent.join(file_name);
 
-    let data = build_export_data(&state, &cred_db).await?;
+    let data = build_export_data(&state, &cred_db, &login_seq_db).await?;
     let json = serde_json::to_string_pretty(&data)
         .map_err(|e| format!("Failed to serialize export data: {e}"))?;
     std::fs::write(&final_path, json).map_err(|e| format!("Failed to write export file: {e}"))?;
@@ -541,6 +546,7 @@ fn validate_import_data(data: &ExportData) -> Result<(), String> {
 pub async fn db_import(
     state: State<'_, DbState>,
     cred_db: State<'_, CredentialDbState>,
+    login_seq_db: State<'_, crate::db::LoginSequenceDbState>,
     data: ExportData,
 ) -> Result<String, String> {
     validate_import_data(&data)?;
@@ -641,6 +647,7 @@ pub async fn db_import(
                 icon: session.icon.clone(),
                 highlight_profile_id: None,
                 credential_profile_id: None,
+                login_sequence_id: None,
                 legacy_algorithms: session.legacy_algorithms,
             })
             .await
@@ -705,14 +712,23 @@ pub async fn db_import(
         profile_count += 1;
     }
 
-    // Wire up highlight_profile_id for sessions (remap IDs).
-    // Highlight profiles use the same ID in export — no remap needed since
-    // create_highlight_profile generates new IDs. For simplicity, skip
-    // highlight_profile_id remapping during generic import; the SecureCRT
-    // highlight importer is the primary path for this data.
+    // Import login sequences into local store.
+    let mut login_seq_count = 0u32;
+    for seq in &data.login_sequences {
+        login_seq_db
+            .0
+            .create_login_sequence(crate::db::models::NewLoginSequence {
+                name: seq.name.clone(),
+                send_initial_cr: seq.send_initial_cr,
+                steps: seq.steps.clone(),
+            })
+            .await
+            .map_err(|e| format!("Failed to import login sequence '{}': {e}", seq.name))?;
+        login_seq_count += 1;
+    }
 
     let mut summary = format!(
-        "Imported {folder_count} folders, {session_count} sessions, {credential_count} credentials, {profile_count} highlight profiles"
+        "Imported {folder_count} folders, {session_count} sessions, {credential_count} credentials, {profile_count} highlight profiles, {login_seq_count} login sequences"
     );
     if skipped_folders > 0 || skipped_sessions > 0 {
         summary.push_str(&format!(

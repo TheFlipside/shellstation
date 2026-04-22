@@ -108,6 +108,7 @@ pub struct SshConnectParams {
     /// before entering its read loop, preventing early output from being emitted
     /// before the frontend event listener is registered.
     pub ready_rx: oneshot::Receiver<()>,
+    pub login_sequence: Option<crate::login_sequence::LoginSequenceConfig>,
 }
 
 /// Manages all active SSH sessions.
@@ -208,6 +209,7 @@ pub async fn establish_ssh_connection(
         logger,
         kbd_interactive_senders,
         ready_rx,
+        login_sequence,
     } = params;
 
     info!(session_id = %id, host = %host, port = %port, hops = jump_hops.len(), legacy_algorithms, "Connecting via SSH");
@@ -297,6 +299,21 @@ pub async fn establish_ssh_connection(
             }
         }
         let mut channel = channel;
+
+        if let Some(config) = login_sequence {
+            let io = crate::login_sequence::LoginSequenceIO {
+                config,
+                event_name: &event_name,
+                app: &app,
+                session_id: &session_id,
+                logger: logger.as_ref(),
+            };
+            let mut transport = crate::login_sequence::SshChannelTransport {
+                channel: &mut channel,
+            };
+            crate::login_sequence::run_login_sequence(io, &mut transport).await;
+        }
+
         loop {
             tokio::select! {
                 msg = channel.wait() => {

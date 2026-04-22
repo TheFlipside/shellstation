@@ -24,6 +24,7 @@
     "setCredentials": "認証情報を設定…",
     "editSessions": "セッションを編集…",
     "applyCredentialProfile": "認証プロファイルを適用…",
+    "applyLoginSequence": "ログインシーケンスを適用…",
     "bulkEdit": "セッションを一括編集…",
     "makeShared": "Make Shared",
     "makePersonal": "Make Personal"
@@ -33,6 +34,7 @@
     "info": "このフォルダーとサブフォルダー内のすべてのセッションに変更を適用します。チェックしたフィールドのみが更新されます。ジャンプホストは SSH セッションにのみ適用されます。",
     "setJumpHost": "ジャンプホストを設定",
     "setHighlightProfile": "ハイライトプロファイルを設定",
+    "setLoginSequence": "ログインシーケンスを設定",
     "setIcon": "アイコンを設定",
     "clearValue": "(クリア)",
     "success": "{{count}} 件のセッションを更新しました"
@@ -44,6 +46,13 @@
     "dialogRename": "フォルダーの名前変更",
     "nameLabel": "名前",
     "namePlaceholder": "フォルダー名"
+  },
+  "folderLoginSequence": {
+    "title": "ログインシーケンスを適用 — {{name}}",
+    "info": "このフォルダーとサブフォルダー内のすべてのセッションにログインシーケンスを割り当てます。",
+    "sequenceLabel": "ログインシーケンス",
+    "sequenceNone": "(割り当てをクリア)",
+    "success": "{{count}} 件のセッションを更新しました"
   },
   "folderCredential": {
     "title": "認証プロファイルを適用 — {{name}}",
@@ -77,6 +86,43 @@
     "nameRequired": "プロファイル名は必須です。",
     "none": "(なし)",
     "manageLink": "管理…"
+  },
+  "loginSequences": {
+    "title": "ログインシーケンス管理",
+    "info": "ログインシーケンスは接続後のプロンプト（デバイスレベルのユーザー名/パスワードなど）を自動化します。各シーケンスは期待/送信ステップのリストです。",
+    "open": "ログインシーケンス",
+    "newSequence": "新しいシーケンス",
+    "nameLabel": "シーケンス名",
+    "namePlaceholder": "例: Cisco Switch Login",
+    "sendInitialCr": "最初にキャリッジリターンを送信",
+    "sendInitialCrHint": "最初のプロンプトを待つ前に CR を送信します。ログインプロンプトを表示するためにキー入力が必要なデバイスに便利です。",
+    "stepsLabel": "ステップ",
+    "stepNumber": "ステップ {{n}}",
+    "patternLabel": "期待 (regex)",
+    "patternPlaceholder": "例: [Uu]sername:",
+    "responseLabel": "送信",
+    "responsePlaceholder": "例: \\s",
+    "appendCr": "キャリッジリターンを付加",
+    "addStep": "ステップを追加",
+    "moveUp": "上へ移動",
+    "moveDown": "下へ移動",
+    "escapeTitle": "エスケープシーケンス",
+    "esc_s": "ユーザー名",
+    "esc_w": "パスワード",
+    "esc_r": "CR",
+    "esc_n": "LF",
+    "esc_t": "Tab",
+    "esc_b": "バックスペース",
+    "esc_e": "ESC",
+    "esc_backslash": "バックスラッシュ",
+    "esc_p": "1秒間のポーズ",
+    "noneYet": "ログインシーケンスがまだありません。",
+    "deleteConfirm": "ログインシーケンス \"{{name}}\" を削除しますか？このシーケンスを参照するセッションには新しいシーケンスの割り当てが必要です。",
+    "nameRequired": "シーケンス名は必須です。",
+    "needOneStep": "パターンを持つステップが少なくとも1つ必要です。",
+    "stepCount": "{{count}} ステップ",
+    "manageLink": "管理…",
+    "none": "(なし)"
   },
   "session": {
     "deleteConfirm": "セッション「{{name}}」を削除しますか？",
@@ -127,6 +173,8 @@
     "highlightProfileNone": "なし",
     "credentialProfileLabel": "認証プロファイル",
     "credentialProfileNone": "(なし — キーボードインタラクティブにフォールバック)",
+    "loginSequenceLabel": "ログインシーケンス",
+    "loginSequenceNone": "なし",
     "usernameHintKbd": "資格情報プロファイルが未割り当ての場合、キーボードインタラクティブ認証に必要です。"
   },
   "dialog": {

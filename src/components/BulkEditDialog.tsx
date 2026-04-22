@@ -4,6 +4,7 @@ import { useEscapeKey } from "../hooks/useEscapeKey";
 import type { Session, BulkSessionEdit } from "../stores/sessionStore";
 import { sessionHasTag } from "../stores/sessionStore";
 import { useHighlightStore } from "../stores/highlightStore";
+import { useLoginSequenceStore } from "../stores/loginSequenceStore";
 import { SESSION_ICON_KEYS, SessionIconComponent } from "./SessionIcons";
 import { CustomSelect } from "./CustomSelect";
 
@@ -23,11 +24,14 @@ export function BulkEditDialog({
   const { t } = useTranslation();
   useEscapeKey(onCancel);
   const highlightProfiles = useHighlightStore((s) => s.profiles);
+  const loginSequences = useLoginSequenceStore((s) => s.sequences);
 
   const [setJumpHost, setSetJumpHost] = useState(false);
   const [jumpHostId, setJumpHostId] = useState("");
   const [setHighlight, setSetHighlight] = useState(false);
   const [highlightProfileId, setHighlightProfileId] = useState("");
+  const [setLoginSeq, setSetLoginSeq] = useState(false);
+  const [loginSequenceId, setLoginSequenceId] = useState("");
   const [setIconFlag, setSetIconFlag] = useState(false);
   const [icon, setIcon] = useState("desktop");
 
@@ -36,11 +40,12 @@ export function BulkEditDialog({
     const edit: BulkSessionEdit = {};
     if (setJumpHost) edit.jumpHostId = jumpHostId || null;
     if (setHighlight) edit.highlightProfileId = highlightProfileId || null;
+    if (setLoginSeq) edit.loginSequenceId = loginSequenceId || null;
     if (setIconFlag) edit.icon = icon;
     onSubmit(edit);
   };
 
-  const anyFieldSelected = setJumpHost || setHighlight || setIconFlag;
+  const anyFieldSelected = setJumpHost || setHighlight || setLoginSeq || setIconFlag;
 
   return (
     <div className="dialog-overlay" role="presentation">
@@ -105,6 +110,33 @@ export function BulkEditDialog({
                   ...highlightProfiles.map((p) => ({
                     value: p.id,
                     label: p.name,
+                  })),
+                ]}
+              />
+            )}
+          </div>
+
+          <div className="dialog-field">
+            <label className="bulk-edit-toggle">
+              <input
+                type="checkbox"
+                checked={setLoginSeq}
+                onChange={(e) => {
+                  setSetLoginSeq(e.target.checked);
+                }}
+              />
+              {t("bulkEdit.setLoginSequence")}
+            </label>
+            {setLoginSeq && (
+              <CustomSelect
+                id="bed-loginseq"
+                value={loginSequenceId}
+                onChange={setLoginSequenceId}
+                options={[
+                  { value: "", label: t("bulkEdit.clearValue") },
+                  ...loginSequences.map((s) => ({
+                    value: s.id,
+                    label: s.name,
                   })),
                 ]}
               />

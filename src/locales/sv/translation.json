@@ -24,6 +24,7 @@
     "setCredentials": "Ange inloggningsuppgifter…",
     "editSessions": "Redigera sessioner…",
     "applyCredentialProfile": "Tillämpa inloggningsprofil…",
+    "applyLoginSequence": "Tillämpa inloggningssekvens…",
     "bulkEdit": "Massredigera sessioner…",
     "makeShared": "Make Shared",
     "makePersonal": "Make Personal"
@@ -33,6 +34,7 @@
     "info": "Tillämpa ändringar på alla sessioner i denna mapp och undermappar. Endast markerade fält uppdateras. Jump host gäller endast SSH-sessioner.",
     "setJumpHost": "Ställ in jump host",
     "setHighlightProfile": "Ställ in highlight-profil",
+    "setLoginSequence": "Ställ in inloggningssekvens",
     "setIcon": "Ställ in ikon",
     "clearValue": "(Rensa)",
     "success": "{{count}} session(er) uppdaterade"
@@ -44,6 +46,13 @@
     "dialogRename": "Byt namn på mapp",
     "nameLabel": "Namn",
     "namePlaceholder": "Mappnamn"
+  },
+  "folderLoginSequence": {
+    "title": "Tillämpa inloggningssekvens — {{name}}",
+    "info": "Tilldelar en inloggningssekvens till alla sessioner i denna mapp och undermappar.",
+    "sequenceLabel": "Inloggningssekvens",
+    "sequenceNone": "(Rensa tilldelning)",
+    "success": "{{count}} session(er) uppdaterade"
   },
   "folderCredential": {
     "title": "Tillämpa inloggningsprofil — {{name}}",
@@ -77,6 +86,43 @@
     "nameRequired": "Profilnamn krävs.",
     "none": "(Ingen)",
     "manageLink": "Hantera…"
+  },
+  "loginSequences": {
+    "title": "Hantering av inloggningssekvenser",
+    "info": "Inloggningssekvenser automatiserar uppmaningar efter anslutning (t.ex. enhetsspecifikt användarnamn/lösenord). Varje sekvens är en lista med förvänta/skicka-steg.",
+    "open": "Inloggningssekvenser",
+    "newSequence": "Ny sekvens",
+    "nameLabel": "Sekvensnamn",
+    "namePlaceholder": "t.ex. Cisco Switch Login",
+    "sendInitialCr": "Skicka inledande vagnretur",
+    "sendInitialCrHint": "Skickar en CR innan den väntar på den första uppmaningen. Användbart för enheter som behöver en knapptryckning för att visa inloggningsuppmaningen.",
+    "stepsLabel": "Steg",
+    "stepNumber": "Steg {{n}}",
+    "patternLabel": "Förvänta (regex)",
+    "patternPlaceholder": "t.ex. [Uu]sername:",
+    "responseLabel": "Skicka",
+    "responsePlaceholder": "t.ex. \\s",
+    "appendCr": "Lägg till vagnretur",
+    "addStep": "Lägg till steg",
+    "moveUp": "Flytta upp",
+    "moveDown": "Flytta ned",
+    "escapeTitle": "Escape-sekvenser",
+    "esc_s": "Användarnamn",
+    "esc_w": "Lösenord",
+    "esc_r": "CR",
+    "esc_n": "LF",
+    "esc_t": "Tab",
+    "esc_b": "Backsteg",
+    "esc_e": "ESC",
+    "esc_backslash": "Omvänt snedstreck",
+    "esc_p": "Paus 1 s",
+    "noneYet": "Inga inloggningssekvenser ännu.",
+    "deleteConfirm": "Ta bort inloggningssekvensen \"{{name}}\"? Sessioner som refererar till den behöver en ny sekvens.",
+    "nameRequired": "Sekvensnamn krävs.",
+    "needOneStep": "Minst ett steg med ett mönster krävs.",
+    "stepCount": "{{count}} steg",
+    "manageLink": "Hantera…",
+    "none": "(Ingen)"
   },
   "session": {
     "deleteConfirm": "Ta bort sessionen \"{{name}}\"?",
@@ -127,6 +173,8 @@
     "highlightProfileNone": "Ingen",
     "credentialProfileLabel": "Inloggningsprofil",
     "credentialProfileNone": "(Ingen — tangentbord-interaktiv fallback)",
+    "loginSequenceLabel": "Inloggningssekvens",
+    "loginSequenceNone": "Ingen",
     "usernameHintKbd": "Krävs för keyboard-interactive-autentisering när ingen autentiseringsprofil är tilldelad."
   },
   "dialog": {

@@ -4,6 +4,7 @@ mod credentials;
 mod db;
 mod highlight;
 mod import;
+mod login_sequence;
 mod migrate_legacy;
 mod pty;
 mod session_logger;
@@ -16,7 +17,7 @@ use commands::{DbStatusState, TerminalReadyState};
 use config::{ConfigState, DbBackend};
 use db::postgres::PostgresProvider;
 use db::sqlite::SqliteProvider;
-use db::{CredentialDbState, DbState, PgPoolState, PgUserState};
+use db::{CredentialDbState, DbState, LoginSequenceDbState, PgPoolState, PgUserState};
 use pty::PtyState;
 use sha2::{Digest, Sha384};
 use sqlx::postgres::PgPoolOptions;
@@ -750,7 +751,12 @@ pub fn run() {
                         tracing::error!("Legacy credential migration failed: {e}");
                     }
                     app.manage(DbState(provider.clone() as Arc<dyn db::DatabaseProvider>));
-                    app.manage(CredentialDbState(provider as Arc<dyn db::DatabaseProvider>));
+                    app.manage(CredentialDbState(
+                        provider.clone() as Arc<dyn db::DatabaseProvider>
+                    ));
+                    app.manage(LoginSequenceDbState(
+                        provider as Arc<dyn db::DatabaseProvider>,
+                    ));
                     app.manage(PgPoolState(None));
                     app.manage(PgUserState(None));
                     app.manage(DbStatusState(commands::DbStatus {
@@ -768,6 +774,7 @@ pub fn run() {
                     let cred_provider =
                         Arc::new(SqliteProvider::new(local_pool)) as Arc<dyn db::DatabaseProvider>;
                     app.manage(CredentialDbState(cred_provider.clone()));
+                    app.manage(LoginSequenceDbState(cred_provider.clone()));
 
                     tracing::info!(
                         host = %app_config.postgres.host,
@@ -948,6 +955,17 @@ pub fn run() {
             commands::highlight_profile_update,
             commands::highlight_profile_delete,
             commands::import_securecrt_highlights,
+            // Login Sequences
+            commands::login_sequence_create,
+            commands::login_sequence_list,
+            commands::login_sequence_get,
+            commands::login_sequence_update,
+            commands::login_sequence_delete,
+            commands::folder_apply_login_sequence,
+            // Session login sequences (multi-user)
+            commands::set_session_login_sequence,
+            commands::get_session_login_sequence,
+            commands::bulk_set_session_login_sequences,
             // Session logging
             commands::logging_get_config,
             commands::logging_save_config,

@@ -264,6 +264,7 @@ async fn persist_import(
                 icon: String::new(),
                 highlight_profile_id: None,
                 credential_profile_id: None,
+                login_sequence_id: None,
                 legacy_algorithms: false,
             })
             .await

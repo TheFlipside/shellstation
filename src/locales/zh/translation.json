@@ -24,6 +24,7 @@
     "setCredentials": "设置凭据…",
     "editSessions": "编辑会话…",
     "applyCredentialProfile": "应用凭据配置文件…",
+    "applyLoginSequence": "应用登录序列…",
     "bulkEdit": "批量编辑会话…",
     "makeShared": "Make Shared",
     "makePersonal": "Make Personal"
@@ -33,6 +34,7 @@
     "info": "将更改应用于此文件夹及其子文件夹中的所有会话。仅会更新勾选的字段。跳转主机仅适用于 SSH 会话。",
     "setJumpHost": "设置跳转主机",
     "setHighlightProfile": "设置高亮配置文件",
+    "setLoginSequence": "设置登录序列",
     "setIcon": "设置图标",
     "clearValue": "(清除)",
     "success": "已更新 {{count}} 个会话"
@@ -44,6 +46,13 @@
     "dialogRename": "重命名文件夹",
     "nameLabel": "名称",
     "namePlaceholder": "文件夹名称"
+  },
+  "folderLoginSequence": {
+    "title": "应用登录序列 — {{name}}",
+    "info": "将登录序列分配给此文件夹及其子文件夹中的所有会话。",
+    "sequenceLabel": "登录序列",
+    "sequenceNone": "(清除分配)",
+    "success": "已更新 {{count}} 个会话"
   },
   "folderCredential": {
     "title": "应用凭据配置文件 — {{name}}",
@@ -77,6 +86,43 @@
     "nameRequired": "配置文件名称是必需的。",
     "none": "(无)",
     "manageLink": "管理…"
+  },
+  "loginSequences": {
+    "title": "登录序列管理器",
+    "info": "登录序列自动处理连接后的提示（如设备级别的用户名/密码）。每个序列是一系列期待/发送步骤。",
+    "open": "登录序列",
+    "newSequence": "新建序列",
+    "nameLabel": "序列名称",
+    "namePlaceholder": "例如 Cisco Switch Login",
+    "sendInitialCr": "发送初始回车",
+    "sendInitialCrHint": "在等待第一个提示之前发送一个 CR。对需要按键才能显示登录提示的设备有用。",
+    "stepsLabel": "步骤",
+    "stepNumber": "步骤 {{n}}",
+    "patternLabel": "期待 (regex)",
+    "patternPlaceholder": "例如 [Uu]sername:",
+    "responseLabel": "发送",
+    "responsePlaceholder": "例如 \\s",
+    "appendCr": "追加回车",
+    "addStep": "添加步骤",
+    "moveUp": "上移",
+    "moveDown": "下移",
+    "escapeTitle": "转义序列",
+    "esc_s": "用户名",
+    "esc_w": "密码",
+    "esc_r": "CR",
+    "esc_n": "LF",
+    "esc_t": "Tab",
+    "esc_b": "退格",
+    "esc_e": "ESC",
+    "esc_backslash": "反斜杠",
+    "esc_p": "暂停 1 秒",
+    "noneYet": "尚无登录序列。",
+    "deleteConfirm": "删除登录序列 \"{{name}}\"？引用它的会话需要分配新的序列。",
+    "nameRequired": "序列名称是必需的。",
+    "needOneStep": "至少需要一个包含模式的步骤。",
+    "stepCount": "{{count}} 个步骤",
+    "manageLink": "管理…",
+    "none": "(无)"
   },
   "session": {
     "deleteConfirm": "删除会话“{{name}}”？",
@@ -127,6 +173,8 @@
     "highlightProfileNone": "无",
     "credentialProfileLabel": "凭据配置文件",
     "credentialProfileNone": "(无 — 回退到键盘交互)",
+    "loginSequenceLabel": "登录序列",
+    "loginSequenceNone": "无",
     "usernameHintKbd": "未分配凭据配置文件时，键盘交互认证需要此用户名。"
   },
   "dialog": {

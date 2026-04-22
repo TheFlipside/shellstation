@@ -70,6 +70,7 @@ pub async fn telnet_connect(
         connect_timeout_secs: connect_timeout.unwrap_or(10),
         logger,
         ready_rx,
+        login_sequence: None,
     })
     .await
     {

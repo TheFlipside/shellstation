@@ -24,6 +24,7 @@
     "setCredentials": "Establecer credenciales…",
     "editSessions": "Editar sesiones…",
     "applyCredentialProfile": "Aplicar perfil de credenciales…",
+    "applyLoginSequence": "Aplicar secuencia de inicio de sesión…",
     "bulkEdit": "Editar sesiones en masa…",
     "makeShared": "Make Shared",
     "makePersonal": "Make Personal"
@@ -33,6 +34,7 @@
     "info": "Aplicar cambios a todas las sesiones en esta carpeta y subcarpetas. Solo se actualizan los campos marcados. El jump host solo se aplica a sesiones SSH.",
     "setJumpHost": "Establecer Jump Host",
     "setHighlightProfile": "Establecer perfil de resaltado",
+    "setLoginSequence": "Establecer secuencia de inicio de sesión",
     "setIcon": "Establecer icono",
     "clearValue": "(Borrar)",
     "success": "{{count}} sesión(es) actualizada(s)"
@@ -44,6 +46,13 @@
     "dialogRename": "Renombrar carpeta",
     "nameLabel": "Nombre",
     "namePlaceholder": "Nombre de la carpeta"
+  },
+  "folderLoginSequence": {
+    "title": "Aplicar secuencia de inicio de sesión — {{name}}",
+    "info": "Asigna una secuencia de inicio de sesión a todas las sesiones en esta carpeta y subcarpetas.",
+    "sequenceLabel": "Secuencia de inicio de sesión",
+    "sequenceNone": "(Borrar asignación)",
+    "success": "{{count}} sesión(es) actualizada(s)"
   },
   "folderCredential": {
     "title": "Aplicar perfil de credenciales — {{name}}",
@@ -77,6 +86,43 @@
     "nameRequired": "El nombre del perfil es obligatorio.",
     "none": "(Ninguno)",
     "manageLink": "Gestionar…"
+  },
+  "loginSequences": {
+    "title": "Gestor de secuencias de inicio de sesión",
+    "info": "Las secuencias de inicio de sesión automatizan las solicitudes posteriores a la conexión (p. ej. usuario/contraseña a nivel de dispositivo). Cada secuencia es una lista de pasos de esperar/enviar.",
+    "open": "Secuencias de inicio de sesión",
+    "newSequence": "Nueva secuencia",
+    "nameLabel": "Nombre de la secuencia",
+    "namePlaceholder": "p. ej. Cisco Switch Login",
+    "sendInitialCr": "Enviar retorno de carro inicial",
+    "sendInitialCrHint": "Envía un CR antes de esperar la primera solicitud. Útil para dispositivos que necesitan una pulsación de tecla para mostrar la solicitud de inicio de sesión.",
+    "stepsLabel": "Pasos",
+    "stepNumber": "Paso {{n}}",
+    "patternLabel": "Esperar (regex)",
+    "patternPlaceholder": "p. ej. [Uu]sername:",
+    "responseLabel": "Enviar",
+    "responsePlaceholder": "p. ej. \\s",
+    "appendCr": "Añadir retorno de carro",
+    "addStep": "Añadir paso",
+    "moveUp": "Subir",
+    "moveDown": "Bajar",
+    "escapeTitle": "Secuencias de escape",
+    "esc_s": "Nombre de usuario",
+    "esc_w": "Contraseña",
+    "esc_r": "CR",
+    "esc_n": "LF",
+    "esc_t": "Tab",
+    "esc_b": "Retroceso",
+    "esc_e": "ESC",
+    "esc_backslash": "Barra invertida",
+    "esc_p": "Pausa 1 s",
+    "noneYet": "Aún no hay secuencias de inicio de sesión.",
+    "deleteConfirm": "¿Eliminar la secuencia de inicio de sesión \"{{name}}\"? Las sesiones que la usan necesitarán una nueva secuencia.",
+    "nameRequired": "El nombre de la secuencia es obligatorio.",
+    "needOneStep": "Se requiere al menos un paso con un patrón.",
+    "stepCount": "{{count}} paso(s)",
+    "manageLink": "Gestionar…",
+    "none": "(Ninguna)"
   },
   "session": {
     "deleteConfirm": "¿Eliminar la sesión «{{name}}»?",
@@ -127,6 +173,8 @@
     "highlightProfileNone": "Ninguno",
     "credentialProfileLabel": "Perfil de credenciales",
     "credentialProfileNone": "(Ninguno — respaldo teclado interactivo)",
+    "loginSequenceLabel": "Secuencia de inicio de sesión",
+    "loginSequenceNone": "Ninguna",
     "usernameHintKbd": "Necesario para la autenticación keyboard-interactive cuando no se asigna un perfil de credenciales."
   },
   "dialog": {

@@ -24,6 +24,7 @@
     "setCredentials": "자격 증명 설정…",
     "editSessions": "세션 편집…",
     "applyCredentialProfile": "자격 증명 프로필 적용…",
+    "applyLoginSequence": "로그인 시퀀스 적용…",
     "bulkEdit": "세션 일괄 편집…",
     "makeShared": "Make Shared",
     "makePersonal": "Make Personal"
@@ -33,6 +34,7 @@
     "info": "이 폴더 및 하위 폴더의 모든 세션에 변경 사항을 적용합니다. 선택한 필드만 업데이트됩니다. 점프 호스트는 SSH 세션에만 적용됩니다.",
     "setJumpHost": "점프 호스트 설정",
     "setHighlightProfile": "하이라이트 프로필 설정",
+    "setLoginSequence": "로그인 시퀀스 설정",
     "setIcon": "아이콘 설정",
     "clearValue": "(지우기)",
     "success": "{{count}}개의 세션이 업데이트되었습니다"
@@ -44,6 +46,13 @@
     "dialogRename": "폴더 이름 변경",
     "nameLabel": "이름",
     "namePlaceholder": "폴더 이름"
+  },
+  "folderLoginSequence": {
+    "title": "로그인 시퀀스 적용 — {{name}}",
+    "info": "이 폴더 및 하위 폴더의 모든 세션에 로그인 시퀀스를 할당합니다.",
+    "sequenceLabel": "로그인 시퀀스",
+    "sequenceNone": "(할당 지우기)",
+    "success": "{{count}}개의 세션이 업데이트되었습니다"
   },
   "folderCredential": {
     "title": "자격 증명 프로필 적용 — {{name}}",
@@ -77,6 +86,43 @@
     "nameRequired": "프로필 이름이 필요합니다.",
     "none": "(없음)",
     "manageLink": "관리…"
+  },
+  "loginSequences": {
+    "title": "로그인 시퀀스 관리자",
+    "info": "로그인 시퀀스는 연결 후 프롬프트(예: 장치 수준 사용자 이름/비밀번호)를 자동화합니다. 각 시퀀스는 기대/전송 단계의 목록입니다.",
+    "open": "로그인 시퀀스",
+    "newSequence": "새 시퀀스",
+    "nameLabel": "시퀀스 이름",
+    "namePlaceholder": "예: Cisco Switch Login",
+    "sendInitialCr": "초기 캐리지 리턴 전송",
+    "sendInitialCrHint": "첫 번째 프롬프트를 기다리기 전에 CR을 전송합니다. 로그인 프롬프트를 표시하기 위해 키 입력이 필요한 장치에 유용합니다.",
+    "stepsLabel": "단계",
+    "stepNumber": "단계 {{n}}",
+    "patternLabel": "기대 (regex)",
+    "patternPlaceholder": "예: [Uu]sername:",
+    "responseLabel": "전송",
+    "responsePlaceholder": "예: \\s",
+    "appendCr": "캐리지 리턴 추가",
+    "addStep": "단계 추가",
+    "moveUp": "위로 이동",
+    "moveDown": "아래로 이동",
+    "escapeTitle": "이스케이프 시퀀스",
+    "esc_s": "사용자 이름",
+    "esc_w": "비밀번호",
+    "esc_r": "CR",
+    "esc_n": "LF",
+    "esc_t": "Tab",
+    "esc_b": "백스페이스",
+    "esc_e": "ESC",
+    "esc_backslash": "백슬래시",
+    "esc_p": "1초 일시정지",
+    "noneYet": "로그인 시퀀스가 아직 없습니다.",
+    "deleteConfirm": "로그인 시퀀스 \"{{name}}\"을(를) 삭제하시겠습니까? 이를 참조하는 세션은 새 시퀀스를 할당해야 합니다.",
+    "nameRequired": "시퀀스 이름이 필요합니다.",
+    "needOneStep": "패턴이 있는 단계가 하나 이상 필요합니다.",
+    "stepCount": "{{count}}개의 단계",
+    "manageLink": "관리…",
+    "none": "(없음)"
   },
   "session": {
     "deleteConfirm": "세션 \"{{name}}\"을(를) 삭제하시겠습니까?",
@@ -127,6 +173,8 @@
     "highlightProfileNone": "없음",
     "credentialProfileLabel": "자격 증명 프로필",
     "credentialProfileNone": "(없음 — 키보드 대화형 폴백)",
+    "loginSequenceLabel": "로그인 시퀀스",
+    "loginSequenceNone": "없음",
     "usernameHintKbd": "자격 증명 프로필이 지정되지 않은 경우 키보드 대화형 인증에 필요합니다."
   },
   "dialog": {

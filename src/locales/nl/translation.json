@@ -24,6 +24,7 @@
     "setCredentials": "Inloggegevens instellen…",
     "editSessions": "Sessies bewerken…",
     "applyCredentialProfile": "Inloggegevensprofiel toepassen…",
+    "applyLoginSequence": "Inlogsequentie toepassen…",
     "bulkEdit": "Sessies bulkbewerken…",
     "makeShared": "Make Shared",
     "makePersonal": "Make Personal"
@@ -33,6 +34,7 @@
     "info": "Wijzigingen toepassen op alle sessies in deze map en submappen. Alleen aangevinkte velden worden bijgewerkt. Jump host geldt alleen voor SSH-sessies.",
     "setJumpHost": "Jump host instellen",
     "setHighlightProfile": "Highlight-profiel instellen",
+    "setLoginSequence": "Inlogsequentie instellen",
     "setIcon": "Pictogram instellen",
     "clearValue": "(Wissen)",
     "success": "{{count}} sessie(s) bijgewerkt"
@@ -44,6 +46,13 @@
     "dialogRename": "Map hernoemen",
     "nameLabel": "Naam",
     "namePlaceholder": "Mapnaam"
+  },
+  "folderLoginSequence": {
+    "title": "Inlogsequentie toepassen — {{name}}",
+    "info": "Wijst een inlogsequentie toe aan alle sessies in deze map en submappen.",
+    "sequenceLabel": "Inlogsequentie",
+    "sequenceNone": "(Toewijzing wissen)",
+    "success": "{{count}} sessie(s) bijgewerkt"
   },
   "folderCredential": {
     "title": "Inloggegevensprofiel toepassen — {{name}}",
@@ -77,6 +86,43 @@
     "nameRequired": "Profielnaam is verplicht.",
     "none": "(Geen)",
     "manageLink": "Beheren…"
+  },
+  "loginSequences": {
+    "title": "Inlogsequentiebeheer",
+    "info": "Inlogsequenties automatiseren prompts na het verbinden (bijv. apparaat-gebruikersnaam/wachtwoord). Elke sequentie is een lijst van verwacht/verzend-stappen.",
+    "open": "Inlogsequenties",
+    "newSequence": "Nieuwe sequentie",
+    "nameLabel": "Sequentienaam",
+    "namePlaceholder": "bijv. Cisco Switch Login",
+    "sendInitialCr": "Eerste regelterugloop verzenden",
+    "sendInitialCrHint": "Verzendt een CR voordat op de eerste prompt wordt gewacht. Nuttig voor apparaten die een toetsaanslag nodig hebben om de inlogprompt te tonen.",
+    "stepsLabel": "Stappen",
+    "stepNumber": "Stap {{n}}",
+    "patternLabel": "Verwacht (regex)",
+    "patternPlaceholder": "bijv. [Uu]sername:",
+    "responseLabel": "Verzenden",
+    "responsePlaceholder": "bijv. \\s",
+    "appendCr": "Regelterugloop toevoegen",
+    "addStep": "Stap toevoegen",
+    "moveUp": "Omhoog",
+    "moveDown": "Omlaag",
+    "escapeTitle": "Escape-reeksen",
+    "esc_s": "Gebruikersnaam",
+    "esc_w": "Wachtwoord",
+    "esc_r": "CR",
+    "esc_n": "LF",
+    "esc_t": "Tab",
+    "esc_b": "Backspace",
+    "esc_e": "ESC",
+    "esc_backslash": "Backslash",
+    "esc_p": "Pauze 1 s",
+    "noneYet": "Nog geen inlogsequenties.",
+    "deleteConfirm": "Inlogsequentie \"{{name}}\" verwijderen? Sessies die ernaar verwijzen hebben een nieuwe sequentie nodig.",
+    "nameRequired": "Sequentienaam is verplicht.",
+    "needOneStep": "Er is minstens één stap met een patroon vereist.",
+    "stepCount": "{{count}} stap(pen)",
+    "manageLink": "Beheren…",
+    "none": "(Geen)"
   },
   "session": {
     "deleteConfirm": "Sessie \"{{name}}\" verwijderen?",
@@ -127,6 +173,8 @@
     "highlightProfileNone": "Geen",
     "credentialProfileLabel": "Inloggegevensprofiel",
     "credentialProfileNone": "(Geen — toetsenbord-interactieve fallback)",
+    "loginSequenceLabel": "Inlogsequentie",
+    "loginSequenceNone": "Geen",
     "usernameHintKbd": "Vereist voor keyboard-interactive authenticatie wanneer geen referentieprofiel is toegewezen."
   },
   "dialog": {

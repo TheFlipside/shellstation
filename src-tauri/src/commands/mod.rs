@@ -2,9 +2,11 @@ mod credential_profile;
 mod database;
 mod highlight;
 mod logging;
+mod login_sequence;
 mod pty;
 mod session;
 mod session_credentials;
+mod session_login_sequences;
 mod ssh;
 mod telnet;
 
@@ -12,9 +14,11 @@ pub use credential_profile::*;
 pub use database::*;
 pub use highlight::*;
 pub use logging::*;
+pub use login_sequence::*;
 pub use pty::*;
 pub use session::*;
 pub use session_credentials::*;
+pub use session_login_sequences::*;
 pub use ssh::*;
 pub use telnet::*;
 

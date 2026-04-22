@@ -24,6 +24,7 @@
     "setCredentials": "Ustaw dane logowania…",
     "editSessions": "Edytuj sesje…",
     "applyCredentialProfile": "Zastosuj profil poświadczeń…",
+    "applyLoginSequence": "Zastosuj sekwencję logowania…",
     "bulkEdit": "Edycja zbiorcza sesji…",
     "makeShared": "Make Shared",
     "makePersonal": "Make Personal"
@@ -33,6 +34,7 @@
     "info": "Zastosuj zmiany do wszystkich sesji w tym folderze i podfolderach. Tylko zaznaczone pola zostaną zaktualizowane. Jump host dotyczy tylko sesji SSH.",
     "setJumpHost": "Ustaw jump host",
     "setHighlightProfile": "Ustaw profil podświetlania",
+    "setLoginSequence": "Ustaw sekwencję logowania",
     "setIcon": "Ustaw ikonę",
     "clearValue": "(Wyczyść)",
     "success": "Zaktualizowano {{count}} sesji"
@@ -44,6 +46,13 @@
     "dialogRename": "Zmień nazwę folderu",
     "nameLabel": "Nazwa",
     "namePlaceholder": "Nazwa folderu"
+  },
+  "folderLoginSequence": {
+    "title": "Zastosuj sekwencję logowania — {{name}}",
+    "info": "Przypisuje sekwencję logowania do wszystkich sesji w tym folderze i podfolderach.",
+    "sequenceLabel": "Sekwencja logowania",
+    "sequenceNone": "(Usuń przypisanie)",
+    "success": "Zaktualizowano {{count}} sesji"
   },
   "folderCredential": {
     "title": "Zastosuj profil poświadczeń — {{name}}",
@@ -77,6 +86,43 @@
     "nameRequired": "Nazwa profilu jest wymagana.",
     "none": "(Brak)",
     "manageLink": "Zarządzaj…"
+  },
+  "loginSequences": {
+    "title": "Menedżer sekwencji logowania",
+    "info": "Sekwencje logowania automatyzują monity po nawiązaniu połączenia (np. nazwa użytkownika/hasło na poziomie urządzenia). Każda sekwencja to lista kroków oczekuj/wyślij.",
+    "open": "Sekwencje logowania",
+    "newSequence": "Nowa sekwencja",
+    "nameLabel": "Nazwa sekwencji",
+    "namePlaceholder": "np. Cisco Switch Login",
+    "sendInitialCr": "Wyślij początkowy powrót karetki",
+    "sendInitialCrHint": "Wysyła CR przed oczekiwaniem na pierwszy monit. Przydatne dla urządzeń wymagających naciśnięcia klawisza, aby wyświetlić monit logowania.",
+    "stepsLabel": "Kroki",
+    "stepNumber": "Krok {{n}}",
+    "patternLabel": "Oczekuj (regex)",
+    "patternPlaceholder": "np. [Uu]sername:",
+    "responseLabel": "Wyślij",
+    "responsePlaceholder": "np. \\s",
+    "appendCr": "Dołącz powrót karetki",
+    "addStep": "Dodaj krok",
+    "moveUp": "W górę",
+    "moveDown": "W dół",
+    "escapeTitle": "Sekwencje ucieczki",
+    "esc_s": "Nazwa użytkownika",
+    "esc_w": "Hasło",
+    "esc_r": "CR",
+    "esc_n": "LF",
+    "esc_t": "Tab",
+    "esc_b": "Backspace",
+    "esc_e": "ESC",
+    "esc_backslash": "Odwrotny ukośnik",
+    "esc_p": "Pauza 1 s",
+    "noneYet": "Brak sekwencji logowania.",
+    "deleteConfirm": "Usunąć sekwencję logowania \"{{name}}\"? Sesje używające jej będą wymagały nowej sekwencji.",
+    "nameRequired": "Nazwa sekwencji jest wymagana.",
+    "needOneStep": "Wymagany jest co najmniej jeden krok z wzorcem.",
+    "stepCount": "{{count}} krok(ów)",
+    "manageLink": "Zarządzaj…",
+    "none": "(Brak)"
   },
   "session": {
     "deleteConfirm": "Usunąć sesję „{{name}}”?",
@@ -127,6 +173,8 @@
     "highlightProfileNone": "Brak",
     "credentialProfileLabel": "Profil poświadczeń",
     "credentialProfileNone": "(Brak — powrót do klawiatury interaktywnej)",
+    "loginSequenceLabel": "Sekwencja logowania",
+    "loginSequenceNone": "Brak",
     "usernameHintKbd": "Wymagane do uwierzytelniania keyboard-interactive, gdy nie przypisano profilu poświadczeń."
   },
   "dialog": {

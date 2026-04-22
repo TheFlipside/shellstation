@@ -40,6 +40,7 @@ pub struct TelnetConnectParams {
     /// Receiver for the "terminal ready" signal. The reader task waits on this
     /// before entering its read loop.
     pub ready_rx: tokio::sync::oneshot::Receiver<()>,
+    pub login_sequence: Option<crate::login_sequence::LoginSequenceConfig>,
 }
 
 /// Per-connection Telnet session state.
@@ -136,6 +137,7 @@ pub async fn establish_telnet_connection(
         connect_timeout_secs,
         logger,
         ready_rx,
+        login_sequence,
     } = params;
 
     // Validate against restricted IP ranges if enabled.
@@ -189,6 +191,7 @@ pub async fn establish_telnet_connection(
             &session_id,
             &app,
             logger,
+            login_sequence,
         )
         .await;
     });
@@ -219,6 +222,7 @@ async fn telnet_io_loop(
     session_id: &str,
     app: &AppHandle,
     logger: Option<std::sync::Arc<std::sync::Mutex<crate::session_logger::SessionLogManager>>>,
+    login_sequence: Option<crate::login_sequence::LoginSequenceConfig>,
 ) {
     // Send initial WILL NAWS + window size so the server knows our terminal size.
     let mut init = vec![IAC, WILL, OPT_NAWS];
@@ -233,6 +237,24 @@ async fn telnet_io_loop(
     let mut iac_state = IacState::Normal;
     // Buffer for clean (non-IAC) data to emit.
     let mut out_buf = Vec::with_capacity(4096);
+
+    if let Some(config) = login_sequence {
+        let io = crate::login_sequence::LoginSequenceIO {
+            config,
+            event_name,
+            app,
+            session_id,
+            logger: logger.as_ref(),
+        };
+        let mut transport = TelnetLoginTransport {
+            reader: &mut reader,
+            writer: &mut writer,
+            iac_state: &mut iac_state,
+            buf: &mut buf,
+            out_buf: &mut out_buf,
+        };
+        crate::login_sequence::run_login_sequence(io, &mut transport).await;
+    }
 
     loop {
         tokio::select! {
@@ -252,87 +274,9 @@ async fn telnet_io_loop(
                         out_buf.clear();
                         let mut responses: Vec<u8> = Vec::new();
                         for &byte in &buf[..n] {
-                            match iac_state {
-                                IacState::Normal => {
-                                    if byte == IAC {
-                                        iac_state = IacState::Iac;
-                                    } else {
-                                        out_buf.push(byte);
-                                    }
-                                }
-                                IacState::Iac => {
-                                    match byte {
-                                        WILL => iac_state = IacState::Will,
-                                        WONT => iac_state = IacState::Wont,
-                                        DO => iac_state = IacState::Do,
-                                        DONT => iac_state = IacState::Dont,
-                                        SB => iac_state = IacState::Sb,
-                                        IAC => {
-                                            // Escaped 0xFF — emit literal byte.
-                                            out_buf.push(IAC);
-                                            iac_state = IacState::Normal;
-                                        }
-                                        _ => {
-                                            // Unknown command — ignore.
-                                            iac_state = IacState::Normal;
-                                        }
-                                    }
-                                }
-                                IacState::Will => {
-                                    // Server offers to enable an option.
-                                    match byte {
-                                        OPT_ECHO | OPT_SUPPRESS_GO_AHEAD => {
-                                            responses.extend_from_slice(&[IAC, DO, byte]);
-                                        }
-                                        _ => {
-                                            responses.extend_from_slice(&[IAC, DONT, byte]);
-                                        }
-                                    }
-                                    iac_state = IacState::Normal;
-                                }
-                                IacState::Wont => {
-                                    // Acknowledge.
-                                    responses.extend_from_slice(&[IAC, DONT, byte]);
-                                    iac_state = IacState::Normal;
-                                }
-                                IacState::Do => {
-                                    // Server asks us to enable an option.
-                                    match byte {
-                                        OPT_NAWS => {
-                                            // Already sent WILL NAWS during init.
-                                        }
-                                        OPT_SUPPRESS_GO_AHEAD => {
-                                            responses.extend_from_slice(&[IAC, WILL, byte]);
-                                        }
-                                        _ => {
-                                            responses.extend_from_slice(&[IAC, WONT, byte]);
-                                        }
-                                    }
-                                    iac_state = IacState::Normal;
-                                }
-                                IacState::Dont => {
-                                    responses.extend_from_slice(&[IAC, WONT, byte]);
-                                    iac_state = IacState::Normal;
-                                }
-                                IacState::Sb => {
-                                    // Inside sub-negotiation — skip until IAC SE.
-                                    if byte == IAC {
-                                        iac_state = IacState::SbIac;
-                                    }
-                                    // Otherwise stay in Sb, consuming bytes.
-                                }
-                                IacState::SbIac => {
-                                    if byte == SE {
-                                        iac_state = IacState::Normal;
-                                    } else {
-                                        // Not SE — still in sub-negotiation.
-                                        iac_state = IacState::Sb;
-                                    }
-                                }
-                            }
+                            process_iac_byte(byte, &mut iac_state, &mut out_buf, &mut responses);
                         }
 
-                        // Send option responses back to server.
                         if !responses.is_empty()
                             && writer.write_all(&responses).await.is_err()
                         {
@@ -397,6 +341,120 @@ enum IacState {
     Dont,
     Sb,
     SbIac,
+}
+
+fn process_iac_byte(
+    byte: u8,
+    state: &mut IacState,
+    out_buf: &mut Vec<u8>,
+    responses: &mut Vec<u8>,
+) {
+    match *state {
+        IacState::Normal => {
+            if byte == IAC {
+                *state = IacState::Iac;
+            } else {
+                out_buf.push(byte);
+            }
+        }
+        IacState::Iac => match byte {
+            WILL => *state = IacState::Will,
+            WONT => *state = IacState::Wont,
+            DO => *state = IacState::Do,
+            DONT => *state = IacState::Dont,
+            SB => *state = IacState::Sb,
+            IAC => {
+                out_buf.push(IAC);
+                *state = IacState::Normal;
+            }
+            _ => {
+                *state = IacState::Normal;
+            }
+        },
+        IacState::Will => {
+            match byte {
+                OPT_ECHO | OPT_SUPPRESS_GO_AHEAD => {
+                    responses.extend_from_slice(&[IAC, DO, byte]);
+                }
+                _ => {
+                    responses.extend_from_slice(&[IAC, DONT, byte]);
+                }
+            }
+            *state = IacState::Normal;
+        }
+        IacState::Wont => {
+            responses.extend_from_slice(&[IAC, DONT, byte]);
+            *state = IacState::Normal;
+        }
+        IacState::Do => {
+            match byte {
+                OPT_NAWS => {}
+                OPT_SUPPRESS_GO_AHEAD => {
+                    responses.extend_from_slice(&[IAC, WILL, byte]);
+                }
+                _ => {
+                    responses.extend_from_slice(&[IAC, WONT, byte]);
+                }
+            }
+            *state = IacState::Normal;
+        }
+        IacState::Dont => {
+            responses.extend_from_slice(&[IAC, WONT, byte]);
+            *state = IacState::Normal;
+        }
+        IacState::Sb => {
+            if byte == IAC {
+                *state = IacState::SbIac;
+            }
+        }
+        IacState::SbIac => {
+            if byte == SE {
+                *state = IacState::Normal;
+            } else {
+                *state = IacState::Sb;
+            }
+        }
+    }
+}
+
+struct TelnetLoginTransport<'a> {
+    reader: &'a mut tokio::net::tcp::OwnedReadHalf,
+    writer: &'a mut tokio::net::tcp::OwnedWriteHalf,
+    iac_state: &'a mut IacState,
+    buf: &'a mut [u8; 4096],
+    out_buf: &'a mut Vec<u8>,
+}
+
+#[async_trait::async_trait]
+impl crate::login_sequence::LoginSequenceTransport for TelnetLoginTransport<'_> {
+    async fn read(&mut self) -> Option<Vec<u8>> {
+        loop {
+            match self.reader.read(&mut *self.buf).await {
+                Ok(0) => return None,
+                Ok(n) => {
+                    self.out_buf.clear();
+                    let mut responses: Vec<u8> = Vec::new();
+                    for &byte in &self.buf[..n] {
+                        process_iac_byte(byte, self.iac_state, self.out_buf, &mut responses);
+                    }
+                    if !responses.is_empty() && self.writer.write_all(&responses).await.is_err() {
+                        return None;
+                    }
+                    if !self.out_buf.is_empty() {
+                        return Some(self.out_buf.clone());
+                    }
+                }
+                Err(_) => return None,
+            }
+        }
+    }
+
+    async fn write(&mut self, data: &[u8]) -> Result<(), String> {
+        self.writer
+            .write_all(data)
+            .await
+            .map_err(|e| format!("Telnet write error: {e}"))
+    }
 }
 
 /// Build a NAWS sub-negotiation payload: IAC SB NAWS <w_hi> <w_lo> <h_hi> <h_lo> IAC SE.

@@ -24,6 +24,7 @@
     "setCredentials": "Kimlik bilgilerini ayarla…",
     "editSessions": "Oturumları düzenle…",
     "applyCredentialProfile": "Kimlik profilini uygula…",
+    "applyLoginSequence": "Oturum açma sırasını uygula…",
     "bulkEdit": "Oturumları toplu düzenle…",
     "makeShared": "Make Shared",
     "makePersonal": "Make Personal"
@@ -33,6 +34,7 @@
     "info": "Bu klasördeki ve alt klasörlerdeki tüm oturumlara değişiklikleri uygular. Yalnızca işaretli alanlar güncellenir. Jump host yalnızca SSH oturumları için geçerlidir.",
     "setJumpHost": "Jump host ayarla",
     "setHighlightProfile": "Vurgulama profili ayarla",
+    "setLoginSequence": "Oturum açma sırasını ayarla",
     "setIcon": "Simge ayarla",
     "clearValue": "(Temizle)",
     "success": "{{count}} oturum güncellendi"
@@ -44,6 +46,13 @@
     "dialogRename": "Klasörü Yeniden Adlandır",
     "nameLabel": "Ad",
     "namePlaceholder": "Klasör adı"
+  },
+  "folderLoginSequence": {
+    "title": "Oturum açma sırasını uygula — {{name}}",
+    "info": "Bu klasördeki ve alt klasörlerdeki tüm oturumlara bir oturum açma sırası atar.",
+    "sequenceLabel": "Oturum açma sırası",
+    "sequenceNone": "(Atamayı kaldır)",
+    "success": "{{count}} oturum güncellendi"
   },
   "folderCredential": {
     "title": "Kimlik profilini uygula — {{name}}",
@@ -77,6 +86,43 @@
     "nameRequired": "Profil adı gereklidir.",
     "none": "(Yok)",
     "manageLink": "Yönet…"
+  },
+  "loginSequences": {
+    "title": "Oturum Açma Sırası Yöneticisi",
+    "info": "Oturum açma sıraları, bağlantı sonrası istemleri (ör. cihaz düzeyinde kullanıcı adı/parola) otomatikleştirir. Her sıra, bekle/gönder adımlarının bir listesidir.",
+    "open": "Oturum Açma Sıraları",
+    "newSequence": "Yeni Sıra",
+    "nameLabel": "Sıra Adı",
+    "namePlaceholder": "ör. Cisco Switch Login",
+    "sendInitialCr": "İlk satır başı gönder",
+    "sendInitialCrHint": "İlk istemi beklemeden önce bir CR gönderir. Oturum açma istemini göstermek için bir tuş basımı gerektiren cihazlar için kullanışlıdır.",
+    "stepsLabel": "Adımlar",
+    "stepNumber": "Adım {{n}}",
+    "patternLabel": "Bekle (regex)",
+    "patternPlaceholder": "ör. [Uu]sername:",
+    "responseLabel": "Gönder",
+    "responsePlaceholder": "ör. \\s",
+    "appendCr": "Satır başı ekle",
+    "addStep": "Adım Ekle",
+    "moveUp": "Yukarı Taşı",
+    "moveDown": "Aşağı Taşı",
+    "escapeTitle": "Kaçış dizileri",
+    "esc_s": "Kullanıcı adı",
+    "esc_w": "Parola",
+    "esc_r": "CR",
+    "esc_n": "LF",
+    "esc_t": "Tab",
+    "esc_b": "Geri al",
+    "esc_e": "ESC",
+    "esc_backslash": "Ters eğik çizgi",
+    "esc_p": "1 s duraklat",
+    "noneYet": "Henüz oturum açma sırası yok.",
+    "deleteConfirm": "\"{{name}}\" oturum açma sırası silinsin mi? Bu sırayı kullanan oturumlar için yeni bir sıra atanması gerekir.",
+    "nameRequired": "Sıra adı gereklidir.",
+    "needOneStep": "Bir deseni olan en az bir adım gereklidir.",
+    "stepCount": "{{count}} adım",
+    "manageLink": "Yönet…",
+    "none": "(Yok)"
   },
   "session": {
     "deleteConfirm": "\"{{name}}\" oturumu silinsin mi?",
@@ -127,6 +173,8 @@
     "highlightProfileNone": "Yok",
     "credentialProfileLabel": "Kimlik profili",
     "credentialProfileNone": "(Yok — klavye etkileşimli geri dönüş)",
+    "loginSequenceLabel": "Oturum açma sırası",
+    "loginSequenceNone": "Yok",
     "usernameHintKbd": "Kimlik bilgisi profili atanmadığında keyboard-interactive kimlik doğrulaması için gereklidir."
   },
   "dialog": {

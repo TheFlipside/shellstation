@@ -25,10 +25,13 @@ import { SessionDialog, type SessionFormData } from "./SessionDialog";
 import { FolderIcon, SessionIconComponent } from "./SessionIcons";
 import { SettingsDialog } from "./SettingsDialog";
 import { CredentialManager } from "./CredentialManager";
+import { LoginSequenceManager } from "./LoginSequenceManager";
+import { FolderLoginSequenceDialog } from "./FolderLoginSequenceDialog";
 import { useAppStore } from "../stores/appStore";
 import { useSettingsStore } from "../stores/settingsStore";
 import { useHighlightStore } from "../stores/highlightStore";
 import { useCredentialProfilesStore } from "../stores/credentialProfilesStore";
+import { useLoginSequenceStore } from "../stores/loginSequenceStore";
 
 // eslint-disable-next-line @typescript-eslint/no-empty-function
 const noop = (): void => {};
@@ -107,7 +110,12 @@ export function SessionSidebar(): React.JSX.Element {
   } | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const [showCredentialManager, setShowCredentialManager] = useState(false);
+  const [showLoginSequenceManager, setShowLoginSequenceManager] = useState(false);
   const [credentialFolder, setCredentialFolder] = useState<{
+    id: string;
+    name: string;
+  } | null>(null);
+  const [loginSequenceFolder, setLoginSequenceFolder] = useState<{
     id: string;
     name: string;
   } | null>(null);
@@ -133,12 +141,14 @@ export function SessionSidebar(): React.JSX.Element {
 
   const loadHighlightProfiles = useHighlightStore((s) => s.loadProfiles);
   const loadCredentialProfiles = useCredentialProfilesStore((s) => s.loadAll);
+  const loadLoginSequences = useLoginSequenceStore((s) => s.loadAll);
 
   useEffect(() => {
     loadAll().catch(noop);
     loadHighlightProfiles().catch(noop);
     loadCredentialProfiles().catch(noop);
-  }, [loadAll, loadHighlightProfiles, loadCredentialProfiles]);
+    loadLoginSequences().catch(noop);
+  }, [loadAll, loadHighlightProfiles, loadCredentialProfiles, loadLoginSequences]);
 
   // Auto-refresh polling when interval is set (for multi-user PostgreSQL setups).
   // Polls a lightweight fingerprint; only fetches full data when it changes.
@@ -169,6 +179,7 @@ export function SessionSidebar(): React.JSX.Element {
         jumpHostId: session.jump_host_id,
         highlightProfileId: session.highlight_profile_id,
         credentialProfileId: session.credential_profile_id,
+        loginSequenceId: session.login_sequence_id,
         legacyAlgorithms: session.legacy_algorithms,
       },
     });
@@ -257,6 +268,7 @@ export function SessionSidebar(): React.JSX.Element {
                 jumpHostId: session.jump_host_id,
                 highlightProfileId: session.highlight_profile_id,
                 credentialProfileId: session.credential_profile_id,
+                loginSequenceId: session.login_sequence_id,
                 legacyAlgorithms: session.legacy_algorithms,
               },
             });
@@ -519,6 +531,12 @@ export function SessionSidebar(): React.JSX.Element {
           },
         },
         {
+          label: t("contextMenu.applyLoginSequence"),
+          onClick: () => {
+            setLoginSequenceFolder({ id: ctx.id, name: folder?.name ?? "" });
+          },
+        },
+        {
           label: t("contextMenu.bulkEdit"),
           onClick: () => {
             setBulkEditFolder({ id: ctx.id, name: folder?.name ?? "" });
@@ -605,6 +623,7 @@ export function SessionSidebar(): React.JSX.Element {
               jumpHostId: session.jump_host_id,
               highlightProfileId: session.highlight_profile_id,
               credentialProfileId: session.credential_profile_id,
+              loginSequenceId: session.login_sequence_id,
               legacyAlgorithms: session.legacy_algorithms,
             },
           });
@@ -696,6 +715,7 @@ export function SessionSidebar(): React.JSX.Element {
         jumpHostId: data.jumpHostId ?? undefined,
         highlightProfileId: data.highlightProfileId ?? undefined,
         credentialProfileId: data.credentialProfileId ?? undefined,
+        loginSequenceId: data.loginSequenceId ?? undefined,
         legacyAlgorithms: data.legacyAlgorithms,
       }).catch(noop);
     } else if (sessionDialog.sessionId) {
@@ -713,6 +733,7 @@ export function SessionSidebar(): React.JSX.Element {
           jumpHostId: data.jumpHostId,
           highlightProfileId: data.highlightProfileId,
           credentialProfileId: data.credentialProfileId,
+          loginSequenceId: data.loginSequenceId,
           legacyAlgorithms: data.legacyAlgorithms,
         });
         if (data.folderId !== originalFolderId) {
@@ -1017,6 +1038,9 @@ export function SessionSidebar(): React.JSX.Element {
           onManageCredentials={() => {
             setShowCredentialManager(true);
           }}
+          onManageLoginSequences={() => {
+            setShowLoginSequenceManager(true);
+          }}
         />
       )}
 
@@ -1070,6 +1094,32 @@ export function SessionSidebar(): React.JSX.Element {
         />
       )}
 
+      {loginSequenceFolder && (
+        <FolderLoginSequenceDialog
+          folderName={loginSequenceFolder.name}
+          onSubmit={(sequenceId) => {
+            store
+              .folderApplyLoginSequence(loginSequenceFolder.id, sequenceId)
+              .then((count) => {
+                useToastStore
+                  .getState()
+                  .addToast(t("folderLoginSequence.success", { count: String(count) }), "info");
+              })
+              .catch((err: unknown) => {
+                const msg = err instanceof Error ? err.message : String(err);
+                useToastStore.getState().addToast(msg);
+              });
+            setLoginSequenceFolder(null);
+          }}
+          onCancel={() => {
+            setLoginSequenceFolder(null);
+          }}
+          onManageSequences={() => {
+            setShowLoginSequenceManager(true);
+          }}
+        />
+      )}
+
       <div className="sidebar-footer">
         <button
           type="button"
@@ -1106,6 +1156,31 @@ export function SessionSidebar(): React.JSX.Element {
             <path d="M14 8l3 3" />
           </svg>
         </button>
+        <button
+          type="button"
+          className="sidebar-btn sidebar-btn-settings"
+          title={t("loginSequences.open")}
+          onClick={() => {
+            setShowLoginSequenceManager(true);
+          }}
+        >
+          <svg
+            width="20"
+            height="20"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            aria-hidden="true"
+          >
+            <rect x="2" y="3" width="20" height="4" rx="1" />
+            <rect x="2" y="10" width="20" height="4" rx="1" />
+            <rect x="2" y="17" width="20" height="4" rx="1" />
+            <circle cx="18" cy="5" r="3" fill="currentColor" />
+          </svg>
+        </button>
       </div>
 
       {showSettings && (
@@ -1120,6 +1195,14 @@ export function SessionSidebar(): React.JSX.Element {
         <CredentialManager
           onClose={() => {
             setShowCredentialManager(false);
+          }}
+        />
+      )}
+
+      {showLoginSequenceManager && (
+        <LoginSequenceManager
+          onClose={() => {
+            setShowLoginSequenceManager(false);
           }}
         />
       )}

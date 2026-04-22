@@ -28,6 +28,7 @@ export interface Session {
   sort_order: number;
   highlight_profile_id: string | null;
   credential_profile_id: string | null;
+  login_sequence_id: string | null;
   legacy_algorithms: boolean;
   owner: string;
   visibility: "personal" | "shared";
@@ -74,6 +75,7 @@ interface SessionState {
 
   // Bulk operations
   folderApplyCredentialProfile: (folderId: string, profileId: string | null) => Promise<number>;
+  folderApplyLoginSequence: (folderId: string, sequenceId: string | null) => Promise<number>;
   folderBulkEditSessions: (folderId: string, edit: BulkSessionEdit) => Promise<number>;
 
   // Reordering
@@ -105,6 +107,7 @@ export interface CreateSessionParams {
   jumpHostId?: string | null;
   highlightProfileId?: string | null;
   credentialProfileId?: string | null;
+  loginSequenceId?: string | null;
   legacyAlgorithms?: boolean;
 }
 
@@ -113,6 +116,8 @@ export interface BulkSessionEdit {
   jumpHostId?: string | null;
   /** undefined = leave alone; null = clear; string = set */
   highlightProfileId?: string | null;
+  /** undefined = leave alone; null = clear; string = set */
+  loginSequenceId?: string | null;
   icon?: string;
 }
 
@@ -127,6 +132,7 @@ export interface UpdateSessionParams {
   jumpHostId?: string | null;
   highlightProfileId?: string | null;
   credentialProfileId?: string | null;
+  loginSequenceId?: string | null;
   legacyAlgorithms?: boolean;
 }
 
@@ -216,6 +222,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       jumpHostId: params.jumpHostId ?? null,
       highlightProfileId: params.highlightProfileId ?? null,
       credentialProfileId: params.credentialProfileId ?? null,
+      loginSequenceId: params.loginSequenceId ?? null,
       legacyAlgorithms: params.legacyAlgorithms ?? false,
     });
     await get().loadAll();
@@ -236,6 +243,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         params.highlightProfileId !== undefined ? params.highlightProfileId : null,
       credentialProfileId:
         params.credentialProfileId !== undefined ? params.credentialProfileId : null,
+      loginSequenceId: params.loginSequenceId !== undefined ? params.loginSequenceId : null,
       legacyAlgorithms: params.legacyAlgorithms ?? null,
     });
     await get().loadAll();
@@ -285,6 +293,24 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     return count;
   },
 
+  folderApplyLoginSequence: async (folderId, sequenceId) => {
+    const { dbBackend } = useAppStore.getState();
+    let count: number;
+    if (dbBackend === "postgres") {
+      count = await invoke<number>("bulk_set_session_login_sequences", {
+        folderId,
+        loginSequenceId: sequenceId ?? null,
+      });
+    } else {
+      count = await invoke<number>("folder_apply_login_sequence", {
+        folderId,
+        sequenceId: sequenceId ?? null,
+      });
+    }
+    await get().loadAll();
+    return count;
+  },
+
   folderBulkEditSessions: async (folderId, edit) => {
     const count = await invoke<number>("folder_bulk_edit_sessions", {
       folderId,
@@ -292,6 +318,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       jumpHostId: edit.jumpHostId ?? null,
       setHighlightProfile: edit.highlightProfileId !== undefined,
       highlightProfileId: edit.highlightProfileId ?? null,
+      setLoginSequence: edit.loginSequenceId !== undefined,
+      loginSequenceId: edit.loginSequenceId ?? null,
       icon: edit.icon ?? null,
     });
     await get().loadAll();

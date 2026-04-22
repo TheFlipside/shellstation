@@ -24,6 +24,7 @@
     "setCredentials": "Definir credenciais…",
     "editSessions": "Editar sessões…",
     "applyCredentialProfile": "Aplicar perfil de credenciais…",
+    "applyLoginSequence": "Aplicar sequência de login…",
     "bulkEdit": "Editar sessões em massa…",
     "makeShared": "Make Shared",
     "makePersonal": "Make Personal"
@@ -33,6 +34,7 @@
     "info": "Aplicar alterações a todas as sessões nesta pasta e subpastas. Apenas os campos marcados serão atualizados. Jump host aplica-se apenas a sessões SSH.",
     "setJumpHost": "Definir jump host",
     "setHighlightProfile": "Definir perfil de realce",
+    "setLoginSequence": "Definir sequência de login",
     "setIcon": "Definir ícone",
     "clearValue": "(Limpar)",
     "success": "{{count}} sessão(ões) atualizada(s)"
@@ -44,6 +46,13 @@
     "dialogRename": "Renomear pasta",
     "nameLabel": "Nome",
     "namePlaceholder": "Nome da pasta"
+  },
+  "folderLoginSequence": {
+    "title": "Aplicar sequência de login — {{name}}",
+    "info": "Atribui uma sequência de login a todas as sessões nesta pasta e subpastas.",
+    "sequenceLabel": "Sequência de login",
+    "sequenceNone": "(Limpar atribuição)",
+    "success": "{{count}} sessão(ões) atualizada(s)"
   },
   "folderCredential": {
     "title": "Aplicar perfil de credenciais — {{name}}",
@@ -77,6 +86,43 @@
     "nameRequired": "O nome do perfil é obrigatório.",
     "none": "(Nenhum)",
     "manageLink": "Gerenciar…"
+  },
+  "loginSequences": {
+    "title": "Gerenciador de sequências de login",
+    "info": "Sequências de login automatizam prompts pós-conexão (ex. usuário/senha no nível do dispositivo). Cada sequência é uma lista de passos esperar/enviar.",
+    "open": "Sequências de login",
+    "newSequence": "Nova sequência",
+    "nameLabel": "Nome da sequência",
+    "namePlaceholder": "ex. Cisco Switch Login",
+    "sendInitialCr": "Enviar retorno de carro inicial",
+    "sendInitialCrHint": "Envia um CR antes de aguardar o primeiro prompt. Útil para dispositivos que precisam de uma tecla para exibir o prompt de login.",
+    "stepsLabel": "Passos",
+    "stepNumber": "Passo {{n}}",
+    "patternLabel": "Esperar (regex)",
+    "patternPlaceholder": "ex. [Uu]sername:",
+    "responseLabel": "Enviar",
+    "responsePlaceholder": "ex. \\s",
+    "appendCr": "Adicionar retorno de carro",
+    "addStep": "Adicionar passo",
+    "moveUp": "Mover para cima",
+    "moveDown": "Mover para baixo",
+    "escapeTitle": "Sequências de escape",
+    "esc_s": "Nome de usuário",
+    "esc_w": "Senha",
+    "esc_r": "CR",
+    "esc_n": "LF",
+    "esc_t": "Tab",
+    "esc_b": "Retrocesso",
+    "esc_e": "ESC",
+    "esc_backslash": "Barra invertida",
+    "esc_p": "Pausa 1 s",
+    "noneYet": "Nenhuma sequência de login ainda.",
+    "deleteConfirm": "Excluir a sequência de login \"{{name}}\"? Sessões que a usam precisarão de uma nova sequência.",
+    "nameRequired": "O nome da sequência é obrigatório.",
+    "needOneStep": "É necessário pelo menos um passo com um padrão.",
+    "stepCount": "{{count}} passo(s)",
+    "manageLink": "Gerenciar…",
+    "none": "(Nenhuma)"
   },
   "session": {
     "deleteConfirm": "Excluir a sessão \"{{name}}\"?",
@@ -127,6 +173,8 @@
     "highlightProfileNone": "Nenhum",
     "credentialProfileLabel": "Perfil de credenciais",
     "credentialProfileNone": "(Nenhum — fallback teclado interativo)",
+    "loginSequenceLabel": "Sequência de login",
+    "loginSequenceNone": "Nenhuma",
     "usernameHintKbd": "Necessário para autenticação keyboard-interactive quando nenhum perfil de credenciais está atribuído."
   },
   "dialog": {

@@ -24,6 +24,7 @@
     "setCredentials": "Set Credentials…",
     "editSessions": "Edit Sessions…",
     "applyCredentialProfile": "Apply Credential Profile…",
+    "applyLoginSequence": "Apply Login Sequence…",
     "bulkEdit": "Bulk Edit Sessions…",
     "makeShared": "Make Shared",
     "makePersonal": "Make Personal"
@@ -33,6 +34,7 @@
     "info": "Apply changes to all sessions in this folder and subfolders. Only checked fields will be updated. Jump host only applies to SSH sessions.",
     "setJumpHost": "Set Jump Host",
     "setHighlightProfile": "Set Highlight Profile",
+    "setLoginSequence": "Set Login Sequence",
     "setIcon": "Set Icon",
     "clearValue": "(Clear)",
     "success": "Updated {{count}} session(s)"
@@ -44,6 +46,13 @@
     "dialogRename": "Rename Folder",
     "nameLabel": "Name",
     "namePlaceholder": "Folder name"
+  },
+  "folderLoginSequence": {
+    "title": "Apply Login Sequence — {{name}}",
+    "info": "Assigns a login sequence to all sessions in this folder and subfolders.",
+    "sequenceLabel": "Login Sequence",
+    "sequenceNone": "(Clear assignment)",
+    "success": "Updated {{count}} session(s)"
   },
   "folderCredential": {
     "title": "Apply Credential Profile — {{name}}",
@@ -77,6 +86,43 @@
     "nameRequired": "Profile name is required.",
     "none": "(None)",
     "manageLink": "Manage…"
+  },
+  "loginSequences": {
+    "title": "Login Sequence Manager",
+    "info": "Login sequences automate post-connection prompts (e.g. device-level username/password). Each sequence is a list of expect/send steps.",
+    "open": "Login Sequences",
+    "newSequence": "New Sequence",
+    "nameLabel": "Sequence Name",
+    "namePlaceholder": "e.g. Cisco Switch Login",
+    "sendInitialCr": "Send initial carriage return",
+    "sendInitialCrHint": "Send a CR before waiting for the first prompt. Useful for devices that need a keypress to show the login prompt.",
+    "stepsLabel": "Steps",
+    "stepNumber": "Step {{n}}",
+    "patternLabel": "Expect (regex)",
+    "patternPlaceholder": "e.g. [Uu]sername:",
+    "responseLabel": "Send",
+    "responsePlaceholder": "e.g. \\s",
+    "appendCr": "Append carriage return",
+    "addStep": "Add Step",
+    "moveUp": "Move Up",
+    "moveDown": "Move Down",
+    "escapeTitle": "Escape sequences",
+    "esc_s": "Username",
+    "esc_w": "Password",
+    "esc_r": "CR",
+    "esc_n": "LF",
+    "esc_t": "Tab",
+    "esc_b": "Backspace",
+    "esc_e": "ESC",
+    "esc_backslash": "Backslash",
+    "esc_p": "Pause 1s",
+    "noneYet": "No login sequences yet.",
+    "deleteConfirm": "Delete login sequence \"{{name}}\"? Sessions referencing it will need a new sequence assigned.",
+    "nameRequired": "Sequence name is required.",
+    "needOneStep": "At least one step with a pattern is required.",
+    "stepCount": "{{count}} step(s)",
+    "manageLink": "Manage…",
+    "none": "(None)"
   },
   "session": {
     "deleteConfirm": "Delete session \"{{name}}\"?",
@@ -127,6 +173,8 @@
     "highlightProfileNone": "None",
     "credentialProfileLabel": "Credential Profile",
     "credentialProfileNone": "(None — keyboard-interactive fallback)",
+    "loginSequenceLabel": "Login Sequence",
+    "loginSequenceNone": "None",
     "usernameHintKbd": "Required for keyboard-interactive authentication when no credential profile is assigned."
   },
   "dialog": {

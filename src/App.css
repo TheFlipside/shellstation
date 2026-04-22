@@ -1441,6 +1441,75 @@ body,
   flex-shrink: 0;
 }
 
+.login-sequence-step {
+  border: 1px solid var(--color-surface1);
+  border-radius: 6px;
+  padding: 8px 10px;
+  margin-bottom: 8px;
+}
+
+.login-sequence-step-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+
+.login-sequence-step-number {
+  font-weight: 600;
+  font-size: 0.85em;
+  color: var(--color-subtext0);
+}
+
+.login-sequence-step-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.dialog-btn-small {
+  padding: 2px 6px;
+  font-size: 0.8em;
+  min-width: 0;
+}
+
+.dialog-checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.dialog-checkbox-label input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--color-blue);
+  cursor: pointer;
+}
+
+.monospace-input {
+  font-family: "JetBrains Mono", "Fira Code", monospace;
+  font-size: 0.9em;
+}
+
+.escape-help {
+  margin-top: 4px;
+}
+
+.escape-help-grid {
+  display: grid;
+  grid-template-columns: auto 1fr auto 1fr;
+  column-gap: 12px;
+  row-gap: 2px;
+  font-size: 11px;
+  color: var(--color-subtext0);
+  margin-top: 4px;
+}
+
+.escape-code {
+  font-family: "JetBrains Mono", "Fira Code", monospace;
+  color: var(--color-text);
+}
+
 .highlight-rule-remove {
   background: none;
   border: none;

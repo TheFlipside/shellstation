@@ -7,6 +7,7 @@ import { sessionHasTag } from "../stores/sessionStore";
 import { useAppStore } from "../stores/appStore";
 import { useHighlightStore } from "../stores/highlightStore";
 import { useCredentialProfilesStore } from "../stores/credentialProfilesStore";
+import { useLoginSequenceStore } from "../stores/loginSequenceStore";
 import { SESSION_ICON_KEYS, SessionIconComponent } from "./SessionIcons";
 import { CustomSelect } from "./CustomSelect";
 
@@ -22,6 +23,7 @@ export interface SessionFormData {
   jumpHostId: string | null;
   highlightProfileId: string | null;
   credentialProfileId: string | null;
+  loginSequenceId: string | null;
   legacyAlgorithms: boolean;
 }
 
@@ -35,6 +37,7 @@ interface SessionDialogProps {
   onSubmit: (data: SessionFormData) => void;
   onCancel: () => void;
   onManageCredentials: () => void;
+  onManageLoginSequences: () => void;
 }
 
 export function SessionDialog({
@@ -47,6 +50,7 @@ export function SessionDialog({
   onSubmit,
   onCancel,
   onManageCredentials,
+  onManageLoginSequences,
 }: SessionDialogProps): React.JSX.Element {
   const { t } = useTranslation();
   useEscapeKey(onCancel);
@@ -66,6 +70,7 @@ export function SessionDialog({
   const [credentialProfileId, setCredentialProfileId] = useState(
     initial?.credentialProfileId ?? "",
   );
+  const [loginSequenceId, setLoginSequenceId] = useState(initial?.loginSequenceId ?? "");
   const [legacyAlgorithms, setLegacyAlgorithms] = useState(initial?.legacyAlgorithms ?? false);
 
   // In PG mode, load the per-user credential mapping for this session.
@@ -81,8 +86,21 @@ export function SessionDialog({
         // Ignore — fall back to session's own credential_profile_id
       });
   }, [isPg, sessionId]);
+
+  useEffect(() => {
+    if (!isPg || !sessionId) return;
+    invoke<string | null>("get_session_login_sequence", { sessionId })
+      .then((seqId) => {
+        if (seqId !== null) {
+          setLoginSequenceId(seqId);
+        }
+      })
+      .catch(() => undefined);
+  }, [isPg, sessionId]);
+
   const highlightProfiles = useHighlightStore((s) => s.profiles);
   const credentialProfiles = useCredentialProfilesStore((s) => s.profiles);
+  const loginSequences = useLoginSequenceStore((s) => s.sequences);
   const [error, setError] = useState("");
 
   const handleSubmit = (e: React.SyntheticEvent): void => {
@@ -101,9 +119,13 @@ export function SessionDialog({
       invoke("set_session_credential", {
         sessionId,
         credentialProfileId: credentialProfileId || null,
-      }).catch(() => {
-        // Best-effort — the main save will still proceed
-      });
+      }).catch(() => undefined);
+    }
+    if (isPg && sessionId) {
+      invoke("set_session_login_sequence", {
+        sessionId,
+        loginSequenceId: loginSequenceId || null,
+      }).catch(() => undefined);
     }
 
     onSubmit({
@@ -119,6 +141,7 @@ export function SessionDialog({
       highlightProfileId: highlightProfileId || null,
       // In PG mode, don't write credentialProfileId to the shared session row
       credentialProfileId: isPg || protocol === "telnet" ? null : credentialProfileId || null,
+      loginSequenceId: isPg ? null : loginSequenceId || null,
       legacyAlgorithms: protocol === "ssh" ? legacyAlgorithms : false,
     });
   };
@@ -315,6 +338,28 @@ export function SessionDialog({
                 })),
               ]}
             />
+          </div>
+          <div className="dialog-field">
+            <label htmlFor="sd-loginseq">{t("session.loginSequenceLabel")}</label>
+            <div className="dialog-row">
+              <div className="dialog-field-grow">
+                <CustomSelect
+                  id="sd-loginseq"
+                  value={loginSequenceId}
+                  onChange={setLoginSequenceId}
+                  options={[
+                    { value: "", label: t("session.loginSequenceNone") },
+                    ...loginSequences.map((s) => ({
+                      value: s.id,
+                      label: s.name,
+                    })),
+                  ]}
+                />
+              </div>
+              <button type="button" className="dialog-btn" onClick={onManageLoginSequences}>
+                {t("loginSequences.manageLink")}
+              </button>
+            </div>
           </div>
           <div className="dialog-field">
             <label htmlFor="sd-tags">{t("session.tagsLabel")}</label>

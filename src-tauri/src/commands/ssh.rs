@@ -90,6 +90,7 @@ pub async fn ssh_connect(
             logger,
             kbd_interactive_senders: std::sync::Arc::clone(&state.kbd_interactive_senders),
             ready_rx,
+            login_sequence: None,
         },
         &state.host_verify_senders,
     )

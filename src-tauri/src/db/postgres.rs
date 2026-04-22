@@ -7,9 +7,10 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
 use super::models::{
-    Credential, CredentialProfile, DataFingerprint, Folder, HighlightProfile, NewCredentialProfile,
-    NewFolder, NewHighlightProfile, NewSession, Session, UpdateCredentialProfile,
-    UpdateHighlightProfile, UpdateSession,
+    Credential, CredentialProfile, DataFingerprint, Folder, HighlightProfile, LoginSequence,
+    LoginSequenceStep, NewCredentialProfile, NewFolder, NewHighlightProfile, NewLoginSequence,
+    NewSession, Session, UpdateCredentialProfile, UpdateHighlightProfile, UpdateLoginSequence,
+    UpdateSession,
 };
 use super::{BulkSessionEdit, DatabaseProvider, DbResult};
 
@@ -62,6 +63,7 @@ fn row_to_session(row: &PgRow) -> DbResult<Session> {
         highlight_profile_id: parse_optional_uuid(row.get("highlight_profile_id"))?,
         credential_profile_id: parse_optional_uuid(row.get("credential_profile_id"))?,
         legacy_algorithms: row.get::<i32, _>("legacy_algorithms") != 0,
+        login_sequence_id: parse_optional_uuid(row.get("login_sequence_id"))?,
         owner: row.get("owner"),
         visibility: row.get("visibility"),
     })
@@ -84,6 +86,19 @@ fn row_to_highlight_profile(row: &PgRow) -> DbResult<HighlightProfile> {
         id: parse_uuid(row.get("id"))?,
         name: row.get("name"),
         rules: row.get("rules"),
+        sort_order: row.get("sort_order"),
+    })
+}
+
+fn row_to_login_sequence(row: &PgRow) -> DbResult<LoginSequence> {
+    let steps_json: String = row.get("steps");
+    let steps: Vec<LoginSequenceStep> = serde_json::from_str(&steps_json)
+        .map_err(|e| format!("Failed to parse login sequence steps: {e}"))?;
+    Ok(LoginSequence {
+        id: parse_uuid(row.get("id"))?,
+        name: row.get("name"),
+        send_initial_cr: row.get::<i32, _>("send_initial_cr") != 0,
+        steps,
         sort_order: row.get("sort_order"),
     })
 }
@@ -285,8 +300,8 @@ impl DatabaseProvider for PostgresProvider {
                 (id, folder_id, name, hostname, port, protocol, username, \
                  auth_method, jump_host_id, tags, icon, sort_order, \
                  highlight_profile_id, credential_profile_id, legacy_algorithms, \
-                 owner, visibility) \
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15, \
+                 login_sequence_id, owner, visibility) \
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16, \
                      current_user, 'personal') \
              RETURNING owner, visibility",
         )
@@ -305,6 +320,7 @@ impl DatabaseProvider for PostgresProvider {
         .bind(session.highlight_profile_id.map(|u| u.to_string()))
         .bind(session.credential_profile_id.map(|u| u.to_string()))
         .bind(i32::from(session.legacy_algorithms))
+        .bind(session.login_sequence_id.map(|u| u.to_string()))
         .fetch_one(&mut *tx)
         .await
         .map_err(|e| format!("Failed to create session: {e}"))?;
@@ -332,6 +348,7 @@ impl DatabaseProvider for PostgresProvider {
             highlight_profile_id: session.highlight_profile_id,
             credential_profile_id: session.credential_profile_id,
             legacy_algorithms: session.legacy_algorithms,
+            login_sequence_id: session.login_sequence_id,
             owner,
             visibility,
         })
@@ -339,7 +356,7 @@ impl DatabaseProvider for PostgresProvider {
 
     async fn get_session(&self, id: Uuid) -> DbResult<Option<Session>> {
         let row = sqlx::query(
-            "SELECT id, folder_id, name, hostname, port, protocol, username, auth_method, jump_host_id, tags, icon, sort_order, highlight_profile_id, credential_profile_id, legacy_algorithms, owner, visibility \
+            "SELECT id, folder_id, name, hostname, port, protocol, username, auth_method, jump_host_id, tags, icon, sort_order, highlight_profile_id, credential_profile_id, legacy_algorithms, owner, visibility, login_sequence_id \
              FROM sessions WHERE id = $1",
         )
         .bind(id.to_string())
@@ -355,7 +372,7 @@ impl DatabaseProvider for PostgresProvider {
 
     async fn list_all_sessions(&self) -> DbResult<Vec<Session>> {
         let rows = sqlx::query(
-            "SELECT id, folder_id, name, hostname, port, protocol, username, auth_method, jump_host_id, tags, icon, sort_order, highlight_profile_id, credential_profile_id, legacy_algorithms, owner, visibility \
+            "SELECT id, folder_id, name, hostname, port, protocol, username, auth_method, jump_host_id, tags, icon, sort_order, highlight_profile_id, credential_profile_id, legacy_algorithms, owner, visibility, login_sequence_id \
              FROM sessions ORDER BY sort_order ASC, name ASC",
         )
         .fetch_all(&self.pool)
@@ -447,6 +464,14 @@ impl DatabaseProvider for PostgresProvider {
             values.push(BindVal::Int(i32::from(legacy)));
             idx += 1;
         }
+        if let Some(ref login_sequence_id) = update.login_sequence_id {
+            sets.push(format!("login_sequence_id = ${idx}"));
+            match login_sequence_id {
+                Some(u) => values.push(BindVal::Text(u.to_string())),
+                None => values.push(BindVal::Null),
+            }
+            idx += 1;
+        }
 
         if sets.is_empty() {
             return Ok(());
@@ -534,7 +559,7 @@ impl DatabaseProvider for PostgresProvider {
         let escaped = query.replace('%', "\\%").replace('_', "\\_");
         let pattern = format!("%{escaped}%");
         let rows = sqlx::query(
-            "SELECT id, folder_id, name, hostname, port, protocol, username, auth_method, jump_host_id, tags, icon, sort_order, highlight_profile_id, credential_profile_id, legacy_algorithms, owner, visibility \
+            "SELECT id, folder_id, name, hostname, port, protocol, username, auth_method, jump_host_id, tags, icon, sort_order, highlight_profile_id, credential_profile_id, legacy_algorithms, owner, visibility, login_sequence_id \
              FROM sessions \
              WHERE name LIKE $1 ESCAPE '\\' \
                 OR hostname LIKE $1 ESCAPE '\\' \
@@ -933,7 +958,10 @@ impl DatabaseProvider for PostgresProvider {
     }
 
     async fn bulk_edit_sessions(&self, folder_id: Uuid, edit: BulkSessionEdit) -> DbResult<u32> {
-        if edit.jump_host_id.is_none() && edit.highlight_profile_id.is_none() && edit.icon.is_none()
+        if edit.jump_host_id.is_none()
+            && edit.highlight_profile_id.is_none()
+            && edit.icon.is_none()
+            && edit.login_sequence_id.is_none()
         {
             return Ok(0);
         }
@@ -956,6 +984,9 @@ impl DatabaseProvider for PostgresProvider {
         if edit.icon.is_some() {
             setters.push(format!("icon = ${}", setters.len() + 2));
         }
+        if edit.login_sequence_id.is_some() {
+            setters.push(format!("login_sequence_id = ${}", setters.len() + 2));
+        }
 
         if !setters.is_empty() {
             let sql = format!(
@@ -970,6 +1001,9 @@ impl DatabaseProvider for PostgresProvider {
             }
             if let Some(icon) = &edit.icon {
                 q = q.bind(icon);
+            }
+            if let Some(ls) = &edit.login_sequence_id {
+                q = q.bind(ls.map(|u| u.to_string()));
             }
             let result = q
                 .execute(&self.pool)
@@ -1131,6 +1165,176 @@ impl DatabaseProvider for PostgresProvider {
             return Err(format!("Highlight profile {id} not found"));
         }
         Ok(())
+    }
+
+    // ── Login Sequences ──────────────────────────────────────────────────
+
+    async fn create_login_sequence(&self, sequence: NewLoginSequence) -> DbResult<LoginSequence> {
+        let id = Uuid::new_v4();
+        let id_str = id.to_string();
+        let steps_json = serde_json::to_string(&sequence.steps)
+            .map_err(|e| format!("Failed to serialise login sequence steps: {e}"))?;
+
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| format!("Failed to begin transaction: {e}"))?;
+
+        sqlx::query("SELECT id FROM login_sequences FOR UPDATE")
+            .fetch_all(&mut *tx)
+            .await
+            .map_err(|e| format!("Failed to lock login sequences: {e}"))?;
+
+        let sort_order: i32 =
+            sqlx::query_scalar("SELECT COALESCE(MAX(sort_order), -1) + 1 FROM login_sequences")
+                .fetch_one(&mut *tx)
+                .await
+                .map_err(|e| format!("Failed to compute sort_order: {e}"))?;
+
+        sqlx::query(
+            "INSERT INTO login_sequences (id, name, send_initial_cr, steps, sort_order) \
+             VALUES ($1, $2, $3, $4, $5)",
+        )
+        .bind(&id_str)
+        .bind(&sequence.name)
+        .bind(i32::from(sequence.send_initial_cr))
+        .bind(&steps_json)
+        .bind(sort_order)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| format!("Failed to create login sequence: {e}"))?;
+
+        tx.commit()
+            .await
+            .map_err(|e| format!("Failed to commit: {e}"))?;
+
+        Ok(LoginSequence {
+            id,
+            name: sequence.name,
+            send_initial_cr: sequence.send_initial_cr,
+            steps: sequence.steps,
+            sort_order,
+        })
+    }
+
+    async fn list_login_sequences(&self) -> DbResult<Vec<LoginSequence>> {
+        let rows = sqlx::query(
+            "SELECT id, name, send_initial_cr, steps, sort_order \
+             FROM login_sequences ORDER BY sort_order ASC, name ASC",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| format!("Failed to list login sequences: {e}"))?;
+
+        rows.iter().map(row_to_login_sequence).collect()
+    }
+
+    async fn get_login_sequence(&self, id: Uuid) -> DbResult<Option<LoginSequence>> {
+        let row = sqlx::query(
+            "SELECT id, name, send_initial_cr, steps, sort_order \
+             FROM login_sequences WHERE id = $1",
+        )
+        .bind(id.to_string())
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| format!("Failed to get login sequence: {e}"))?;
+
+        match row {
+            Some(r) => Ok(Some(row_to_login_sequence(&r)?)),
+            None => Ok(None),
+        }
+    }
+
+    async fn update_login_sequence(&self, id: Uuid, update: UpdateLoginSequence) -> DbResult<()> {
+        enum BindVal {
+            Text(String),
+            Int(i32),
+        }
+        let mut sets = Vec::new();
+        let mut values: Vec<BindVal> = Vec::new();
+        let mut idx: usize = 1;
+
+        if let Some(ref name) = update.name {
+            sets.push(format!("name = ${idx}"));
+            values.push(BindVal::Text(name.clone()));
+            idx += 1;
+        }
+        if let Some(send_initial_cr) = update.send_initial_cr {
+            sets.push(format!("send_initial_cr = ${idx}"));
+            values.push(BindVal::Int(i32::from(send_initial_cr)));
+            idx += 1;
+        }
+        if let Some(ref steps) = update.steps {
+            let json = serde_json::to_string(steps)
+                .map_err(|e| format!("Failed to serialise login sequence steps: {e}"))?;
+            sets.push(format!("steps = ${idx}"));
+            values.push(BindVal::Text(json));
+            idx += 1;
+        }
+
+        if sets.is_empty() {
+            return Ok(());
+        }
+
+        let sql = format!(
+            "UPDATE login_sequences SET {} WHERE id = ${idx}",
+            sets.join(", ")
+        );
+        let mut query = sqlx::query(&sql);
+        for val in &values {
+            match val {
+                BindVal::Text(s) => query = query.bind(s.as_str()),
+                BindVal::Int(n) => query = query.bind(*n),
+            }
+        }
+        query = query.bind(id.to_string());
+
+        let result = query
+            .execute(&self.pool)
+            .await
+            .map_err(|e| format!("Failed to update login sequence: {e}"))?;
+
+        if result.rows_affected() == 0 {
+            return Err(format!("Login sequence {id} not found"));
+        }
+        Ok(())
+    }
+
+    async fn delete_login_sequence(&self, id: Uuid) -> DbResult<()> {
+        let result = sqlx::query("DELETE FROM login_sequences WHERE id = $1")
+            .bind(id.to_string())
+            .execute(&self.pool)
+            .await
+            .map_err(|e| format!("Failed to delete login sequence: {e}"))?;
+
+        if result.rows_affected() == 0 {
+            return Err(format!("Login sequence {id} not found"));
+        }
+        Ok(())
+    }
+
+    async fn bulk_set_session_login_sequence(
+        &self,
+        folder_id: Uuid,
+        sequence_id: Option<Uuid>,
+    ) -> DbResult<u32> {
+        let result = sqlx::query(
+            "WITH RECURSIVE subtree(id) AS ( \
+                 SELECT id FROM folders WHERE id = $2 \
+                 UNION ALL \
+                 SELECT f.id FROM folders f JOIN subtree s ON f.parent_id = s.id \
+             ) \
+             UPDATE sessions SET login_sequence_id = $1 \
+             WHERE folder_id IN (SELECT id FROM subtree)",
+        )
+        .bind(sequence_id.map(|u| u.to_string()))
+        .bind(folder_id.to_string())
+        .execute(&self.pool)
+        .await
+        .map_err(|e| format!("Failed to bulk set login sequence: {e}"))?;
+
+        Ok(result.rows_affected() as u32)
     }
 
     async fn data_fingerprint(&self) -> DbResult<DataFingerprint> {

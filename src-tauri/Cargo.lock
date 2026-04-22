@@ -5369,6 +5369,7 @@ dependencies = [
  "keyring",
  "portable-pty",
  "quick-xml 0.39.2",
+ "regex",
  "russh",
  "serde",
  "serde_json",

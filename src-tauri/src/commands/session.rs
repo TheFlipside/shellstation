@@ -112,6 +112,8 @@ pub async fn folder_bulk_edit_sessions(
     jump_host_id: Option<String>,
     set_highlight_profile: bool,
     highlight_profile_id: Option<String>,
+    set_login_sequence: bool,
+    login_sequence_id: Option<String>,
     icon: Option<String>,
 ) -> Result<u32, String> {
     let folder_uuid = parse_uuid(&folder_id)?;
@@ -125,6 +127,14 @@ pub async fn folder_bulk_edit_sessions(
     };
     let highlight = if set_highlight_profile {
         Some(match highlight_profile_id {
+            Some(s) => Some(parse_uuid(&s)?),
+            None => None,
+        })
+    } else {
+        None
+    };
+    let login_seq = if set_login_sequence {
+        Some(match login_sequence_id {
             Some(s) => Some(parse_uuid(&s)?),
             None => None,
         })
@@ -146,6 +156,7 @@ pub async fn folder_bulk_edit_sessions(
             crate::db::BulkSessionEdit {
                 jump_host_id: jump_host,
                 highlight_profile_id: highlight,
+                login_sequence_id: login_seq,
                 icon,
             },
         )
@@ -169,6 +180,7 @@ pub async fn session_create(
     jump_host_id: Option<String>,
     highlight_profile_id: Option<String>,
     credential_profile_id: Option<String>,
+    login_sequence_id: Option<String>,
     legacy_algorithms: Option<bool>,
 ) -> Result<Session, String> {
     validate_port(port)?;
@@ -192,6 +204,7 @@ pub async fn session_create(
         .as_deref()
         .map(parse_uuid)
         .transpose()?;
+    let login_seq = login_sequence_id.as_deref().map(parse_uuid).transpose()?;
 
     state
         .0
@@ -211,6 +224,7 @@ pub async fn session_create(
             icon,
             highlight_profile_id: highlight,
             credential_profile_id: credential,
+            login_sequence_id: login_seq,
             legacy_algorithms: legacy_algorithms.unwrap_or(false),
         })
         .await
@@ -241,6 +255,7 @@ pub async fn session_update(
     jump_host_id: Option<String>,
     highlight_profile_id: Option<String>,
     credential_profile_id: Option<String>,
+    login_sequence_id: Option<String>,
     legacy_algorithms: Option<bool>,
 ) -> Result<(), String> {
     if let Some(p) = port {
@@ -276,6 +291,10 @@ pub async fn session_update(
         Some(s) => Some(parse_uuid(&s)?),
         None => None,
     });
+    let login_seq = Some(match login_sequence_id {
+        Some(s) => Some(parse_uuid(&s)?),
+        None => None,
+    });
 
     state
         .0
@@ -293,6 +312,7 @@ pub async fn session_update(
                 icon,
                 highlight_profile_id: highlight,
                 credential_profile_id: credential,
+                login_sequence_id: login_seq,
                 legacy_algorithms,
             },
         )
@@ -480,6 +500,7 @@ pub async fn session_connect(
     app_handle: AppHandle,
     db: State<'_, DbState>,
     cred_db: State<'_, CredentialDbState>,
+    login_seq_db: State<'_, crate::db::LoginSequenceDbState>,
     ssh: State<'_, SshState>,
     telnet: State<'_, TelnetState>,
     ready_state: State<'_, TerminalReadyState>,
@@ -506,6 +527,30 @@ pub async fn session_connect(
     let timeout_secs = connect_timeout.unwrap_or(10).min(300);
     let keepalive_secs = keepalive_interval.unwrap_or(15).min(3600);
     let keepalive_missed = keepalive_max.unwrap_or(3).min(100) as usize;
+
+    // Resolve login sequence (applies to both SSH and Telnet).
+    let user_ident_for_ls = pg.0.as_ref().and_then(|_| {
+        config
+            .config
+            .lock()
+            .ok()
+            .and_then(|c| c.user_ident.clone())
+            .filter(|s| !s.is_empty())
+    });
+    let effective_ls_id = if let (Some(pool), Some(ref ident)) = (&pg.0, &user_ident_for_ls) {
+        match super::session_login_sequences::query_user_login_sequence(pool, &id, ident).await? {
+            Some(uuid) => Some(uuid),
+            None => session.login_sequence_id,
+        }
+    } else {
+        session.login_sequence_id
+    };
+
+    let login_sequence = if let Some(ls_id) = effective_ls_id {
+        login_seq_db.0.get_login_sequence(ls_id).await?
+    } else {
+        None
+    };
 
     // Dispatch by protocol.
     if session.protocol == "telnet" {
@@ -541,6 +586,16 @@ pub async fn session_connect(
             );
         }
 
+        let telnet_login_seq = if let Some(ref seq) = login_sequence {
+            Some(crate::login_sequence::resolve_login_sequence(
+                seq,
+                &session.username,
+                "",
+            )?)
+        } else {
+            None
+        };
+
         let telnet_session = match establish_telnet_connection(TelnetConnectParams {
             id: conn_id.clone(),
             host: session.hostname,
@@ -552,6 +607,7 @@ pub async fn session_connect(
             connect_timeout_secs: timeout_secs,
             logger,
             ready_rx,
+            login_sequence: telnet_login_seq,
         })
         .await
         {
@@ -672,6 +728,16 @@ pub async fn session_connect(
         );
     }
 
+    let ssh_login_seq = if let Some(ref seq) = login_sequence {
+        Some(crate::login_sequence::resolve_login_sequence(
+            seq,
+            &username,
+            &auth_credential,
+        )?)
+    } else {
+        None
+    };
+
     let ssh_session = match establish_ssh_connection(
         SshConnectParams {
             id: conn_id.clone(),
@@ -692,6 +758,7 @@ pub async fn session_connect(
             logger,
             kbd_interactive_senders: std::sync::Arc::clone(&ssh.kbd_interactive_senders),
             ready_rx,
+            login_sequence: ssh_login_seq,
         },
         &ssh.host_verify_senders,
     )

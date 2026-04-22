@@ -24,6 +24,7 @@
     "setCredentials": "Imposta credenziali…",
     "editSessions": "Modifica sessioni…",
     "applyCredentialProfile": "Applica profilo credenziali…",
+    "applyLoginSequence": "Applica sequenza di login…",
     "bulkEdit": "Modifica sessioni in blocco…",
     "makeShared": "Make Shared",
     "makePersonal": "Make Personal"
@@ -33,6 +34,7 @@
     "info": "Applica modifiche a tutte le sessioni in questa cartella e sottocartelle. Solo i campi selezionati vengono aggiornati. Il jump host si applica solo alle sessioni SSH.",
     "setJumpHost": "Imposta jump host",
     "setHighlightProfile": "Imposta profilo di evidenziazione",
+    "setLoginSequence": "Imposta sequenza di login",
     "setIcon": "Imposta icona",
     "clearValue": "(Cancella)",
     "success": "{{count}} sessione(i) aggiornate"
@@ -44,6 +46,13 @@
     "dialogRename": "Rinomina cartella",
     "nameLabel": "Nome",
     "namePlaceholder": "Nome della cartella"
+  },
+  "folderLoginSequence": {
+    "title": "Applica sequenza di login — {{name}}",
+    "info": "Assegna una sequenza di login a tutte le sessioni in questa cartella e sottocartelle.",
+    "sequenceLabel": "Sequenza di login",
+    "sequenceNone": "(Rimuovi assegnazione)",
+    "success": "{{count}} sessione(i) aggiornate"
   },
   "folderCredential": {
     "title": "Applica profilo credenziali — {{name}}",
@@ -77,6 +86,43 @@
     "nameRequired": "Il nome del profilo è obbligatorio.",
     "none": "(Nessuno)",
     "manageLink": "Gestisci…"
+  },
+  "loginSequences": {
+    "title": "Gestore sequenze di login",
+    "info": "Le sequenze di login automatizzano i prompt post-connessione (es. username/password a livello dispositivo). Ogni sequenza è una lista di passaggi attendi/invia.",
+    "open": "Sequenze di login",
+    "newSequence": "Nuova sequenza",
+    "nameLabel": "Nome sequenza",
+    "namePlaceholder": "es. Cisco Switch Login",
+    "sendInitialCr": "Invia ritorno a capo iniziale",
+    "sendInitialCrHint": "Invia un CR prima di attendere il primo prompt. Utile per dispositivi che richiedono un tasto per mostrare il prompt di login.",
+    "stepsLabel": "Passaggi",
+    "stepNumber": "Passaggio {{n}}",
+    "patternLabel": "Attendi (regex)",
+    "patternPlaceholder": "es. [Uu]sername:",
+    "responseLabel": "Invia",
+    "responsePlaceholder": "es. \\s",
+    "appendCr": "Aggiungi ritorno a capo",
+    "addStep": "Aggiungi passaggio",
+    "moveUp": "Sposta su",
+    "moveDown": "Sposta giù",
+    "escapeTitle": "Sequenze di escape",
+    "esc_s": "Nome utente",
+    "esc_w": "Password",
+    "esc_r": "CR",
+    "esc_n": "LF",
+    "esc_t": "Tab",
+    "esc_b": "Backspace",
+    "esc_e": "ESC",
+    "esc_backslash": "Barra rovesciata",
+    "esc_p": "Pausa 1 s",
+    "noneYet": "Nessuna sequenza di login.",
+    "deleteConfirm": "Eliminare la sequenza di login \"{{name}}\"? Le sessioni che la usano richiederanno una nuova sequenza.",
+    "nameRequired": "Il nome della sequenza è obbligatorio.",
+    "needOneStep": "È richiesto almeno un passaggio con un pattern.",
+    "stepCount": "{{count}} passaggio/i",
+    "manageLink": "Gestisci…",
+    "none": "(Nessuna)"
   },
   "session": {
     "deleteConfirm": "Eliminare la sessione \"{{name}}\"?",
@@ -127,6 +173,8 @@
     "highlightProfileNone": "Nessuno",
     "credentialProfileLabel": "Profilo credenziali",
     "credentialProfileNone": "(Nessuno — fallback tastiera interattiva)",
+    "loginSequenceLabel": "Sequenza di login",
+    "loginSequenceNone": "Nessuna",
     "usernameHintKbd": "Necessario per l'autenticazione keyboard-interactive quando non è assegnato un profilo credenziali."
   },
   "dialog": {
