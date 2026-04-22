@@ -193,39 +193,51 @@ export function CustomSelect({
   }, [open, focusIndex]);
 
   // Compute fixed-positioned coordinates for the portal-mounted dropdown.
-  // The dropdown escapes any ancestor with `overflow: hidden/auto` (e.g. a
-  // scrollable dialog) by rendering into document.body.
+  // Portal into the nearest .dialog-overlay (which owns the CSS zoom) so
+  // that position:fixed shares the same coordinate space as the trigger.
+  //
+  // Cross-engine zoom compensation: CSS zoom is non-standard and engines
+  // disagree on whether getBoundingClientRect returns pre- or post-zoom
+  // coords. We detect the effective zoom empirically by comparing
+  // offsetWidth (always layout pixels) with rect.width (visual on
+  // Chromium, layout on WebKitGTK). Dividing rect values by this ratio
+  // normalises both engines into the layout coordinate space that
+  // position:fixed uses inside the zoomed container.
+  const [portalTarget, setPortalTarget] = useState<HTMLElement | null>(null);
   const [dropdownPos, setDropdownPos] = useState<{
     top: number;
     left: number;
     width: number;
     maxHeight: number;
+    viewportH: number;
     flipUp: boolean;
   } | null>(null);
-  const [portalTarget, setPortalTarget] = useState<HTMLElement | null>(null);
 
   const updatePosition = useCallback(() => {
     const trigger = triggerRef.current;
     if (!trigger) return;
-    // Portal target: nearest .dialog-overlay ancestor (which owns the CSS
-    // zoom) if present, else document.body. Staying inside the same zoom
-    // context means getBoundingClientRect coords and fixed positioning
-    // share the same frame — no scale compensation needed.
     const overlay = trigger.closest<HTMLElement>(".dialog-overlay");
     setPortalTarget(overlay ?? document.body);
     const rect = trigger.getBoundingClientRect();
-    const viewportH = window.innerHeight;
+    const layoutWidth = trigger.offsetWidth;
+    const effectiveZoom = layoutWidth > 0 ? rect.width / layoutWidth : 1;
+    const top = rect.top / effectiveZoom;
+    const bottom = rect.bottom / effectiveZoom;
+    const left = rect.left / effectiveZoom;
+    const width = layoutWidth;
+    const viewportH = window.innerHeight / effectiveZoom;
     const margin = 4;
     const desiredMax = 240;
-    const spaceBelow = viewportH - rect.bottom - margin;
-    const spaceAbove = rect.top - margin;
+    const spaceBelow = viewportH - bottom - margin;
+    const spaceAbove = top - margin;
     const flipUp = spaceBelow < Math.min(desiredMax, 160) && spaceAbove > spaceBelow;
     const maxHeight = Math.max(80, Math.min(desiredMax, flipUp ? spaceAbove : spaceBelow));
     setDropdownPos({
-      top: flipUp ? rect.top - margin : rect.bottom + margin,
-      left: rect.left,
-      width: rect.width,
+      top: flipUp ? top - margin : bottom + margin,
+      left,
+      width,
       maxHeight,
+      viewportH,
       flipUp,
     });
   }, []);
@@ -282,7 +294,7 @@ export function CustomSelect({
             style={{
               position: "fixed",
               top: dropdownPos.flipUp ? "auto" : dropdownPos.top,
-              bottom: dropdownPos.flipUp ? window.innerHeight - dropdownPos.top : "auto",
+              bottom: dropdownPos.flipUp ? dropdownPos.viewportH - dropdownPos.top : "auto",
               left: dropdownPos.left,
               width: dropdownPos.width,
               maxHeight: dropdownPos.maxHeight,

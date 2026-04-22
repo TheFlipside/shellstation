@@ -9,6 +9,7 @@ All notable changes to this project are documented in this file.
 ### Fixed
 
 - SSH connections to Cisco Small Business switches (SG350, Catalyst 1300) failing with "Channel send error" through jump hosts
+- Dropdown menus positioned incorrectly when UI scale is not 100% (cross-engine CSS zoom compensation)
 
 ### Changed
 
