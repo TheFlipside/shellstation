@@ -6,14 +6,16 @@ This guide is intended for system administrators deploying ShellStation with a s
 
 ## Table of Contents
 
-1. [Initial Database Setup](#1-initial-database-setup)
-2. [Creating Regular Users](#2-creating-regular-users)
-   - [2.1 Group Role (Recommended)](#21-group-role-recommended)
-   - [2.2 Per-User Grants (Alternative)](#22-per-user-grants-alternative)
-3. [Resetting a User Password](#3-resetting-a-user-password)
-4. [Removing a User](#4-removing-a-user)
-5. [Applying Application Updates](#5-applying-application-updates)
-6. [Backup and Restore](#6-backup-and-restore)
+- [ShellStation — PostgreSQL Administration Guide](#shellstation--postgresql-administration-guide)
+  - [Table of Contents](#table-of-contents)
+  - [1. Initial Database Setup](#1-initial-database-setup)
+  - [2. Creating Regular Users](#2-creating-regular-users)
+    - [2.1 Group Role (Recommended)](#21-group-role-recommended)
+    - [2.2 Per-User Grants (Alternative)](#22-per-user-grants-alternative)
+  - [3. Resetting a User Password](#3-resetting-a-user-password)
+  - [4. Removing a User](#4-removing-a-user)
+  - [5. Applying Application Updates](#5-applying-application-updates)
+  - [6. Backup and Restore](#6-backup-and-restore)
 
 ---
 

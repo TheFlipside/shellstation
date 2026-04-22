@@ -914,7 +914,7 @@ export function SessionSidebar(): React.JSX.Element {
               <div
                 className="tree-item tree-folder"
                 style={{ "--tree-depth": 0 } as React.CSSProperties}
-                onClick={() => {
+                onDoubleClick={() => {
                   setSharedExpanded((v) => !v);
                 }}
                 role="treeitem"
@@ -923,6 +923,10 @@ export function SessionSidebar(): React.JSX.Element {
               >
                 <span
                   className="tree-chevron"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setSharedExpanded((v) => !v);
+                  }}
                   role="button"
                   aria-label={sharedExpanded ? "Collapse" : "Expand"}
                 >

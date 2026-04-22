@@ -12,11 +12,14 @@ All notable changes to this project are documented in this file.
 
 - PostgreSQL startup failing for DML-only users due to `sqlx::migrate!()` attempting `CREATE TABLE` without schema privileges
 - Import of highlight profiles and login sequences failing with UNIQUE constraint error when entries with the same name already exist
+- Sharing a folder not cascading to descendant folders and sessions, causing inconsistent visibility for remote users
+- Dynamic "Shared" folder expanding on single click instead of double click like regular folders
 
 ### Changed
 
 - PostgreSQL Administration Guide extracted from DESIGN.md into dedicated ADMIN_GUIDE.md, rewritten to present group role setup first
 - PostgreSQL RLS setup failure downgraded from ERROR to WARN log level for DML-only users
+- Setting a folder to shared or personal now cascades to all contained sub-folders and sessions
 
 ### Removed
 

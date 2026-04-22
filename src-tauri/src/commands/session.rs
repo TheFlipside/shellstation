@@ -385,24 +385,66 @@ pub async fn set_visibility(
             "Invalid visibility \"{visibility}\": must be \"personal\" or \"shared\""
         ));
     }
-    let sql = match item_type.as_str() {
-        "folder" => "UPDATE folders SET visibility = $1 WHERE id = $2",
-        "session" => "UPDATE sessions SET visibility = $1 WHERE id = $2",
+    let id_str = id_uuid.to_string();
+    match item_type.as_str() {
+        "folder" => {
+            let result = sqlx::query("UPDATE folders SET visibility = $1 WHERE id = $2")
+                .bind(&visibility)
+                .bind(&id_str)
+                .execute(pool)
+                .await
+                .map_err(|e| format!("Failed to set visibility: {e}"))?;
+            if result.rows_affected() == 0 {
+                return Err("Item not found or you are not the owner".to_string());
+            }
+            // Cascade to all descendant folders owned by the current user
+            sqlx::query(
+                "WITH RECURSIVE subtree(id) AS ( \
+                     SELECT id FROM folders WHERE parent_id = $2 AND owner = current_user \
+                     UNION ALL \
+                     SELECT f.id FROM folders f JOIN subtree s \
+                         ON f.parent_id = s.id AND f.owner = current_user \
+                 ) \
+                 UPDATE folders SET visibility = $1 WHERE id IN (SELECT id FROM subtree)",
+            )
+            .bind(&visibility)
+            .bind(&id_str)
+            .execute(pool)
+            .await
+            .map_err(|e| format!("Failed to cascade folder visibility: {e}"))?;
+            // Cascade to all sessions in the target folder and descendants
+            sqlx::query(
+                "WITH RECURSIVE subtree(id) AS ( \
+                     SELECT id FROM folders WHERE id = $2 AND owner = current_user \
+                     UNION ALL \
+                     SELECT f.id FROM folders f JOIN subtree s \
+                         ON f.parent_id = s.id AND f.owner = current_user \
+                 ) \
+                 UPDATE sessions SET visibility = $1 \
+                 WHERE folder_id IN (SELECT id FROM subtree) AND owner = current_user",
+            )
+            .bind(&visibility)
+            .bind(&id_str)
+            .execute(pool)
+            .await
+            .map_err(|e| format!("Failed to cascade session visibility: {e}"))?;
+        }
+        "session" => {
+            let result = sqlx::query("UPDATE sessions SET visibility = $1 WHERE id = $2")
+                .bind(&visibility)
+                .bind(&id_str)
+                .execute(pool)
+                .await
+                .map_err(|e| format!("Failed to set visibility: {e}"))?;
+            if result.rows_affected() == 0 {
+                return Err("Item not found or you are not the owner".to_string());
+            }
+        }
         _ => {
             return Err(format!(
                 "Invalid item_type \"{item_type}\": must be \"folder\" or \"session\""
-            ))
+            ));
         }
-    };
-    let id_str = id_uuid.to_string();
-    let result = sqlx::query(sql)
-        .bind(&visibility)
-        .bind(&id_str)
-        .execute(pool)
-        .await
-        .map_err(|e| format!("Failed to set visibility: {e}"))?;
-    if result.rows_affected() == 0 {
-        return Err("Item not found or you are not the owner".to_string());
     }
     Ok(())
 }
