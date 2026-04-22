@@ -14,6 +14,7 @@ All notable changes to this project are documented in this file.
 - Import of highlight profiles and login sequences failing with UNIQUE constraint error when entries with the same name already exist
 - Sharing a folder not cascading to descendant folders and sessions, causing inconsistent visibility for remote users
 - Dynamic "Shared" folder expanding on single click instead of double click like regular folders
+- Login sequence translations using literal "carriage return" equivalents instead of technical abbreviation "CR" across all 13 non-English locales
 
 ### Changed
 
