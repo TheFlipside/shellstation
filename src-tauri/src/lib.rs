@@ -225,6 +225,37 @@ async fn fix_crlf_migration_checksums(
     Ok(())
 }
 
+/// Check whether all compiled migrations are already applied in the database.
+///
+/// `sqlx::migrate!().run()` unconditionally runs `CREATE TABLE IF NOT EXISTS
+/// _sqlx_migrations`, which requires `CREATE` privilege on the schema. DML-only
+/// PostgreSQL users (Option A in DESIGN.md §4.5.2) lack that privilege. This
+/// function lets us skip the migrate call entirely when the admin has already
+/// applied all migrations.
+async fn pg_migrations_up_to_date(pool: &sqlx::PgPool) -> Result<bool, Box<dyn std::error::Error>> {
+    let table_exists = sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS (\
+             SELECT FROM information_schema.tables \
+             WHERE table_name = '_sqlx_migrations'\
+         )",
+    )
+    .fetch_one(pool)
+    .await?;
+    if !table_exists {
+        return Ok(false);
+    }
+
+    let migrator = sqlx::migrate!();
+    let expected = migrator.iter().count() as i64;
+
+    let applied =
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM _sqlx_migrations WHERE success = true")
+            .fetch_one(pool)
+            .await?;
+
+    Ok(applied >= expected)
+}
+
 /// Strip connection URLs and credentials from PostgreSQL error messages
 /// so they are safe to display in the frontend.
 fn sanitize_pg_error(raw: &str) -> String {
@@ -796,7 +827,13 @@ pub fn run() {
                         // so that Windows checkouts don't fail against a DB initialized
                         // from Linux/macOS (or vice versa).
                         fix_crlf_migration_checksums(&pool).await?;
-                        sqlx::migrate!().run(&pool).await?;
+                        if pg_migrations_up_to_date(&pool).await? {
+                            tracing::info!(
+                                "All migrations already applied — skipping sqlx::migrate!()"
+                            );
+                        } else {
+                            sqlx::migrate!().run(&pool).await?;
+                        }
                         Ok::<sqlx::PgPool, Box<dyn std::error::Error>>(pool)
                     }) {
                         Ok(pool) => {
@@ -804,7 +841,7 @@ pub fn run() {
                             if let Err(e) =
                                 tauri::async_runtime::block_on(setup_postgres_rls(&pool))
                             {
-                                tracing::error!("PostgreSQL RLS setup failed: {e}");
+                                tracing::warn!("PostgreSQL RLS setup skipped (expected for DML-only users): {e}");
                             }
                             // Query current_user for ownership tracking.
                             let pg_user = tauri::async_runtime::block_on(async {

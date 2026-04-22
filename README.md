@@ -72,7 +72,7 @@ ShellStation stores its configuration in the platform config directory:
 
 ### PostgreSQL Multi-User Setup
 
-For team deployments with shared session databases, see the [PostgreSQL Administration Guide](DESIGN.md#46-postgresql-administration-guide) in the design document.
+For team deployments with shared session databases, see the [PostgreSQL Administration Guide](ADMIN_GUIDE.md).
 
 ## Development
 

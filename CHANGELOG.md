@@ -6,9 +6,17 @@ All notable changes to this project are documented in this file.
 
 ### Added
 
+- Import size limits for highlight profiles and login sequences to prevent resource exhaustion
+
 ### Fixed
 
+- PostgreSQL startup failing for DML-only users due to `sqlx::migrate!()` attempting `CREATE TABLE` without schema privileges
+- Import of highlight profiles and login sequences failing with UNIQUE constraint error when entries with the same name already exist
+
 ### Changed
+
+- PostgreSQL Administration Guide extracted from DESIGN.md into dedicated ADMIN_GUIDE.md, rewritten to present group role setup first
+- PostgreSQL RLS setup failure downgraded from ERROR to WARN log level for DML-only users
 
 ### Removed
 

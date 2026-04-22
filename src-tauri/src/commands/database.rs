@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
 use sqlx::postgres::PgPoolOptions;
@@ -484,6 +484,8 @@ pub async fn db_export_file(
 const MAX_IMPORT_FOLDERS: usize = 10_000;
 const MAX_IMPORT_SESSIONS: usize = 50_000;
 const MAX_IMPORT_CREDENTIALS: usize = 50_000;
+const MAX_IMPORT_HIGHLIGHT_PROFILES: usize = 1_000;
+const MAX_IMPORT_LOGIN_SEQUENCES: usize = 1_000;
 
 /// Validate imported data for size limits and field constraints.
 fn validate_import_data(data: &ExportData) -> Result<(), String> {
@@ -506,6 +508,21 @@ fn validate_import_data(data: &ExportData) -> Result<(), String> {
             "Too many credentials in import ({}, max {})",
             data.credentials.len(),
             MAX_IMPORT_CREDENTIALS
+        ));
+    }
+
+    if data.highlight_profiles.len() > MAX_IMPORT_HIGHLIGHT_PROFILES {
+        return Err(format!(
+            "Too many highlight profiles in import ({}, max {})",
+            data.highlight_profiles.len(),
+            MAX_IMPORT_HIGHLIGHT_PROFILES
+        ));
+    }
+    if data.login_sequences.len() > MAX_IMPORT_LOGIN_SEQUENCES {
+        return Err(format!(
+            "Too many login sequences in import ({}, max {})",
+            data.login_sequences.len(),
+            MAX_IMPORT_LOGIN_SEQUENCES
         ));
     }
 
@@ -535,6 +552,23 @@ fn validate_import_data(data: &ExportData) -> Result<(), String> {
             return Err(format!(
                 "Invalid port {} in session \"{}\"",
                 session.port, session.name
+            ));
+        }
+    }
+
+    for profile in &data.highlight_profiles {
+        if profile.name.len() > 255 {
+            let preview: String = profile.name.chars().take(50).collect();
+            return Err(format!(
+                "Highlight profile name too long: \"{preview}...\" (max 255 chars)",
+            ));
+        }
+    }
+    for seq in &data.login_sequences {
+        if seq.name.len() > 255 {
+            let preview: String = seq.name.chars().take(50).collect();
+            return Err(format!(
+                "Login sequence name too long: \"{preview}...\" (max 255 chars)",
             ));
         }
     }
@@ -698,9 +732,21 @@ pub async fn db_import(
         credential_count += 1;
     }
 
-    // Import highlight profiles.
+    // Import highlight profiles — skip duplicates by name.
+    let existing_profiles = state
+        .0
+        .list_highlight_profiles()
+        .await
+        .map_err(|e| format!("Failed to list existing highlight profiles: {e}"))?;
+    let existing_profile_names: HashSet<String> =
+        existing_profiles.iter().map(|p| p.name.clone()).collect();
     let mut profile_count = 0u32;
+    let mut skipped_profiles = 0u32;
     for profile in &data.highlight_profiles {
+        if existing_profile_names.contains(&profile.name) {
+            skipped_profiles += 1;
+            continue;
+        }
         state
             .0
             .create_highlight_profile(crate::db::models::NewHighlightProfile {
@@ -712,9 +758,21 @@ pub async fn db_import(
         profile_count += 1;
     }
 
-    // Import login sequences into local store.
+    // Import login sequences into local store — skip duplicates by name.
+    let existing_sequences = login_seq_db
+        .0
+        .list_login_sequences()
+        .await
+        .map_err(|e| format!("Failed to list existing login sequences: {e}"))?;
+    let existing_seq_names: HashSet<String> =
+        existing_sequences.iter().map(|s| s.name.clone()).collect();
     let mut login_seq_count = 0u32;
+    let mut skipped_sequences = 0u32;
     for seq in &data.login_sequences {
+        if existing_seq_names.contains(&seq.name) {
+            skipped_sequences += 1;
+            continue;
+        }
         login_seq_db
             .0
             .create_login_sequence(crate::db::models::NewLoginSequence {
@@ -730,9 +788,11 @@ pub async fn db_import(
     let mut summary = format!(
         "Imported {folder_count} folders, {session_count} sessions, {credential_count} credentials, {profile_count} highlight profiles, {login_seq_count} login sequences"
     );
-    if skipped_folders > 0 || skipped_sessions > 0 {
+    let skipped_total = skipped_folders + skipped_sessions + skipped_profiles + skipped_sequences;
+    if skipped_total > 0 {
         summary.push_str(&format!(
-            " (skipped {skipped_folders} duplicate folders, {skipped_sessions} duplicate sessions)"
+            " (skipped {skipped_folders} duplicate folders, {skipped_sessions} duplicate sessions, \
+             {skipped_profiles} duplicate highlight profiles, {skipped_sequences} duplicate login sequences)"
         ));
     }
     Ok(summary)
