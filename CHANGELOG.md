@@ -12,6 +12,8 @@ All notable changes to this project are documented in this file.
 
 ### Changed
 
+- Credential manager profile list now shows dividers between name and username, and separator lines between entries
+
 ### Removed
 
 ### 0.10.1 - 2026-04-21

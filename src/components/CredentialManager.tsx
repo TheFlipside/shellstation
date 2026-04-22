@@ -168,6 +168,7 @@ export function CredentialManager({ onClose }: CredentialManagerProps): React.JS
                 <div key={p.id} className="credential-profile-row">
                   <div className="credential-profile-meta">
                     <strong>{p.name}</strong>
+                    <span className="credential-profile-divider">|</span>
                     <span className="credential-profile-sub">
                       {p.username ? `${p.username} · ` : ""}
                       {p.auth_type}

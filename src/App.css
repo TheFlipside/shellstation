@@ -1379,6 +1379,46 @@ body,
   cursor: pointer;
 }
 
+.credential-profile-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.credential-profile-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--color-surface1);
+}
+
+.credential-profile-row:last-child {
+  border-bottom: none;
+}
+
+.credential-profile-meta {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  min-width: 0;
+}
+
+.credential-profile-divider {
+  color: var(--color-overlay0);
+  margin: 0 2px;
+}
+
+.credential-profile-sub {
+  color: var(--color-subtext0);
+  font-size: 0.9em;
+}
+
+.credential-profile-actions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
 .highlight-rule-remove {
   background: none;
   border: none;
