@@ -928,19 +928,16 @@ body,
 .settings-db-success {
   color: var(--color-green);
   font-size: 12px;
-  margin-left: 8px;
 }
 
 .settings-db-error {
   color: var(--color-red);
   font-size: 12px;
-  margin-left: 8px;
 }
 
 .settings-db-warning {
   color: var(--color-yellow);
   font-size: 12px;
-  margin-left: 8px;
 }
 
 .settings-db-note {

@@ -8,6 +8,8 @@ All notable changes to this project are documented in this file.
 
 ### Fixed
 
+- Settings status messages (save confirmations, errors) appearing indented due to stray left margin
+
 ### Changed
 
 ### Removed
