@@ -616,6 +616,15 @@ body,
   background: var(--color-maroon);
 }
 
+.dialog-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.dialog-btn-primary:hover:disabled {
+  background: var(--color-blue);
+}
+
 .dialog-wide {
   min-width: 420px;
   max-width: 520px;

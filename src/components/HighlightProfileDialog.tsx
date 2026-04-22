@@ -129,16 +129,16 @@ export function HighlightProfileDialog({
                 </div>
               ))}
             </div>
-            <button type="button" className="btn btn-small" onClick={addRule}>
+            <button type="button" className="dialog-btn dialog-btn-primary" onClick={addRule}>
               {t("highlighting.addRule")}
             </button>
           </div>
 
           <div className="dialog-actions">
-            <button type="button" onClick={onCancel}>
+            <button type="button" className="dialog-btn dialog-btn-cancel" onClick={onCancel}>
               {t("common.cancel")}
             </button>
-            <button type="submit" className="btn-primary" disabled={!name.trim()}>
+            <button type="submit" className="dialog-btn dialog-btn-primary" disabled={!name.trim()}>
               {t("common.save")}
             </button>
           </div>
