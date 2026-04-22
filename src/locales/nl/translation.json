@@ -54,7 +54,7 @@
   },
   "credentialProfiles": {
     "title": "Inloggegevensbeheer",
-    "info": "Inloggegevensprofielen worden gedeeld tussen sessies. Elk profiel slaat één geheim op in de OS-sleutelring.",
+    "info": "Inloggegevensprofielen worden gedeeld tussen sessies. Elk profiel slaat één wachtwoord op in de OS-sleutelring.",
     "open": "Inloggegevensbeheer",
     "newProfile": "Nieuw profiel",
     "editProfile": "Profiel bewerken",
@@ -68,7 +68,7 @@
     "usernamePlaceholder": "user",
     "passwordLabel": "Wachtwoord",
     "passwordPlaceholder": "wachtwoord",
-    "passwordHint": "Laat leeg om het bestaande geheim te behouden.",
+    "passwordHint": "Laat leeg om het bestaande wachtwoord te behouden.",
     "keyPathLabel": "Sleutelpad",
     "keyPathPlaceholder": "~/.ssh/id_ed25519",
     "keyPathBrowse": "Bladeren…",
@@ -122,7 +122,7 @@
     "icon_lock": "VPN / Beveiligd",
     "tagsLabel": "Tags",
     "tagsPlaceholder": "prod, eu, web (kommagescheiden)",
-    "tagsJumpHostNote": "Add the tag \"jumphost\" to make this session available as a jump host in the session properties of other sessions.",
+    "tagsJumpHostNote": "Voeg de tag \"jumphost\" toe om deze sessie beschikbaar te maken als jump host in de eigenschappen van andere sessies.",
     "highlightProfileLabel": "Markeringsprofiel",
     "highlightProfileNone": "Geen",
     "credentialProfileLabel": "Inloggegevensprofiel",
@@ -284,18 +284,19 @@
     "dbSaveRestart": "Opslaan en herstarten",
     "dbRestartRequired": "Herstart van de applicatie vereist om de wijzigingen door te voeren.",
     "dbCredentialNote": "Inloggegevens worden altijd lokaal per gebruiker opgeslagen, nooit in de centrale database.",
-    "pgIsolationNote": "Session isolation requires individual PostgreSQL accounts. With a shared database account, all sessions are visible to all users.",
-    "userIdentLabel": "User Identity",
-    "userIdentHint": "Used to map your credential profiles to sessions across machines. Must be unique per user.",
-    "userIdentSaved": "User identity saved.",
+    "pgIsolationNote": "Sessiescheiding vereist individuele PostgreSQL-accounts. Bij een gedeeld databaseaccount zijn alle sessies zichtbaar voor alle gebruikers.",
+    "userIdentLabel": "Gebruikersidentiteit",
+    "userIdentHint": "Wordt gebruikt om uw inloggegevensprofielen aan sessies te koppelen op al uw machines. Moet uniek zijn per gebruiker.",
+    "userIdentSaved": "Gebruikersidentiteit opgeslagen.",
     "dbExport": "Gegevens exporteren",
     "dbImport": "Gegevens importeren",
+    "dbExportImportHint": "ShellStation-sessiegegevens exporteren en importeren. Gebruik het onderstaande gedeelte om vanuit externe tools te importeren.",
     "dbImportSuccess": "{{message}}",
     "dbFallbackBanner": "Kan niet verbinden met PostgreSQL: {{message}}. Offlinemodus actief.",
     "dbOpenSettings": "Instellingen openen",
     "security": "Beveiliging",
     "restrictPrivateIpsLabel": "Verbindingen naar privé/loopback-adressen blokkeren",
-    "restrictPrivateIpsHint": "Indien ingeschakeld worden SSH-verbindingen naar loopback (127.x), link-local en privé RFC 1918 (10.x, 172.16-31.x, 192.168.x) adressen geblokkeerd. Schakel uit als u verbindt met hosts in uw lokale netwerk of homelab.",
+    "restrictPrivateIpsHint": "Indien ingeschakeld worden SSH-verbindingen naar loopback (127.x), link-local en privé RFC 1918 (10.x, 172.16-31.x, 192.168.x) adressen geblokkeerd. Schakel uit als u verbindt met hosts in uw lokale netwerk.",
     "importExternal": "Importeren vanuit externe tools",
     "importMremoteng": "mRemoteNG importeren",
     "importSecurecrt": "SecureCRT importeren",
@@ -324,6 +325,7 @@
   },
   "highlighting": {
     "sectionTitle": "Trefwoordmarkering",
+    "sectionHint": "Definieer regex-gebaseerde markeerregels voor terminaluitvoer en wijs profielen toe aan sessies.",
     "addProfile": "Profiel toevoegen",
     "editProfile": "Profiel bewerken",
     "noProfiles": "Geen markeringsprofielen gedefinieerd.",
@@ -352,8 +354,8 @@
     "save": "Opslaan"
   },
   "userIdent": {
-    "promptTitle": "Set User Identity",
-    "promptMessage": "Your user identity is used to map credential profiles to sessions. This must be unique per person and consistent across all your machines.",
-    "promptHint": "Enter your identity (e.g. your username)"
+    "promptTitle": "Gebruikersidentiteit instellen",
+    "promptMessage": "Uw gebruikersidentiteit wordt gebruikt om inloggegevensprofielen aan sessies te koppelen. Deze moet uniek zijn per persoon en consistent op al uw machines.",
+    "promptHint": "Voer uw identiteit in (bijv. uw gebruikersnaam)"
   }
 }

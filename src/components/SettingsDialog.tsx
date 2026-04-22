@@ -883,7 +883,14 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
         {loggingEnabled && (
           <>
             <div className="dialog-field">
-              <label htmlFor="settings-log-directory">{t("settings.loggingDirectoryLabel")}</label>
+              <div className="settings-label-row">
+                <label htmlFor="settings-log-directory">
+                  {t("settings.loggingDirectoryLabel")}
+                </label>
+                <span className="settings-help" title={t("settings.loggingDirectoryHint")}>
+                  ?
+                </span>
+              </div>
               <div className="dialog-row">
                 <div className="dialog-field-grow">
                   <input
@@ -920,10 +927,14 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
                   {t("settings.dbBrowse")}
                 </button>
               </div>
-              <span className="settings-help-block">{t("settings.loggingDirectoryHint")}</span>
             </div>
             <div className="dialog-field">
-              <label htmlFor="settings-log-filename">{t("settings.loggingFilenameLabel")}</label>
+              <div className="settings-label-row">
+                <label htmlFor="settings-log-filename">{t("settings.loggingFilenameLabel")}</label>
+                <span className="settings-help" title={t("settings.loggingFilenameHint")}>
+                  ?
+                </span>
+              </div>
               <input
                 id="settings-log-filename"
                 type="text"
@@ -934,7 +945,6 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
                   setLoggingSaved(false);
                 }}
               />
-              <span className="settings-help-block">{t("settings.loggingFilenameHint")}</span>
             </div>
           </>
         )}
@@ -977,9 +987,14 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
         {appLoggingEnabled && (
           <>
             <div className="dialog-field">
-              <label htmlFor="settings-app-log-directory">
-                {t("settings.appLoggingDirectoryLabel")}
-              </label>
+              <div className="settings-label-row">
+                <label htmlFor="settings-app-log-directory">
+                  {t("settings.appLoggingDirectoryLabel")}
+                </label>
+                <span className="settings-help" title={t("settings.appLoggingDirectoryHint")}>
+                  ?
+                </span>
+              </div>
               <div className="dialog-row">
                 <div className="dialog-field-grow">
                   <input
@@ -1015,36 +1030,31 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
                 >
                   {t("settings.dbBrowse")}
                 </button>
-                <span className="settings-help" title={t("settings.appLoggingDirectoryHint")}>
-                  ?
-                </span>
               </div>
             </div>
             <div className="dialog-field">
-              <label htmlFor="settings-app-log-level">{t("settings.appLoggingLevelLabel")}</label>
-              <div className="dialog-row">
-                <div className="dialog-field-grow">
-                  <CustomSelect
-                    id="settings-app-log-level"
-                    value={appLogLevel}
-                    onChange={(v) => {
-                      setAppLogLevel(v);
-                      setAppLoggingDirty(true);
-                      setAppLoggingSaved(false);
-                    }}
-                    options={[
-                      { value: "error", label: "ERROR" },
-                      { value: "warn", label: "WARN" },
-                      { value: "info", label: "INFO" },
-                      { value: "debug", label: "DEBUG" },
-                      { value: "trace", label: "TRACE" },
-                    ]}
-                  />
-                </div>
+              <div className="settings-label-row">
+                <label htmlFor="settings-app-log-level">{t("settings.appLoggingLevelLabel")}</label>
                 <span className="settings-help" title={t("settings.appLoggingLevelHint")}>
                   ?
                 </span>
               </div>
+              <CustomSelect
+                id="settings-app-log-level"
+                value={appLogLevel}
+                onChange={(v) => {
+                  setAppLogLevel(v);
+                  setAppLoggingDirty(true);
+                  setAppLoggingSaved(false);
+                }}
+                options={[
+                  { value: "error", label: "ERROR" },
+                  { value: "warn", label: "WARN" },
+                  { value: "info", label: "INFO" },
+                  { value: "debug", label: "DEBUG" },
+                  { value: "trace", label: "TRACE" },
+                ]}
+              />
             </div>
           </>
         )}
@@ -1334,7 +1344,12 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
         {dbError !== null && <p className="settings-db-error">{dbError}</p>}
 
         {/* ── Data Export / Import ─────────────────────────────────── */}
-        <h4 className="settings-section-title">{t("settings.database")} — Export / Import</h4>
+        <div className="settings-label-row">
+          <h4 className="settings-section-title">{t("settings.database")} — Export / Import</h4>
+          <span className="settings-help" title={t("settings.dbExportImportHint")}>
+            ?
+          </span>
+        </div>
         <div className="dialog-field dialog-field-row">
           <button
             type="button"
@@ -1352,7 +1367,12 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
         {dbOpResult && <span className="settings-db-success">{dbOpResult}</span>}
 
         {/* ── Keyword Highlighting ──────────────────────────── */}
-        <h4 className="settings-section-title">{t("highlighting.sectionTitle")}</h4>
+        <div className="settings-label-row">
+          <h4 className="settings-section-title">{t("highlighting.sectionTitle")}</h4>
+          <span className="settings-help" title={t("highlighting.sectionHint")}>
+            ?
+          </span>
+        </div>
         {highlightProfiles.length === 0 ? (
           <p className="settings-hint">{t("highlighting.noProfiles")}</p>
         ) : (

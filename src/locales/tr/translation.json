@@ -54,7 +54,7 @@
   },
   "credentialProfiles": {
     "title": "Kimlik Yöneticisi",
-    "info": "Kimlik profilleri oturumlar arasında paylaşılır. Her profil işletim sistemi anahtarlığında bir sır saklar.",
+    "info": "Kimlik profilleri oturumlar arasında paylaşılır. Her profil işletim sistemi anahtarlığında bir parola saklar.",
     "open": "Kimlik Yöneticisi",
     "newProfile": "Yeni Profil",
     "editProfile": "Profili Düzenle",
@@ -68,7 +68,7 @@
     "usernamePlaceholder": "user",
     "passwordLabel": "Parola",
     "passwordPlaceholder": "parola",
-    "passwordHint": "Mevcut sırrı korumak için boş bırakın.",
+    "passwordHint": "Mevcut parolayı korumak için boş bırakın.",
     "keyPathLabel": "Anahtar Yolu",
     "keyPathPlaceholder": "~/.ssh/id_ed25519",
     "keyPathBrowse": "Gözat…",
@@ -122,7 +122,7 @@
     "icon_lock": "VPN / Güvenli",
     "tagsLabel": "Etiketler",
     "tagsPlaceholder": "prod, eu, web (virgülle ayrılmış)",
-    "tagsJumpHostNote": "Add the tag \"jumphost\" to make this session available as a jump host in the session properties of other sessions.",
+    "tagsJumpHostNote": "Bu oturumu diğer oturumların özelliklerinde atlama sunucusu olarak kullanılabilir kılmak için \"jumphost\" etiketini ekleyin.",
     "highlightProfileLabel": "Vurgulama Profili",
     "highlightProfileNone": "Yok",
     "credentialProfileLabel": "Kimlik profili",
@@ -284,12 +284,13 @@
     "dbSaveRestart": "Kaydet ve yeniden başlat",
     "dbRestartRequired": "Değişikliklerin etkili olması için uygulamanın yeniden başlatılması gerekiyor.",
     "dbCredentialNote": "Kimlik bilgileri her zaman kullanıcı başına yerel olarak saklanır, asla merkezi veritabanında saklanmaz.",
-    "pgIsolationNote": "Session isolation requires individual PostgreSQL accounts. With a shared database account, all sessions are visible to all users.",
-    "userIdentLabel": "User Identity",
-    "userIdentHint": "Used to map your credential profiles to sessions across machines. Must be unique per user.",
-    "userIdentSaved": "User identity saved.",
+    "pgIsolationNote": "Oturum yalıtımı bireysel PostgreSQL hesapları gerektirir. Paylaşılan bir veritabanı hesabıyla tüm oturumlar tüm kullanıcılara görünür.",
+    "userIdentLabel": "Kullanıcı kimliği",
+    "userIdentHint": "Kimlik profillerinizi makineler arasında oturumlara eşlemek için kullanılır. Her kullanıcı için benzersiz olmalıdır.",
+    "userIdentSaved": "Kullanıcı kimliği kaydedildi.",
     "dbExport": "Verileri dışa aktar",
     "dbImport": "Verileri içe aktar",
+    "dbExportImportHint": "ShellStation oturum verilerini dışa ve içe aktarın. Harici araçlardan içe aktarmak için aşağıdaki bölümü kullanın.",
     "dbImportSuccess": "{{message}}",
     "dbFallbackBanner": "PostgreSQL’a bağlanılamadı: {{message}}. Çevrimdışı mod aktif.",
     "dbOpenSettings": "Ayarları aç",
@@ -324,6 +325,7 @@
   },
   "highlighting": {
     "sectionTitle": "Anahtar kelime vurgulama",
+    "sectionHint": "Terminal çıktısı için regex tabanlı vurgulama kuralları tanımlayın ve profilleri oturumlara atayın.",
     "addProfile": "Profil ekle",
     "editProfile": "Profili düzenle",
     "noProfiles": "Tanımlanmış vurgulama profili yok.",
@@ -352,8 +354,8 @@
     "save": "Kaydet"
   },
   "userIdent": {
-    "promptTitle": "Set User Identity",
-    "promptMessage": "Your user identity is used to map credential profiles to sessions. This must be unique per person and consistent across all your machines.",
-    "promptHint": "Enter your identity (e.g. your username)"
+    "promptTitle": "Kullanıcı kimliğini ayarla",
+    "promptMessage": "Kullanıcı kimliğiniz, kimlik profillerini oturumlara eşlemek için kullanılır. Her kullanıcı için benzersiz ve tüm makinelerinizde tutarlı olmalıdır.",
+    "promptHint": "Kimliğinizi girin (ör. kullanıcı adınız)"
   }
 }

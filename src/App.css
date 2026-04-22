@@ -900,6 +900,22 @@ body,
   color: var(--color-text);
 }
 
+.settings-label-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.settings-label-row .settings-section-title {
+  margin-top: 0;
+  margin-bottom: 0;
+}
+
+.settings-label-row:has(.settings-section-title) {
+  margin-top: 16px;
+  margin-bottom: 12px;
+}
+
 .settings-db-success {
   color: var(--color-green);
   font-size: 12px;

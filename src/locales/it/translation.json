@@ -54,7 +54,7 @@
   },
   "credentialProfiles": {
     "title": "Gestore credenziali",
-    "info": "I profili di credenziali sono condivisi tra sessioni. Ogni profilo memorizza un segreto nel portachiavi del sistema.",
+    "info": "I profili di credenziali sono condivisi tra sessioni. Ogni profilo memorizza una password nel portachiavi del sistema.",
     "open": "Gestore credenziali",
     "newProfile": "Nuovo profilo",
     "editProfile": "Modifica profilo",
@@ -68,7 +68,7 @@
     "usernamePlaceholder": "utente",
     "passwordLabel": "Password",
     "passwordPlaceholder": "password",
-    "passwordHint": "Lasciare vuoto per mantenere il segreto esistente.",
+    "passwordHint": "Lasciare vuoto per mantenere la password esistente.",
     "keyPathLabel": "Percorso chiave",
     "keyPathPlaceholder": "~/.ssh/id_ed25519",
     "keyPathBrowse": "Sfoglia…",
@@ -122,7 +122,7 @@
     "icon_lock": "VPN / Sicuro",
     "tagsLabel": "Tag",
     "tagsPlaceholder": "prod, eu, web (separati da virgole)",
-    "tagsJumpHostNote": "Add the tag \"jumphost\" to make this session available as a jump host in the session properties of other sessions.",
+    "tagsJumpHostNote": "Aggiungi il tag \"jumphost\" per rendere questa sessione disponibile come jump host nelle proprietà delle altre sessioni.",
     "highlightProfileLabel": "Profilo di evidenziazione",
     "highlightProfileNone": "Nessuno",
     "credentialProfileLabel": "Profilo credenziali",
@@ -284,18 +284,19 @@
     "dbSaveRestart": "Salva e riavvia",
     "dbRestartRequired": "È necessario riavviare l'applicazione per applicare le modifiche.",
     "dbCredentialNote": "Le credenziali sono sempre archiviate localmente per utente, mai nel database centrale.",
-    "pgIsolationNote": "Session isolation requires individual PostgreSQL accounts. With a shared database account, all sessions are visible to all users.",
-    "userIdentLabel": "User Identity",
-    "userIdentHint": "Used to map your credential profiles to sessions across machines. Must be unique per user.",
-    "userIdentSaved": "User identity saved.",
+    "pgIsolationNote": "L'isolamento delle sessioni richiede account PostgreSQL individuali. Con un account di database condiviso, tutte le sessioni sono visibili a tutti gli utenti.",
+    "userIdentLabel": "Identità utente",
+    "userIdentHint": "Utilizzato per associare i profili di credenziali alle sessioni su tutti i dispositivi. Deve essere univoco per utente.",
+    "userIdentSaved": "Identità utente salvata.",
     "dbExport": "Esporta dati",
     "dbImport": "Importa dati",
+    "dbExportImportHint": "Esporta e importa i dati delle sessioni di ShellStation. Per importare da strumenti esterni, usa la sezione sottostante.",
     "dbImportSuccess": "{{message}}",
     "dbFallbackBanner": "Impossibile connettersi a PostgreSQL: {{message}}. Modalità offline attiva.",
     "dbOpenSettings": "Apri impostazioni",
     "security": "Sicurezza",
     "restrictPrivateIpsLabel": "Blocca connessioni a indirizzi privati/loopback",
-    "restrictPrivateIpsHint": "Quando attivato, le connessioni SSH a indirizzi loopback (127.x), link-local e privati RFC 1918 (10.x, 172.16-31.x, 192.168.x) vengono bloccate. Disattiva se ti connetti a host nella tua rete locale o homelab.",
+    "restrictPrivateIpsHint": "Quando attivato, le connessioni SSH a indirizzi loopback (127.x), link-local e privati RFC 1918 (10.x, 172.16-31.x, 192.168.x) vengono bloccate. Disattiva se ti connetti a host nella tua rete locale.",
     "importExternal": "Importa da strumenti esterni",
     "importMremoteng": "Importa mRemoteNG",
     "importSecurecrt": "Importa SecureCRT",
@@ -324,6 +325,7 @@
   },
   "highlighting": {
     "sectionTitle": "Evidenziazione per parole chiave",
+    "sectionHint": "Definisci regole di evidenziazione basate su espressioni regolari per l'output del terminale e assegna profili alle sessioni.",
     "addProfile": "Aggiungi profilo",
     "editProfile": "Modifica profilo",
     "noProfiles": "Nessun profilo di evidenziazione definito.",
@@ -352,8 +354,8 @@
     "save": "Salva"
   },
   "userIdent": {
-    "promptTitle": "Set User Identity",
-    "promptMessage": "Your user identity is used to map credential profiles to sessions. This must be unique per person and consistent across all your machines.",
-    "promptHint": "Enter your identity (e.g. your username)"
+    "promptTitle": "Imposta identità utente",
+    "promptMessage": "La tua identità utente viene utilizzata per associare i profili di credenziali alle sessioni. Deve essere univoca per persona e coerente su tutti i tuoi dispositivi.",
+    "promptHint": "Inserisci la tua identità (es. il tuo nome utente)"
   }
 }

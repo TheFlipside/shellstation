@@ -14,6 +14,8 @@ All notable changes to this project are documented in this file.
 ### Changed
 
 - Credential manager profile list now shows dividers between name and username, and separator lines between entries
+- Improved translations across all 14 languages: fixed awkward wording, translated missing keys, added hint texts for settings sections
+- Session log and application log hint texts now use tooltip icons consistent with the rest of the settings UI
 
 ### Removed
 

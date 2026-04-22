@@ -54,7 +54,7 @@
   },
   "credentialProfiles": {
     "title": "認証情報マネージャー",
-    "info": "認証プロファイルは複数のセッションで共有されます。各プロファイルは OS のキーチェーンに 1 つの秘密情報を保存します。",
+    "info": "認証プロファイルは複数のセッションで共有されます。各プロファイルは OS のキーチェーンに 1 つのパスワードを保存します。",
     "open": "認証情報マネージャー",
     "newProfile": "新しいプロファイル",
     "editProfile": "プロファイルを編集",
@@ -68,7 +68,7 @@
     "usernamePlaceholder": "user",
     "passwordLabel": "パスワード",
     "passwordPlaceholder": "password",
-    "passwordHint": "既存の秘密情報を保持する場合は空欄にしてください。",
+    "passwordHint": "既存のパスワードを保持する場合は空欄にしてください。",
     "keyPathLabel": "鍵のパス",
     "keyPathPlaceholder": "~/.ssh/id_ed25519",
     "keyPathBrowse": "参照…",
@@ -122,7 +122,7 @@
     "icon_lock": "VPN / セキュア",
     "tagsLabel": "タグ",
     "tagsPlaceholder": "prod, eu, web（カンマ区切り）",
-    "tagsJumpHostNote": "Add the tag \"jumphost\" to make this session available as a jump host in the session properties of other sessions.",
+    "tagsJumpHostNote": "タグ \"jumphost\" を追加すると、他のセッションのプロパティでこのセッションをジャンプホストとして選択できます。",
     "highlightProfileLabel": "ハイライトプロファイル",
     "highlightProfileNone": "なし",
     "credentialProfileLabel": "認証プロファイル",
@@ -284,18 +284,19 @@
     "dbSaveRestart": "保存して再起動",
     "dbRestartRequired": "変更を適用するにはアプリケーションの再起動が必要です。",
     "dbCredentialNote": "認証情報は常にユーザーごとにローカルに保存され、中央データベースには保存されません。",
-    "pgIsolationNote": "Session isolation requires individual PostgreSQL accounts. With a shared database account, all sessions are visible to all users.",
-    "userIdentLabel": "User Identity",
-    "userIdentHint": "Used to map your credential profiles to sessions across machines. Must be unique per user.",
-    "userIdentSaved": "User identity saved.",
+    "pgIsolationNote": "セッションの分離には個別の PostgreSQL アカウントが必要です。共有データベースアカウントでは、すべてのセッションがすべてのユーザーに表示されます。",
+    "userIdentLabel": "ユーザー ID",
+    "userIdentHint": "認証プロファイルをマシン間でセッションに紐付けるために使用されます。ユーザーごとに一意である必要があります。",
+    "userIdentSaved": "ユーザー ID を保存しました。",
     "dbExport": "データをエクスポート",
     "dbImport": "データをインポート",
+    "dbExportImportHint": "ShellStation のセッションデータをエクスポート・インポートします。外部ツールからのインポートは下のセクションをご利用ください。",
     "dbImportSuccess": "{{message}}",
     "dbFallbackBanner": "PostgreSQLに接続できませんでした: {{message}}。オフラインモードで動作中。",
     "dbOpenSettings": "設定を開く",
     "security": "セキュリティ",
     "restrictPrivateIpsLabel": "プライベート/ループバックアドレスへの接続をブロック",
-    "restrictPrivateIpsHint": "有効にすると、ループバック (127.x)、リンクローカル、RFC 1918プライベートアドレス (10.x, 172.16-31.x, 192.168.x) へのSSH接続がブロックされます。ローカルネットワークやホームラボのホストに接続する場合は無効にしてください。",
+    "restrictPrivateIpsHint": "有効にすると、ループバック (127.x)、リンクローカル、RFC 1918プライベートアドレス (10.x, 172.16-31.x, 192.168.x) へのSSH接続がブロックされます。ローカルネットワークのホストに接続する場合は無効にしてください。",
     "importExternal": "外部ツールからインポート",
     "importMremoteng": "mRemoteNGをインポート",
     "importSecurecrt": "SecureCRTをインポート",
@@ -324,6 +325,7 @@
   },
   "highlighting": {
     "sectionTitle": "キーワードハイライト",
+    "sectionHint": "正規表現ベースのハイライトルールを定義し、プロファイルを各セッションに割り当てます。",
     "addProfile": "プロファイルを追加",
     "editProfile": "プロファイルを編集",
     "noProfiles": "ハイライトプロファイルが定義されていません。",
@@ -352,8 +354,8 @@
     "save": "保存"
   },
   "userIdent": {
-    "promptTitle": "Set User Identity",
-    "promptMessage": "Your user identity is used to map credential profiles to sessions. This must be unique per person and consistent across all your machines.",
-    "promptHint": "Enter your identity (e.g. your username)"
+    "promptTitle": "ユーザー ID の設定",
+    "promptMessage": "ユーザー ID は認証プロファイルをセッションに紐付けるために使用されます。各ユーザーで一意であり、すべてのマシンで同じである必要があります。",
+    "promptHint": "ID を入力してください（例: ユーザー名）"
   }
 }

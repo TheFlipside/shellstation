@@ -54,7 +54,7 @@
   },
   "credentialProfiles": {
     "title": "Inloggningshanterare",
-    "info": "Inloggningsprofiler delas mellan sessioner. Varje profil lagrar en hemlighet i OS-nyckelringen.",
+    "info": "Inloggningsprofiler delas mellan sessioner. Varje profil lagrar ett lösenord i OS-nyckelringen.",
     "open": "Inloggningshanterare",
     "newProfile": "Ny profil",
     "editProfile": "Redigera profil",
@@ -68,7 +68,7 @@
     "usernamePlaceholder": "user",
     "passwordLabel": "Lösenord",
     "passwordPlaceholder": "lösenord",
-    "passwordHint": "Lämna tomt för att behålla befintlig hemlighet.",
+    "passwordHint": "Lämna tomt för att behålla befintligt lösenord.",
     "keyPathLabel": "Nyckelväg",
     "keyPathPlaceholder": "~/.ssh/id_ed25519",
     "keyPathBrowse": "Bläddra…",
@@ -122,7 +122,7 @@
     "icon_lock": "VPN / Säker",
     "tagsLabel": "Taggar",
     "tagsPlaceholder": "prod, eu, web (kommaseparerade)",
-    "tagsJumpHostNote": "Add the tag \"jumphost\" to make this session available as a jump host in the session properties of other sessions.",
+    "tagsJumpHostNote": "Lägg till taggen \"jumphost\" för att göra denna session tillgänglig som jump host i egenskaperna för andra sessioner.",
     "highlightProfileLabel": "Markeringsprofil",
     "highlightProfileNone": "Ingen",
     "credentialProfileLabel": "Inloggningsprofil",
@@ -284,18 +284,19 @@
     "dbSaveRestart": "Spara och starta om",
     "dbRestartRequired": "Programmet måste startas om för att ändringarna ska träda i kraft.",
     "dbCredentialNote": "Inloggningsuppgifter lagras alltid lokalt per användare, aldrig i den centrala databasen.",
-    "pgIsolationNote": "Session isolation requires individual PostgreSQL accounts. With a shared database account, all sessions are visible to all users.",
-    "userIdentLabel": "User Identity",
-    "userIdentHint": "Used to map your credential profiles to sessions across machines. Must be unique per user.",
-    "userIdentSaved": "User identity saved.",
+    "pgIsolationNote": "Sessionsisolering kräver individuella PostgreSQL-konton. Med ett delat databaskonto är alla sessioner synliga för alla användare.",
+    "userIdentLabel": "Användaridentitet",
+    "userIdentHint": "Används för att koppla dina inloggningsprofiler till sessioner på alla dina maskiner. Måste vara unikt per användare.",
+    "userIdentSaved": "Användaridentitet sparad.",
     "dbExport": "Exportera data",
     "dbImport": "Importera data",
+    "dbExportImportHint": "Exportera och importera ShellStation-sessionsdata. Använd avsnittet nedan för att importera från externa verktyg.",
     "dbImportSuccess": "{{message}}",
     "dbFallbackBanner": "Kunde inte ansluta till PostgreSQL: {{message}}. Offineläge aktivt.",
     "dbOpenSettings": "Öppna inställningar",
     "security": "Säkerhet",
     "restrictPrivateIpsLabel": "Blockera anslutningar till privata/loopback-adresser",
-    "restrictPrivateIpsHint": "När aktiverat blockeras SSH-anslutningar till loopback (127.x), link-local och privata RFC 1918 (10.x, 172.16-31.x, 192.168.x) adresser. Inaktivera om du ansluter till värdar i ditt lokala nätverk eller homelab.",
+    "restrictPrivateIpsHint": "När aktiverat blockeras SSH-anslutningar till loopback (127.x), link-local och privata RFC 1918 (10.x, 172.16-31.x, 192.168.x) adresser. Inaktivera om du ansluter till värdar i ditt lokala nätverk.",
     "importExternal": "Importera från externa verktyg",
     "importMremoteng": "Importera mRemoteNG",
     "importSecurecrt": "Importera SecureCRT",
@@ -324,6 +325,7 @@
   },
   "highlighting": {
     "sectionTitle": "Nyckelordsmarkering",
+    "sectionHint": "Definiera regex-baserade markeringsregler för terminalutdata och tilldela profiler till sessioner.",
     "addProfile": "Lägg till profil",
     "editProfile": "Redigera profil",
     "noProfiles": "Inga markeringsprofiler definierade.",
@@ -352,8 +354,8 @@
     "save": "Spara"
   },
   "userIdent": {
-    "promptTitle": "Set User Identity",
-    "promptMessage": "Your user identity is used to map credential profiles to sessions. This must be unique per person and consistent across all your machines.",
-    "promptHint": "Enter your identity (e.g. your username)"
+    "promptTitle": "Ställ in användaridentitet",
+    "promptMessage": "Din användaridentitet används för att koppla inloggningsprofiler till sessioner. Den måste vara unik per person och konsekvent på alla dina maskiner.",
+    "promptHint": "Ange din identitet (t.ex. ditt användarnamn)"
   }
 }

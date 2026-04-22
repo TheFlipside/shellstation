@@ -24,9 +24,9 @@
     "setCredentials": "Zugangsdaten setzen…",
     "editSessions": "Sitzungen bearbeiten…",
     "applyCredentialProfile": "Anmeldeprofil anwenden…",
-    "bulkEdit": "Sitzungen massenhaft bearbeiten…",
-    "makeShared": "Make Shared",
-    "makePersonal": "Make Personal"
+    "bulkEdit": "Verbindungen bearbeiten…",
+    "makeShared": "Freigeben",
+    "makePersonal": "Persönlich machen"
   },
   "bulkEdit": {
     "title": "Massenbearbeitung — {{name}}",
@@ -54,7 +54,7 @@
   },
   "credentialProfiles": {
     "title": "Anmeldeverwaltung",
-    "info": "Anmeldeprofile werden sitzungsübergreifend geteilt. Jedes Profil speichert ein Geheimnis im OS-Schlüsselbund.",
+    "info": "Anmeldeprofile werden sitzungsübergreifend geteilt. Jedes Profil speichert ein Passwort im OS-Schlüsselbund.",
     "open": "Anmeldeverwaltung",
     "newProfile": "Neues Profil",
     "editProfile": "Profil bearbeiten",
@@ -68,7 +68,7 @@
     "usernamePlaceholder": "user",
     "passwordLabel": "Passwort",
     "passwordPlaceholder": "passwort",
-    "passwordHint": "Leer lassen, um das bestehende Geheimnis zu behalten.",
+    "passwordHint": "Leer lassen, um das bestehende Passwort zu behalten.",
     "keyPathLabel": "Schlüsselpfad",
     "keyPathPlaceholder": "~/.ssh/id_ed25519",
     "keyPathBrowse": "Durchsuchen…",
@@ -122,7 +122,7 @@
     "icon_lock": "VPN / Sicher",
     "tagsLabel": "Tags",
     "tagsPlaceholder": "prod, eu, web (kommagetrennt)",
-    "tagsJumpHostNote": "Add the tag \"jumphost\" to make this session available as a jump host in the session properties of other sessions.",
+    "tagsJumpHostNote": "Fügen Sie den Tag \"jumphost\" hinzu, damit diese Sitzung als Jump-Host in den Verbindungseigenschaften anderer Sitzungen verfügbar ist.",
     "highlightProfileLabel": "Hervorhebungsprofil",
     "highlightProfileNone": "Keines",
     "credentialProfileLabel": "Anmeldeprofil",
@@ -180,7 +180,7 @@
     "commandPlaceholder": "z. B. show running-config\\r",
     "escapeHintTitle": "Escape-Sequenzen:",
     "escapeHintItems": [
-      "\\r — Wagenrücklauf (CR)",
+      "\\r — Carriage Return (CR)",
       "\\n — Zeilenumbruch (LF)",
       "\\t — Tabulator",
       "\\b — Rücktaste",
@@ -284,18 +284,19 @@
     "dbSaveRestart": "Speichern & Neustarten",
     "dbRestartRequired": "Ein Neustart der Anwendung ist erforderlich, damit die Änderungen wirksam werden.",
     "dbCredentialNote": "Zugangsdaten werden immer lokal pro Benutzer gespeichert, niemals in der zentralen Datenbank.",
-    "pgIsolationNote": "Session isolation requires individual PostgreSQL accounts. With a shared database account, all sessions are visible to all users.",
-    "userIdentLabel": "User Identity",
-    "userIdentHint": "Used to map your credential profiles to sessions across machines. Must be unique per user.",
-    "userIdentSaved": "User identity saved.",
+    "pgIsolationNote": "Sitzungsisolierung erfordert individuelle PostgreSQL-Konten. Bei einem gemeinsam genutzten Datenbankkonto sind alle Sitzungen für alle Benutzer sichtbar.",
+    "userIdentLabel": "Benutzeridentität",
+    "userIdentHint": "Wird verwendet, um Ihre Anmeldeprofile geräteübergreifend Sitzungen zuzuordnen. Muss pro Benutzer eindeutig sein.",
+    "userIdentSaved": "Benutzeridentität gespeichert.",
     "dbExport": "Daten exportieren",
     "dbImport": "Daten importieren",
+    "dbExportImportHint": "ShellStation-Sitzungsdaten exportieren und importieren. Für den Import aus externen Tools verwenden Sie den Abschnitt weiter unten.",
     "dbImportSuccess": "{{message}}",
     "dbFallbackBanner": "Verbindung zu PostgreSQL fehlgeschlagen: {{message}}. Offline-Modus aktiv.",
     "dbOpenSettings": "Einstellungen öffnen",
     "security": "Sicherheit",
     "restrictPrivateIpsLabel": "Verbindungen zu privaten/Loopback-Adressen blockieren",
-    "restrictPrivateIpsHint": "Wenn aktiviert, werden SSH-Verbindungen zu Loopback- (127.x), Link-Local- und privaten RFC-1918-Adressen (10.x, 172.16-31.x, 192.168.x) blockiert. Deaktivieren Sie dies, wenn Sie sich mit Hosts in Ihrem lokalen Netzwerk oder Homelab verbinden.",
+    "restrictPrivateIpsHint": "Wenn aktiviert, werden SSH-Verbindungen zu Loopback- (127.x), Link-Local- und privaten RFC-1918-Adressen (10.x, 172.16-31.x, 192.168.x) blockiert. Deaktivieren Sie dies, wenn Sie sich mit Hosts in Ihrem lokalen Netzwerk verbinden.",
     "importExternal": "Import aus externen Tools",
     "importMremoteng": "mRemoteNG importieren",
     "importSecurecrt": "SecureCRT importieren",
@@ -324,6 +325,7 @@
   },
   "highlighting": {
     "sectionTitle": "Schlüsselwort-Hervorhebung",
+    "sectionHint": "Definieren Sie regex-basierte Hervorhebungsregeln für die Terminalausgabe und weisen Sie Profile einzelnen Sitzungen zu.",
     "addProfile": "Profil hinzufügen",
     "editProfile": "Profil bearbeiten",
     "noProfiles": "Keine Hervorhebungsprofile vorhanden.",
@@ -352,8 +354,8 @@
     "save": "Speichern"
   },
   "userIdent": {
-    "promptTitle": "Set User Identity",
-    "promptMessage": "Your user identity is used to map credential profiles to sessions. This must be unique per person and consistent across all your machines.",
-    "promptHint": "Enter your identity (e.g. your username)"
+    "promptTitle": "Benutzeridentität festlegen",
+    "promptMessage": "Ihre Benutzeridentität wird verwendet, um Anmeldeprofile sitzungsübergreifend zuzuordnen. Sie muss pro Person eindeutig und auf allen Ihren Geräten gleich sein.",
+    "promptHint": "Geben Sie Ihre Identität ein (z. B. Ihr Benutzername)"
   }
 }
