@@ -1125,6 +1125,21 @@ async fn authenticate_handle(
 ) -> Result<(), String> {
     debug!(session_id = %session_id, auth_method = %auth_method, "Authenticating SSH session");
 
+    // RFC 4252 §5.2: try "none" first. Some devices (e.g. Cisco SG350, Catalyst 1300)
+    // grant access via "none" and reject all other methods.
+    match handle.authenticate_none(username).await {
+        Ok(res) if res.success() => {
+            warn!(session_id = %session_id, "Authenticated via 'none' method — server did not require credentials");
+            return Ok(());
+        }
+        Ok(_) => {
+            debug!(session_id = %session_id, auth_method = %auth_method, "Server rejected 'none' auth, proceeding with configured method");
+        }
+        Err(e) => {
+            debug!(session_id = %session_id, auth_method = %auth_method, error = %e, "Error during 'none' auth probe, proceeding with configured method");
+        }
+    }
+
     let auth_ok = match auth_method {
         "password" => {
             debug!(session_id = %session_id, user = %username, "Attempting password authentication");
