@@ -15,12 +15,14 @@ All notable changes to this project are documented in this file.
 - Sharing a folder not cascading to descendant folders and sessions, causing inconsistent visibility for remote users
 - Dynamic "Shared" folder expanding on single click instead of double click like regular folders
 - Login sequence translations using literal "carriage return" equivalents instead of technical abbreviation "CR" across all 13 non-English locales
+- Users could move shared folders/sessions into personal folders, causing data loss for the original owner
 
 ### Changed
 
 - PostgreSQL Administration Guide extracted from DESIGN.md into dedicated ADMIN_GUIDE.md, rewritten to present group role setup first
 - PostgreSQL RLS setup failure downgraded from ERROR to WARN log level for DML-only users
 - Setting a folder to shared or personal now cascades to all contained sub-folders and sessions
+- "Move To" context menu and folder picker restricted to owned items and folders in PostgreSQL mode
 
 ### Removed
 

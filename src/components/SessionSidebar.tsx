@@ -89,6 +89,7 @@ export function SessionSidebar(): React.JSX.Element {
     toggleFolder,
     clearSelection,
   } = store;
+  const { dbBackend, pgUser } = useAppStore();
 
   const [ctx, setCtx] = useState<ContextState | null>(null);
   const [folderDialog, setFolderDialog] = useState<{
@@ -542,12 +543,16 @@ export function SessionSidebar(): React.JSX.Element {
             setBulkEditFolder({ id: ctx.id, name: folder?.name ?? "" });
           },
         },
-        {
-          label: t("contextMenu.moveTo"),
-          onClick: () => {
-            setMoveTarget({ id: ctx.id, type: "folder" });
-          },
-        },
+        ...(!isPg || isOwner
+          ? [
+              {
+                label: t("contextMenu.moveTo"),
+                onClick: () => {
+                  setMoveTarget({ id: ctx.id, type: "folder" });
+                },
+              },
+            ]
+          : []),
         ...(ownerFolder
           ? [
               {
@@ -635,12 +640,16 @@ export function SessionSidebar(): React.JSX.Element {
           if (session) cloneSession(session);
         },
       },
-      {
-        label: t("contextMenu.moveTo"),
-        onClick: () => {
-          setMoveTarget({ id: ctx.id, type: "session" });
-        },
-      },
+      ...(!isPg || isSessionOwner
+        ? [
+            {
+              label: t("contextMenu.moveTo"),
+              onClick: () => {
+                setMoveTarget({ id: ctx.id, type: "session" });
+              },
+            },
+          ]
+        : []),
       ...(ownerSession
         ? [
             {
@@ -1213,7 +1222,7 @@ export function SessionSidebar(): React.JSX.Element {
 
       {moveTarget && (
         <MoveDialog
-          folders={folders}
+          folders={dbBackend === "postgres" ? folders.filter((f) => f.owner === pgUser) : folders}
           excludeId={moveTarget.id}
           showRoot={moveTarget.type === "folder"}
           onSubmit={handleMoveSubmit}

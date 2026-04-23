@@ -192,6 +192,7 @@ impl DatabaseProvider for PostgresProvider {
         rows.iter().map(row_to_folder).collect()
     }
 
+    // RLS enforces access: owner_all + shared_update (DESIGN.md §4.5).
     async fn rename_folder(&self, id: Uuid, name: &str) -> DbResult<()> {
         let result = sqlx::query("UPDATE folders SET name = $1 WHERE id = $2")
             .bind(name)
@@ -207,6 +208,7 @@ impl DatabaseProvider for PostgresProvider {
     }
 
     async fn move_folder(&self, id: Uuid, new_parent_id: Option<Uuid>) -> DbResult<()> {
+        let id_str = id.to_string();
         let parent_str = new_parent_id.map(|u| u.to_string());
 
         let mut tx = self
@@ -214,6 +216,30 @@ impl DatabaseProvider for PostgresProvider {
             .begin()
             .await
             .map_err(|e| format!("Failed to begin transaction: {e}"))?;
+
+        if sqlx::query("SELECT 1 FROM folders WHERE id = $1 AND owner = current_user FOR UPDATE")
+            .bind(&id_str)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(|e| format!("Failed to check folder ownership: {e}"))?
+            .is_none()
+        {
+            return Err("You can only move folders you own".to_string());
+        }
+
+        if let Some(ref target) = parent_str {
+            if sqlx::query(
+                "SELECT 1 FROM folders WHERE id = $1 AND owner = current_user FOR UPDATE",
+            )
+            .bind(target)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(|e| format!("Failed to check target folder ownership: {e}"))?
+            .is_none()
+            {
+                return Err("You can only move items into your own folders".to_string());
+            }
+        }
 
         // Lock siblings in the target parent to prevent sort_order races.
         sqlx::query(
@@ -238,7 +264,7 @@ impl DatabaseProvider for PostgresProvider {
             sqlx::query("UPDATE folders SET parent_id = $1, sort_order = $2 WHERE id = $3")
                 .bind(&parent_str)
                 .bind(sort_order)
-                .bind(id.to_string())
+                .bind(&id_str)
                 .execute(&mut *tx)
                 .await
                 .map_err(|e| format!("Failed to move folder: {e}"))?;
@@ -253,6 +279,7 @@ impl DatabaseProvider for PostgresProvider {
         Ok(())
     }
 
+    // RLS enforces access: owner_all + shared_delete (owner only).
     async fn delete_folder(&self, id: Uuid) -> DbResult<()> {
         let result = sqlx::query("DELETE FROM folders WHERE id = $1")
             .bind(id.to_string())
@@ -382,6 +409,7 @@ impl DatabaseProvider for PostgresProvider {
         rows.iter().map(row_to_session).collect()
     }
 
+    // RLS enforces access: owner_all + shared_update (DESIGN.md §4.5).
     async fn update_session(&self, id: Uuid, update: UpdateSession) -> DbResult<()> {
         let mut sets = Vec::new();
         let mut idx: usize = 1;
@@ -500,6 +528,7 @@ impl DatabaseProvider for PostgresProvider {
     }
 
     async fn move_session(&self, id: Uuid, new_folder_id: Uuid) -> DbResult<()> {
+        let id_str = id.to_string();
         let folder_str = new_folder_id.to_string();
 
         let mut tx = self
@@ -507,6 +536,26 @@ impl DatabaseProvider for PostgresProvider {
             .begin()
             .await
             .map_err(|e| format!("Failed to begin transaction: {e}"))?;
+
+        if sqlx::query("SELECT 1 FROM sessions WHERE id = $1 AND owner = current_user FOR UPDATE")
+            .bind(&id_str)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(|e| format!("Failed to check session ownership: {e}"))?
+            .is_none()
+        {
+            return Err("You can only move sessions you own".to_string());
+        }
+
+        if sqlx::query("SELECT 1 FROM folders WHERE id = $1 AND owner = current_user FOR UPDATE")
+            .bind(&folder_str)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(|e| format!("Failed to check target folder ownership: {e}"))?
+            .is_none()
+        {
+            return Err("You can only move items into your own folders".to_string());
+        }
 
         // Lock sibling sessions in the target folder to prevent sort_order races.
         sqlx::query("SELECT id FROM sessions WHERE folder_id = $1 FOR UPDATE")
@@ -527,7 +576,7 @@ impl DatabaseProvider for PostgresProvider {
             sqlx::query("UPDATE sessions SET folder_id = $1, sort_order = $2 WHERE id = $3")
                 .bind(&folder_str)
                 .bind(sort_order)
-                .bind(id.to_string())
+                .bind(&id_str)
                 .execute(&mut *tx)
                 .await
                 .map_err(|e| format!("Failed to move session: {e}"))?;
@@ -542,6 +591,7 @@ impl DatabaseProvider for PostgresProvider {
         Ok(())
     }
 
+    // RLS enforces access: owner_all + shared_delete (owner only).
     async fn delete_session(&self, id: Uuid) -> DbResult<()> {
         let result = sqlx::query("DELETE FROM sessions WHERE id = $1")
             .bind(id.to_string())
@@ -577,6 +627,7 @@ impl DatabaseProvider for PostgresProvider {
 
     // ── Reordering ─────────────────────────────────────────────────────
 
+    // RLS enforces access: owner_all + shared_update (DESIGN.md §4.5).
     async fn reorder_folders(
         &self,
         parent_id: Option<Uuid>,
@@ -618,6 +669,7 @@ impl DatabaseProvider for PostgresProvider {
         Ok(())
     }
 
+    // RLS enforces access: owner_all + shared_update (DESIGN.md §4.5).
     async fn reorder_sessions(&self, folder_id: Uuid, ordered_ids: Vec<Uuid>) -> DbResult<()> {
         let folder_str = folder_id.to_string();
 
