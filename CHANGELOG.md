@@ -6,6 +6,16 @@ All notable changes to this project are documented in this file.
 
 ### Added
 
+### Fixed
+
+### Changed
+
+### Removed
+
+### 0.11.1 - 2026-04-23
+
+### Added
+
 - Import size limits for highlight profiles and login sequences to prevent resource exhaustion
 
 ### Fixed
@@ -28,8 +38,6 @@ All notable changes to this project are documented in this file.
 - "Move To" context menu and folder picker restricted to owned items and folders in PostgreSQL mode
 - "New Session", "New Subfolder", and session dialog folder picker restricted to owned folders in PostgreSQL mode
 - "Delete" context menu option hidden for shared folders and sessions not owned by the current user in PostgreSQL mode
-
-### Removed
 
 ### 0.11.0 - 2026-04-22
 
