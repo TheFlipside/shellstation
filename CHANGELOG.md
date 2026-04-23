@@ -27,6 +27,7 @@ All notable changes to this project are documented in this file.
 - Setting a folder to shared or personal now cascades to all contained sub-folders and sessions
 - "Move To" context menu and folder picker restricted to owned items and folders in PostgreSQL mode
 - "New Session", "New Subfolder", and session dialog folder picker restricted to owned folders in PostgreSQL mode
+- "Delete" context menu option hidden for shared folders and sessions not owned by the current user in PostgreSQL mode
 
 ### Removed
 

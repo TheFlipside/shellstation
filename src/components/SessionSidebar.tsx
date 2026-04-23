@@ -575,29 +575,33 @@ export function SessionSidebar(): React.JSX.Element {
               },
             ]
           : []),
-        {
-          label: t("contextMenu.delete"),
-          danger: true,
-          onClick: () => {
-            const folderId = ctx.id;
-            const childCount = sessions.filter((s) => s.folder_id === folderId).length;
-            const msg =
-              childCount > 0
-                ? t("folder.deleteWithSessions", { count: String(childCount) })
-                : t("folder.deleteEmpty");
-            setConfirmDialog({
-              message: msg,
-              onConfirm: () => {
-                deleteFolder(folderId)
-                  .then(() => {
-                    clearSelection();
-                    setConfirmDialog(null);
-                  })
-                  .catch(noop);
+        ...(!isPg || isOwner
+          ? [
+              {
+                label: t("contextMenu.delete"),
+                danger: true,
+                onClick: () => {
+                  const folderId = ctx.id;
+                  const childCount = sessions.filter((s) => s.folder_id === folderId).length;
+                  const msg =
+                    childCount > 0
+                      ? t("folder.deleteWithSessions", { count: String(childCount) })
+                      : t("folder.deleteEmpty");
+                  setConfirmDialog({
+                    message: msg,
+                    onConfirm: () => {
+                      deleteFolder(folderId)
+                        .then(() => {
+                          clearSelection();
+                          setConfirmDialog(null);
+                        })
+                        .catch(noop);
+                    },
+                  });
+                },
               },
-            });
-          },
-        },
+            ]
+          : []),
       ];
     }
 
@@ -672,24 +676,28 @@ export function SessionSidebar(): React.JSX.Element {
             },
           ]
         : []),
-      {
-        label: t("contextMenu.delete"),
-        danger: true,
-        onClick: () => {
-          const sessionId = ctx.id;
-          setConfirmDialog({
-            message: t("session.deleteConfirm", { name: session?.name ?? "" }),
-            onConfirm: () => {
-              deleteSession(sessionId)
-                .then(() => {
-                  clearSelection();
-                  setConfirmDialog(null);
-                })
-                .catch(noop);
+      ...(!isPg || isSessionOwner
+        ? [
+            {
+              label: t("contextMenu.delete"),
+              danger: true,
+              onClick: () => {
+                const sessionId = ctx.id;
+                setConfirmDialog({
+                  message: t("session.deleteConfirm", { name: session?.name ?? "" }),
+                  onConfirm: () => {
+                    deleteSession(sessionId)
+                      .then(() => {
+                        clearSelection();
+                        setConfirmDialog(null);
+                      })
+                      .catch(noop);
+                  },
+                });
+              },
             },
-          });
-        },
-      },
+          ]
+        : []),
     ];
   };
 
