@@ -496,18 +496,22 @@ export function SessionSidebar(): React.JSX.Element {
       // requires a non-undefined left side). Cast once for the visibility toggle.
       const ownerFolder = isOwner ? folder : null;
       return [
-        {
-          label: t("contextMenu.newSession"),
-          onClick: () => {
-            setSessionDialog({ mode: "create", folderId: ctx.id });
-          },
-        },
-        {
-          label: t("contextMenu.newSubfolder"),
-          onClick: () => {
-            setFolderDialog({ mode: "create", parentId: ctx.id });
-          },
-        },
+        ...(!isPg || isOwner
+          ? [
+              {
+                label: t("contextMenu.newSession"),
+                onClick: () => {
+                  setSessionDialog({ mode: "create", folderId: ctx.id });
+                },
+              },
+              {
+                label: t("contextMenu.newSubfolder"),
+                onClick: () => {
+                  setFolderDialog({ mode: "create", parentId: ctx.id });
+                },
+              },
+            ]
+          : []),
         {
           label: t("contextMenu.rename"),
           onClick: () => {
@@ -1042,7 +1046,7 @@ export function SessionSidebar(): React.JSX.Element {
           title={
             sessionDialog.mode === "create" ? t("session.dialogCreate") : t("session.dialogEdit")
           }
-          folders={folders}
+          folders={dbBackend === "postgres" ? folders.filter((f) => f.owner === pgUser) : folders}
           sessions={sessions}
           defaultFolderId={sessionDialog.folderId}
           sessionId={sessionDialog.sessionId}

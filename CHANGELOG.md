@@ -18,6 +18,7 @@ All notable changes to this project are documented in this file.
 - Users could move shared folders/sessions into personal folders, causing data loss for the original owner
 - Keyboard shortcuts (F2, Delete) in search results acting on the previously selected item instead of the clicked search result
 - Session search being case-sensitive on PostgreSQL
+- Users could clone sessions or create items inside shared folders they don't own, risking data loss when the owner changes folder visibility
 
 ### Changed
 
@@ -25,6 +26,7 @@ All notable changes to this project are documented in this file.
 - PostgreSQL RLS setup failure downgraded from ERROR to WARN log level for DML-only users
 - Setting a folder to shared or personal now cascades to all contained sub-folders and sessions
 - "Move To" context menu and folder picker restricted to owned items and folders in PostgreSQL mode
+- "New Session", "New Subfolder", and session dialog folder picker restricted to owned folders in PostgreSQL mode
 
 ### Removed
 

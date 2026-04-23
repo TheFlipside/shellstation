@@ -128,6 +128,20 @@ impl DatabaseProvider for PostgresProvider {
             .await
             .map_err(|e| format!("Failed to begin transaction: {e}"))?;
 
+        if let Some(ref target) = parent_str {
+            if sqlx::query(
+                "SELECT 1 FROM folders WHERE id = $1 AND owner = current_user FOR UPDATE",
+            )
+            .bind(target)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(|e| format!("Failed to check parent folder ownership: {e}"))?
+            .is_none()
+            {
+                return Err("You can only create sub-folders in your own folders".to_string());
+            }
+        }
+
         // Lock sibling rows to prevent concurrent sort_order races.
         // FOR UPDATE cannot be combined with aggregates, so we lock first
         // and then compute the max in a separate query.
@@ -306,6 +320,16 @@ impl DatabaseProvider for PostgresProvider {
             .begin()
             .await
             .map_err(|e| format!("Failed to begin transaction: {e}"))?;
+
+        if sqlx::query("SELECT 1 FROM folders WHERE id = $1 AND owner = current_user FOR UPDATE")
+            .bind(&folder_str)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(|e| format!("Failed to check target folder ownership: {e}"))?
+            .is_none()
+        {
+            return Err("You can only create sessions in your own folders".to_string());
+        }
 
         // Lock sibling sessions to prevent concurrent sort_order races.
         sqlx::query("SELECT id FROM sessions WHERE folder_id = $1 FOR UPDATE")
