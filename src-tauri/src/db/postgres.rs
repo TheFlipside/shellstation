@@ -611,10 +611,10 @@ impl DatabaseProvider for PostgresProvider {
         let rows = sqlx::query(
             "SELECT id, folder_id, name, hostname, port, protocol, username, auth_method, jump_host_id, tags, icon, sort_order, highlight_profile_id, credential_profile_id, legacy_algorithms, owner, visibility, login_sequence_id \
              FROM sessions \
-             WHERE name LIKE $1 ESCAPE '\\' \
-                OR hostname LIKE $1 ESCAPE '\\' \
-                OR username LIKE $1 ESCAPE '\\' \
-                OR tags LIKE $1 ESCAPE '\\' \
+             WHERE name ILIKE $1 ESCAPE '\\' \
+                OR hostname ILIKE $1 ESCAPE '\\' \
+                OR username ILIKE $1 ESCAPE '\\' \
+                OR tags ILIKE $1 ESCAPE '\\' \
              ORDER BY sort_order ASC, name ASC",
         )
         .bind(&pattern)

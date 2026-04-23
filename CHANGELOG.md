@@ -16,6 +16,8 @@ All notable changes to this project are documented in this file.
 - Dynamic "Shared" folder expanding on single click instead of double click like regular folders
 - Login sequence translations using literal "carriage return" equivalents instead of technical abbreviation "CR" across all 13 non-English locales
 - Users could move shared folders/sessions into personal folders, causing data loss for the original owner
+- Keyboard shortcuts (F2, Delete) in search results acting on the previously selected item instead of the clicked search result
+- Session search being case-sensitive on PostgreSQL
 
 ### Changed
 

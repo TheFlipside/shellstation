@@ -880,12 +880,16 @@ export function SessionSidebar(): React.JSX.Element {
             displaySessions.map((s) => (
               <div
                 key={s.id}
-                className="tree-item tree-session"
+                className={`tree-item tree-session${selectedItemId === s.id ? " tree-item-selected" : ""}`}
+                onClick={() => {
+                  selectItem(s.id, "session");
+                }}
                 onDoubleClick={() => {
                   handleSessionDoubleClick(s.id);
                 }}
                 onContextMenu={(e) => {
                   e.preventDefault();
+                  selectItem(s.id, "session");
                   handleContextMenu(e, s.id, "session");
                 }}
                 role="treeitem"

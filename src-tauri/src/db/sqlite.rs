@@ -448,6 +448,7 @@ impl DatabaseProvider for SqliteProvider {
         Ok(())
     }
 
+    // SQLite LIKE is case-insensitive for ASCII; PostgreSQL uses ILIKE.
     async fn search_sessions(&self, query: &str) -> DbResult<Vec<Session>> {
         let escaped = query.replace('%', "\\%").replace('_', "\\_");
         let pattern = format!("%{escaped}%");
