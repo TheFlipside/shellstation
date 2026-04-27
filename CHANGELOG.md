@@ -6,6 +6,16 @@ All notable changes to this project are documented in this file.
 
 ### Added
 
+### Fixed
+
+### Changed
+
+### Removed
+
+### 0.11.3 - 2026-04-27
+
+### Added
+
 - "Sort by Hostname / IP" context menu action for folders, with numeric IP-address-aware ordering (e.g. 10.0.0.2 before 10.0.0.10)
 
 ### Fixed
@@ -25,8 +35,6 @@ All notable changes to this project are documented in this file.
 - Bulk operations (credential profile, login sequence, bulk edit) traverse only owned folder subtrees in PostgreSQL mode
 - SQLite reorder, sort, and bulk operations now wrapped in transactions for atomicity
 - `update_session` enforces `owner = current_user` in PostgreSQL mode
-
-### Removed
 
 ### 0.11.2 - 2026-04-27
 
