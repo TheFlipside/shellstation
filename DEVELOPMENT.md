@@ -1209,13 +1209,15 @@ ShellStation is built and released via Forgejo Actions on a self-hosted runner s
 
 ### Pipeline overview
 
-| Job              | Runner label | Outputs                            |
-| ---------------- | ------------ | ---------------------------------- |
-| `build-linux`    | `linux`      | `.deb`, `.AppImage`                |
-| `build-windows`  | `windows`    | `.msi`, `.exe` (NSIS)              |
-| `publish-release`| `linux`      | Forgejo release with all artifacts |
+| Job                | Runner label | Outputs                            |
+| ------------------ | ------------ | ---------------------------------- |
+| `build-linux`      | `linux`      | `.deb`, `.AppImage`                |
+| `build-windows`    | `windows`    | `.msi`, `.exe` (NSIS)              |
+| `build-macos-x64`  | `macos`      | `.dmg` (Intel)                     |
+| `build-macos-arm64`| `macos`      | `.dmg` (Apple Silicon)             |
+| `publish-release`  | `linux`      | Forgejo release with all artifacts |
 
-macOS is **not** built by the pipeline. Apple's notarization toolchain is macOS-only and requires Xcode, so macOS artifacts are produced manually on a developer's MacBook and uploaded to the same release page after the pipeline completes. See [RELEASING.md](RELEASING.md) for the manual macOS build steps.
+The macOS jobs run on an Apple Silicon runner and cross-compile for Intel via `--target x86_64-apple-darwin`. Both architectures produce a `.dmg` named `ShellStation-macos-{x64,arm64}-<version>.dmg`.
 
 ### Trigger
 
@@ -1236,13 +1238,13 @@ Generate the token at <https://git.fiedler.live/user/settings/applications> and 
 
 ### Code signing
 
-Releases are currently **unsigned**. Windows users see a SmartScreen "Unknown publisher" warning on first launch; macOS users must right-click the `.app` and choose **Open** (or run `xattr -d com.apple.quarantine`). This is acceptable for early releases. If signing becomes a requirement later, the recommended path is [SignPath.io's free OSS program](https://signpath.org/foundation) — no hardware token, no business entity, integrates with CI via API.
+Releases are currently **unsigned**. Windows users see a SmartScreen "Unknown publisher" warning on first launch; macOS users must right-click the `.app` and choose **Open** (or run `xattr -d com.apple.quarantine ShellStation.app`). This is acceptable for early releases. If signing becomes a requirement later, the recommended path is [SignPath.io's free OSS program](https://signpath.org/foundation) for Windows and Apple's Developer ID for macOS (requires an Apple Developer account).
 
 ---
 
 ## 24. Forgejo Runner Setup
 
-The pipeline needs two self-hosted runners: one Linux, one Windows. Both run the `forgejo-runner` daemon and register against `https://git.fiedler.live`.
+The pipeline needs three self-hosted runners: Linux, macOS, and Windows. All run the `forgejo-runner` daemon and register against `https://git.fiedler.live`.
 
 ### 24.1. Linux runner
 
@@ -1328,7 +1330,91 @@ sudo systemctl status forgejo-runner
 
 Verify the runner is online at <https://git.fiedler.live/-/admin/actions/runners>.
 
-### 24.2. Windows runner
+### 24.2. macOS runner
+
+**Recommended:** Apple Silicon Mac (M1 or later) running macOS 13 Ventura+. The runner cross-compiles for Intel (`x86_64-apple-darwin`) via Rosetta-capable toolchain — no Intel hardware needed.
+
+**1. Install build prerequisites** (if not already present from development setup):
+
+```bash
+xcode-select --install
+brew install node@20
+brew link --overwrite node@20
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
+source "$HOME/.cargo/env"
+rustup target add x86_64-apple-darwin aarch64-apple-darwin
+```
+
+**2. Download the Forgejo runner binary**:
+
+```bash
+cd ~
+curl -L -o forgejo-runner https://code.forgejo.org/forgejo/runner/releases/download/v6.2.2/forgejo-runner-6.2.2-darwin-arm64
+chmod +x forgejo-runner
+./forgejo-runner generate-config > config.yml
+```
+
+(Check <https://code.forgejo.org/forgejo/runner/releases> for the latest version. Use `darwin-amd64` on Intel Macs.)
+
+**3. Register against Forgejo**:
+
+```bash
+./forgejo-runner register --no-interactive \
+  --instance https://git.fiedler.live \
+  --token <REGISTRATION_TOKEN> \
+  --name macos-builder \
+  --labels macos:host
+```
+
+The `macos` label matches `runs-on: macos` in the workflow. The `:host` suffix is critical — it tells the runner to execute jobs directly on the host instead of inside a container.
+
+**4. Run as a launchd service**:
+
+```bash
+cat > ~/Library/LaunchAgents/com.forgejo.runner.plist <<'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.forgejo.runner</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/YOUR_USER/forgejo-runner</string>
+    <string>daemon</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>/Users/YOUR_USER</string>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/Users/YOUR_USER/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+  <key>StandardOutPath</key>
+  <string>/Users/YOUR_USER/forgejo-runner.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/YOUR_USER/forgejo-runner.err</string>
+</dict>
+</plist>
+EOF
+
+# Replace YOUR_USER with the actual username, then load:
+launchctl load ~/Library/LaunchAgents/com.forgejo.runner.plist
+```
+
+Verify the runner appears as `macos-builder` at <https://git.fiedler.live/-/admin/actions/runners>.
+
+**5. Prevent sleep** so the runner stays online when the display is off:
+
+```bash
+sudo pmset -a sleep 0 disablesleep 1
+```
+
+### 24.3. Windows runner
 
 **Recommended OS:** Windows 11 Pro 23H2 or 24H2 (x64). Reasons:
 
