@@ -529,7 +529,10 @@ impl DatabaseProvider for PostgresProvider {
             return Ok(());
         }
 
-        let sql = format!("UPDATE sessions SET {} WHERE id = ${idx}", sets.join(", "));
+        let sql = format!(
+            "UPDATE sessions SET {} WHERE id = ${idx} AND owner = current_user",
+            sets.join(", ")
+        );
         let mut query = sqlx::query(&sql);
         for val in &values {
             match val {

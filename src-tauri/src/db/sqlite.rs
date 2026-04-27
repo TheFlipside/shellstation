@@ -824,6 +824,12 @@ impl DatabaseProvider for SqliteProvider {
         folder_id: Uuid,
         profile_id: Option<Uuid>,
     ) -> DbResult<u32> {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| format!("Failed to begin transaction: {e}"))?;
+
         // Collect folder_id and all descendant folder IDs via BFS.
         let mut folder_ids: Vec<String> = vec![folder_id.to_string()];
         let mut frontier: Vec<String> = vec![folder_id.to_string()];
@@ -835,7 +841,7 @@ impl DatabaseProvider for SqliteProvider {
                 q = q.bind(f);
             }
             let rows = q
-                .fetch_all(&self.pool)
+                .fetch_all(&mut *tx)
                 .await
                 .map_err(|e| format!("Failed to walk folder tree: {e}"))?;
             frontier = rows.iter().map(|r| r.get::<String, _>("id")).collect();
@@ -853,10 +859,13 @@ impl DatabaseProvider for SqliteProvider {
             q = q.bind(f);
         }
         let result = q
-            .execute(&self.pool)
+            .execute(&mut *tx)
             .await
             .map_err(|e| format!("Failed to bulk set credential profile: {e}"))?;
 
+        tx.commit()
+            .await
+            .map_err(|e| format!("Failed to commit: {e}"))?;
         Ok(result.rows_affected() as u32)
     }
 
@@ -869,6 +878,12 @@ impl DatabaseProvider for SqliteProvider {
             return Ok(0);
         }
 
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| format!("Failed to begin transaction: {e}"))?;
+
         // Collect folder_id and all descendant folder IDs via BFS.
         let mut folder_ids: Vec<String> = vec![folder_id.to_string()];
         let mut frontier: Vec<String> = vec![folder_id.to_string()];
@@ -880,7 +895,7 @@ impl DatabaseProvider for SqliteProvider {
                 q = q.bind(f);
             }
             let rows = q
-                .fetch_all(&self.pool)
+                .fetch_all(&mut *tx)
                 .await
                 .map_err(|e| format!("Failed to walk folder tree: {e}"))?;
             frontier = rows.iter().map(|r| r.get::<String, _>("id")).collect();
@@ -928,7 +943,7 @@ impl DatabaseProvider for SqliteProvider {
                 q = q.bind(f);
             }
             let result = q
-                .execute(&self.pool)
+                .execute(&mut *tx)
                 .await
                 .map_err(|e| format!("Failed to bulk edit sessions: {e}"))?;
             total = result.rows_affected();
@@ -946,7 +961,7 @@ impl DatabaseProvider for SqliteProvider {
                 q = q.bind(f);
             }
             let result = q
-                .execute(&self.pool)
+                .execute(&mut *tx)
                 .await
                 .map_err(|e| format!("Failed to bulk set jump host: {e}"))?;
             // We report *distinct* sessions touched. When the first pass
@@ -958,6 +973,9 @@ impl DatabaseProvider for SqliteProvider {
             }
         }
 
+        tx.commit()
+            .await
+            .map_err(|e| format!("Failed to commit: {e}"))?;
         Ok(total as u32)
     }
 
@@ -1210,6 +1228,12 @@ impl DatabaseProvider for SqliteProvider {
         folder_id: Uuid,
         sequence_id: Option<Uuid>,
     ) -> DbResult<u32> {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| format!("Failed to begin transaction: {e}"))?;
+
         let mut folder_ids: Vec<String> = vec![folder_id.to_string()];
         let mut frontier: Vec<String> = vec![folder_id.to_string()];
         while !frontier.is_empty() {
@@ -1220,7 +1244,7 @@ impl DatabaseProvider for SqliteProvider {
                 q = q.bind(f);
             }
             let rows = q
-                .fetch_all(&self.pool)
+                .fetch_all(&mut *tx)
                 .await
                 .map_err(|e| format!("Failed to walk folder tree: {e}"))?;
             frontier = rows.iter().map(|r| r.get::<String, _>("id")).collect();
@@ -1238,10 +1262,13 @@ impl DatabaseProvider for SqliteProvider {
             q = q.bind(f);
         }
         let result = q
-            .execute(&self.pool)
+            .execute(&mut *tx)
             .await
             .map_err(|e| format!("Failed to bulk set login sequence: {e}"))?;
 
+        tx.commit()
+            .await
+            .map_err(|e| format!("Failed to commit: {e}"))?;
         Ok(result.rows_affected() as u32)
     }
 

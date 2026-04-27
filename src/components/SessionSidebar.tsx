@@ -187,12 +187,14 @@ export function SessionSidebar(): React.JSX.Element {
   }, []);
 
   // Ctrl+D clones the currently selected session.
+  const isPgMode = dbBackend === "postgres";
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent): void => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "d") {
         if (selectedItemType !== "session" || !selectedItemId) return;
         const session = sessions.find((s) => s.id === selectedItemId);
         if (!session) return;
+        if (isPgMode && session.owner !== pgUser) return;
         e.preventDefault();
         cloneSession(session);
       }
@@ -201,7 +203,7 @@ export function SessionSidebar(): React.JSX.Element {
     return () => {
       document.removeEventListener("keydown", handleKeyDown);
     };
-  }, [selectedItemId, selectedItemType, sessions, cloneSession]);
+  }, [selectedItemId, selectedItemType, sessions, cloneSession, isPgMode, pgUser]);
 
   const handleSessionDoubleClick = useCallback(
     (id: string) => {
@@ -239,11 +241,12 @@ export function SessionSidebar(): React.JSX.Element {
         return;
       }
 
-      // F2: rename folder or edit session
+      // F2: rename folder or edit session (owned items only in PG mode)
       if (key === "F2" && selectedItemId) {
         e.preventDefault();
         if (selectedItemType === "folder") {
           const folder = folders.find((f) => f.id === selectedItemId);
+          if (isPgMode && folder?.owner !== pgUser) return;
           setFolderDialog({
             mode: "rename",
             parentId: null,
@@ -252,28 +255,28 @@ export function SessionSidebar(): React.JSX.Element {
           });
         } else if (selectedItemType === "session") {
           const session = sessions.find((s) => s.id === selectedItemId);
-          if (session) {
-            setSessionDialog({
-              mode: "edit",
+          if (!session) return;
+          if (isPgMode && session.owner !== pgUser) return;
+          setSessionDialog({
+            mode: "edit",
+            folderId: session.folder_id,
+            sessionId: session.id,
+            initial: {
               folderId: session.folder_id,
-              sessionId: session.id,
-              initial: {
-                folderId: session.folder_id,
-                name: session.name,
-                hostname: session.hostname,
-                port: session.port,
-                protocol: session.protocol,
-                username: session.username,
-                tags: tagsToDisplay(session.tags),
-                icon: session.icon,
-                jumpHostId: session.jump_host_id,
-                highlightProfileId: session.highlight_profile_id,
-                credentialProfileId: session.credential_profile_id,
-                loginSequenceId: session.login_sequence_id,
-                legacyAlgorithms: session.legacy_algorithms,
-              },
-            });
-          }
+              name: session.name,
+              hostname: session.hostname,
+              port: session.port,
+              protocol: session.protocol,
+              username: session.username,
+              tags: tagsToDisplay(session.tags),
+              icon: session.icon,
+              jumpHostId: session.jump_host_id,
+              highlightProfileId: session.highlight_profile_id,
+              credentialProfileId: session.credential_profile_id,
+              loginSequenceId: session.login_sequence_id,
+              legacyAlgorithms: session.legacy_algorithms,
+            },
+          });
         }
         return;
       }
@@ -281,7 +284,6 @@ export function SessionSidebar(): React.JSX.Element {
       // Delete: trigger delete confirmation for selected item (owned items only in PG mode)
       if (key === "Delete" && selectedItemId) {
         e.preventDefault();
-        const isPgMode = dbBackend === "postgres";
         if (selectedItemType === "folder") {
           const folderId = selectedItemId;
           const targetFolder = folders.find((f) => f.id === folderId);
@@ -398,6 +400,8 @@ export function SessionSidebar(): React.JSX.Element {
       deleteFolder,
       deleteSession,
       clearSelection,
+      isPgMode,
+      pgUser,
       t,
     ],
   );
