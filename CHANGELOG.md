@@ -13,6 +13,9 @@ All notable changes to this project are documented in this file.
 
 ### Changed
 
+- CSS selector in scroll-into-view helper now uses `CSS.escape()` to prevent malformed queries from non-UUID IDs
+- Expanded folder state loaded from localStorage is now validated at startup to prevent crashes from corrupted data
+
 ### Removed
 
 ### 0.11.1 - 2026-04-23

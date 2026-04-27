@@ -215,7 +215,7 @@ export function SessionSidebar(): React.JSX.Element {
 
   /** Scroll the newly-selected tree item into view. */
   const scrollItemIntoView = useCallback((id: string): void => {
-    const el = document.querySelector<HTMLElement>(`[data-item-id="${id}"]`);
+    const el = document.querySelector<HTMLElement>(`[data-item-id="${CSS.escape(id)}"]`);
     el?.scrollIntoView({ block: "nearest" });
   }, []);
 

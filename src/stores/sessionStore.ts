@@ -140,7 +140,18 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   folders: [],
   sessions: [],
   expandedFolderIds: new Set<string>(
-    JSON.parse(localStorage.getItem("shellstation:expandedFolders") ?? "[]") as string[],
+    (() => {
+      try {
+        const parsed: unknown = JSON.parse(
+          localStorage.getItem("shellstation:expandedFolders") ?? "[]",
+        );
+        return Array.isArray(parsed)
+          ? parsed.filter((x): x is string => typeof x === "string")
+          : [];
+      } catch {
+        return [];
+      }
+    })(),
   ),
   selectedItemId: null,
   selectedItemType: null,
