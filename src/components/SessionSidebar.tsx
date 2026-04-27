@@ -531,51 +531,51 @@ export function SessionSidebar(): React.JSX.Element {
               },
             ]
           : []),
-        {
-          label: t("contextMenu.rename"),
-          onClick: () => {
-            setFolderDialog({
-              mode: "rename",
-              parentId: null,
-              folderId: ctx.id,
-              initialName: folder?.name,
-            });
-          },
-        },
-        {
-          label: t("contextMenu.sortAlphabetically"),
-          onClick: () => {
-            store.sortFolderAlphabetically(ctx.id, true).catch(noop);
-          },
-        },
         ...(!isPg || isOwner
           ? [
+              {
+                label: t("contextMenu.rename"),
+                onClick: () => {
+                  setFolderDialog({
+                    mode: "rename",
+                    parentId: null,
+                    folderId: ctx.id,
+                    initialName: folder?.name,
+                  });
+                },
+              },
+              {
+                label: t("contextMenu.sortAlphabetically"),
+                onClick: () => {
+                  store.sortFolderAlphabetically(ctx.id, true).catch(noop);
+                },
+              },
               {
                 label: t("contextMenu.sortByHostname"),
                 onClick: () => {
                   store.sortSessionsByHostname(ctx.id).catch(noop);
                 },
               },
+              {
+                label: t("contextMenu.applyCredentialProfile"),
+                onClick: () => {
+                  setCredentialFolder({ id: ctx.id, name: folder?.name ?? "" });
+                },
+              },
+              {
+                label: t("contextMenu.applyLoginSequence"),
+                onClick: () => {
+                  setLoginSequenceFolder({ id: ctx.id, name: folder?.name ?? "" });
+                },
+              },
+              {
+                label: t("contextMenu.bulkEdit"),
+                onClick: () => {
+                  setBulkEditFolder({ id: ctx.id, name: folder?.name ?? "" });
+                },
+              },
             ]
           : []),
-        {
-          label: t("contextMenu.applyCredentialProfile"),
-          onClick: () => {
-            setCredentialFolder({ id: ctx.id, name: folder?.name ?? "" });
-          },
-        },
-        {
-          label: t("contextMenu.applyLoginSequence"),
-          onClick: () => {
-            setLoginSequenceFolder({ id: ctx.id, name: folder?.name ?? "" });
-          },
-        },
-        {
-          label: t("contextMenu.bulkEdit"),
-          onClick: () => {
-            setBulkEditFolder({ id: ctx.id, name: folder?.name ?? "" });
-          },
-        },
         ...(!isPg || isOwner
           ? [
               {
@@ -653,38 +653,42 @@ export function SessionSidebar(): React.JSX.Element {
           handleSessionDoubleClick(ctx.id);
         },
       },
-      {
-        label: t("contextMenu.edit"),
-        onClick: () => {
-          if (!session) return;
-          setSessionDialog({
-            mode: "edit",
-            folderId: session.folder_id,
-            sessionId: session.id,
-            initial: {
-              folderId: session.folder_id,
-              name: session.name,
-              hostname: session.hostname,
-              port: session.port,
-              protocol: session.protocol,
-              username: session.username,
-              tags: tagsToDisplay(session.tags),
-              icon: session.icon,
-              jumpHostId: session.jump_host_id,
-              highlightProfileId: session.highlight_profile_id,
-              credentialProfileId: session.credential_profile_id,
-              loginSequenceId: session.login_sequence_id,
-              legacyAlgorithms: session.legacy_algorithms,
+      ...(!isPg || isSessionOwner
+        ? [
+            {
+              label: t("contextMenu.edit"),
+              onClick: () => {
+                if (!session) return;
+                setSessionDialog({
+                  mode: "edit",
+                  folderId: session.folder_id,
+                  sessionId: session.id,
+                  initial: {
+                    folderId: session.folder_id,
+                    name: session.name,
+                    hostname: session.hostname,
+                    port: session.port,
+                    protocol: session.protocol,
+                    username: session.username,
+                    tags: tagsToDisplay(session.tags),
+                    icon: session.icon,
+                    jumpHostId: session.jump_host_id,
+                    highlightProfileId: session.highlight_profile_id,
+                    credentialProfileId: session.credential_profile_id,
+                    loginSequenceId: session.login_sequence_id,
+                    legacyAlgorithms: session.legacy_algorithms,
+                  },
+                });
+              },
             },
-          });
-        },
-      },
-      {
-        label: t("contextMenu.clone"),
-        onClick: () => {
-          if (session) cloneSession(session);
-        },
-      },
+            {
+              label: t("contextMenu.clone"),
+              onClick: () => {
+                if (session) cloneSession(session);
+              },
+            },
+          ]
+        : []),
       ...(!isPg || isSessionOwner
         ? [
             {

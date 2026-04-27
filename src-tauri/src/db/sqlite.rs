@@ -480,37 +480,66 @@ impl DatabaseProvider for SqliteProvider {
         ordered_ids: Vec<Uuid>,
     ) -> DbResult<()> {
         let parent_str = parent_id.map(|u| u.to_string());
+
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| format!("Failed to begin transaction: {e}"))?;
+
         for (i, id) in ordered_ids.iter().enumerate() {
             sqlx::query("UPDATE folders SET sort_order = ? WHERE id = ? AND parent_id IS ?")
                 .bind(i as i32)
                 .bind(id.to_string())
                 .bind(&parent_str)
-                .execute(&self.pool)
+                .execute(&mut *tx)
                 .await
                 .map_err(|e| format!("Failed to reorder folders: {e}"))?;
         }
+
+        tx.commit()
+            .await
+            .map_err(|e| format!("Failed to commit: {e}"))?;
         Ok(())
     }
 
     async fn reorder_sessions(&self, folder_id: Uuid, ordered_ids: Vec<Uuid>) -> DbResult<()> {
         let folder_str = folder_id.to_string();
+
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| format!("Failed to begin transaction: {e}"))?;
+
         for (i, id) in ordered_ids.iter().enumerate() {
             sqlx::query("UPDATE sessions SET sort_order = ? WHERE id = ? AND folder_id = ?")
                 .bind(i as i32)
                 .bind(id.to_string())
                 .bind(&folder_str)
-                .execute(&self.pool)
+                .execute(&mut *tx)
                 .await
                 .map_err(|e| format!("Failed to reorder sessions: {e}"))?;
         }
+
+        tx.commit()
+            .await
+            .map_err(|e| format!("Failed to commit: {e}"))?;
         Ok(())
     }
 
     async fn sort_folders_alphabetically(&self, parent_id: Option<Uuid>) -> DbResult<()> {
         let parent_str = parent_id.map(|u| u.to_string());
+
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| format!("Failed to begin transaction: {e}"))?;
+
         let rows = sqlx::query("SELECT id FROM folders WHERE parent_id IS ? ORDER BY name ASC")
             .bind(&parent_str)
-            .fetch_all(&self.pool)
+            .fetch_all(&mut *tx)
             .await
             .map_err(|e| format!("Failed to sort folders: {e}"))?;
 
@@ -519,18 +548,29 @@ impl DatabaseProvider for SqliteProvider {
             sqlx::query("UPDATE folders SET sort_order = ? WHERE id = ?")
                 .bind(i as i32)
                 .bind(&id)
-                .execute(&self.pool)
+                .execute(&mut *tx)
                 .await
                 .map_err(|e| format!("Failed to sort folders: {e}"))?;
         }
+
+        tx.commit()
+            .await
+            .map_err(|e| format!("Failed to commit: {e}"))?;
         Ok(())
     }
 
     async fn sort_sessions_alphabetically(&self, folder_id: Uuid) -> DbResult<()> {
         let folder_str = folder_id.to_string();
+
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| format!("Failed to begin transaction: {e}"))?;
+
         let rows = sqlx::query("SELECT id FROM sessions WHERE folder_id = ? ORDER BY name ASC")
             .bind(&folder_str)
-            .fetch_all(&self.pool)
+            .fetch_all(&mut *tx)
             .await
             .map_err(|e| format!("Failed to sort sessions: {e}"))?;
 
@@ -539,10 +579,14 @@ impl DatabaseProvider for SqliteProvider {
             sqlx::query("UPDATE sessions SET sort_order = ? WHERE id = ?")
                 .bind(i as i32)
                 .bind(&id)
-                .execute(&self.pool)
+                .execute(&mut *tx)
                 .await
                 .map_err(|e| format!("Failed to sort sessions: {e}"))?;
         }
+
+        tx.commit()
+            .await
+            .map_err(|e| format!("Failed to commit: {e}"))?;
         Ok(())
     }
 

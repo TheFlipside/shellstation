@@ -10,7 +10,16 @@ All notable changes to this project are documented in this file.
 
 ### Fixed
 
+- Any authenticated user could rename, sort, reorder, or bulk-edit shared folders and sessions they don't own in PostgreSQL mode (authorization bypass)
+- Sort and reorder operations in SQLite using non-atomic writes that could leave corrupted sort_order on crash
+
 ### Changed
+
+- All folder/session sort, reorder, rename, and bulk-edit operations enforce `owner = current_user` in PostgreSQL mode
+- Folder context menu items (Rename, Sort, Apply Credential Profile, Apply Login Sequence, Bulk Edit) restricted to owned folders in PostgreSQL mode
+- Session context menu items (Edit, Clone) restricted to owned sessions in PostgreSQL mode
+- Bulk operations (credential profile, login sequence, bulk edit) traverse only owned folder subtrees in PostgreSQL mode
+- SQLite reorder and sort operations now wrapped in transactions for atomicity
 
 ### Removed
 

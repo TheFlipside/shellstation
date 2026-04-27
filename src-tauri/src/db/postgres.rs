@@ -206,17 +206,17 @@ impl DatabaseProvider for PostgresProvider {
         rows.iter().map(row_to_folder).collect()
     }
 
-    // RLS enforces access: owner_all + shared_update (DESIGN.md §4.5).
     async fn rename_folder(&self, id: Uuid, name: &str) -> DbResult<()> {
-        let result = sqlx::query("UPDATE folders SET name = $1 WHERE id = $2")
-            .bind(name)
-            .bind(id.to_string())
-            .execute(&self.pool)
-            .await
-            .map_err(|e| format!("Failed to rename folder: {e}"))?;
+        let result =
+            sqlx::query("UPDATE folders SET name = $1 WHERE id = $2 AND owner = current_user")
+                .bind(name)
+                .bind(id.to_string())
+                .execute(&self.pool)
+                .await
+                .map_err(|e| format!("Failed to rename folder: {e}"))?;
 
         if result.rows_affected() == 0 {
-            return Err(format!("Folder {id} not found"));
+            return Err("You can only rename folders you own".to_string());
         }
         Ok(())
     }
@@ -665,10 +665,10 @@ impl DatabaseProvider for PostgresProvider {
             .await
             .map_err(|e| format!("Failed to begin transaction: {e}"))?;
 
-        // Lock all affected rows before updating to prevent interleaved reorders.
+        // Lock only owned rows to prevent interleaved reorders.
         sqlx::query(
             "SELECT id FROM folders \
-             WHERE parent_id IS NOT DISTINCT FROM $1 FOR UPDATE",
+             WHERE parent_id IS NOT DISTINCT FROM $1 AND owner = current_user FOR UPDATE",
         )
         .bind(&parent_str)
         .fetch_all(&mut *tx)
@@ -677,7 +677,8 @@ impl DatabaseProvider for PostgresProvider {
 
         for (i, id) in ordered_ids.iter().enumerate() {
             sqlx::query(
-                "UPDATE folders SET sort_order = $1 WHERE id = $2 AND parent_id IS NOT DISTINCT FROM $3",
+                "UPDATE folders SET sort_order = $1 \
+                 WHERE id = $2 AND parent_id IS NOT DISTINCT FROM $3 AND owner = current_user",
             )
             .bind(i as i32)
             .bind(id.to_string())
@@ -693,7 +694,6 @@ impl DatabaseProvider for PostgresProvider {
         Ok(())
     }
 
-    // RLS enforces access: owner_all + shared_update (DESIGN.md §4.5).
     async fn reorder_sessions(&self, folder_id: Uuid, ordered_ids: Vec<Uuid>) -> DbResult<()> {
         let folder_str = folder_id.to_string();
 
@@ -703,21 +703,27 @@ impl DatabaseProvider for PostgresProvider {
             .await
             .map_err(|e| format!("Failed to begin transaction: {e}"))?;
 
-        // Lock all affected rows before updating to prevent interleaved reorders.
-        sqlx::query("SELECT id FROM sessions WHERE folder_id = $1 FOR UPDATE")
-            .bind(&folder_str)
-            .fetch_all(&mut *tx)
-            .await
-            .map_err(|e| format!("Failed to lock sessions for reorder: {e}"))?;
+        // Lock only owned rows to prevent interleaved reorders.
+        sqlx::query(
+            "SELECT id FROM sessions \
+             WHERE folder_id = $1 AND owner = current_user FOR UPDATE",
+        )
+        .bind(&folder_str)
+        .fetch_all(&mut *tx)
+        .await
+        .map_err(|e| format!("Failed to lock sessions for reorder: {e}"))?;
 
         for (i, id) in ordered_ids.iter().enumerate() {
-            sqlx::query("UPDATE sessions SET sort_order = $1 WHERE id = $2 AND folder_id = $3")
-                .bind(i as i32)
-                .bind(id.to_string())
-                .bind(&folder_str)
-                .execute(&mut *tx)
-                .await
-                .map_err(|e| format!("Failed to reorder sessions: {e}"))?;
+            sqlx::query(
+                "UPDATE sessions SET sort_order = $1 \
+                 WHERE id = $2 AND folder_id = $3 AND owner = current_user",
+            )
+            .bind(i as i32)
+            .bind(id.to_string())
+            .bind(&folder_str)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| format!("Failed to reorder sessions: {e}"))?;
         }
 
         tx.commit()
@@ -735,10 +741,9 @@ impl DatabaseProvider for PostgresProvider {
             .await
             .map_err(|e| format!("Failed to begin transaction: {e}"))?;
 
-        // Lock and read in one step — FOR UPDATE prevents concurrent modifications.
         let rows = sqlx::query(
             "SELECT id FROM folders \
-             WHERE parent_id IS NOT DISTINCT FROM $1 \
+             WHERE parent_id IS NOT DISTINCT FROM $1 AND owner = current_user \
              ORDER BY name ASC FOR UPDATE",
         )
         .bind(&parent_str)
@@ -748,12 +753,15 @@ impl DatabaseProvider for PostgresProvider {
 
         for (i, row) in rows.iter().enumerate() {
             let id: String = row.get("id");
-            sqlx::query("UPDATE folders SET sort_order = $1 WHERE id = $2")
-                .bind(i as i32)
-                .bind(&id)
-                .execute(&mut *tx)
-                .await
-                .map_err(|e| format!("Failed to sort folders: {e}"))?;
+            sqlx::query(
+                "UPDATE folders SET sort_order = $1 \
+                 WHERE id = $2 AND owner = current_user",
+            )
+            .bind(i as i32)
+            .bind(&id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| format!("Failed to sort folders: {e}"))?;
         }
 
         tx.commit()
@@ -771,9 +779,9 @@ impl DatabaseProvider for PostgresProvider {
             .await
             .map_err(|e| format!("Failed to begin transaction: {e}"))?;
 
-        // Lock and read in one step — FOR UPDATE prevents concurrent modifications.
         let rows = sqlx::query(
-            "SELECT id FROM sessions WHERE folder_id = $1 \
+            "SELECT id FROM sessions \
+             WHERE folder_id = $1 AND owner = current_user \
              ORDER BY name ASC FOR UPDATE",
         )
         .bind(&folder_str)
@@ -783,12 +791,16 @@ impl DatabaseProvider for PostgresProvider {
 
         for (i, row) in rows.iter().enumerate() {
             let id: String = row.get("id");
-            sqlx::query("UPDATE sessions SET sort_order = $1 WHERE id = $2")
-                .bind(i as i32)
-                .bind(&id)
-                .execute(&mut *tx)
-                .await
-                .map_err(|e| format!("Failed to sort sessions: {e}"))?;
+            sqlx::query(
+                "UPDATE sessions SET sort_order = $1 \
+                 WHERE id = $2 AND folder_id = $3 AND owner = current_user",
+            )
+            .bind(i as i32)
+            .bind(&id)
+            .bind(&folder_str)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| format!("Failed to sort sessions: {e}"))?;
         }
 
         tx.commit()
@@ -1057,15 +1069,16 @@ impl DatabaseProvider for PostgresProvider {
         folder_id: Uuid,
         profile_id: Option<Uuid>,
     ) -> DbResult<u32> {
-        // Walk the folder subtree via a recursive CTE and update in one shot.
         let result = sqlx::query(
             "WITH RECURSIVE subtree(id) AS ( \
-                 SELECT id FROM folders WHERE id = $2 \
+                 SELECT id FROM folders WHERE id = $2 AND owner = current_user \
                  UNION ALL \
                  SELECT f.id FROM folders f JOIN subtree s ON f.parent_id = s.id \
+                     WHERE f.owner = current_user \
              ) \
              UPDATE sessions SET credential_profile_id = $1 \
-             WHERE folder_id IN (SELECT id FROM subtree) AND protocol != 'telnet'",
+             WHERE folder_id IN (SELECT id FROM subtree) \
+                 AND owner = current_user AND protocol != 'telnet'",
         )
         .bind(profile_id.map(|u| u.to_string()))
         .bind(folder_id.to_string())
@@ -1086,9 +1099,10 @@ impl DatabaseProvider for PostgresProvider {
         }
 
         let subtree_cte = "WITH RECURSIVE subtree(id) AS ( \
-            SELECT id FROM folders WHERE id = $1 \
+            SELECT id FROM folders WHERE id = $1 AND owner = current_user \
             UNION ALL \
             SELECT f.id FROM folders f JOIN subtree s ON f.parent_id = s.id \
+                WHERE f.owner = current_user \
         )";
 
         let mut total: u64 = 0;
@@ -1111,7 +1125,7 @@ impl DatabaseProvider for PostgresProvider {
             let sql = format!(
                 "{subtree_cte} \
                  UPDATE sessions SET {} \
-                 WHERE folder_id IN (SELECT id FROM subtree)",
+                 WHERE folder_id IN (SELECT id FROM subtree) AND owner = current_user",
                 setters.join(", "),
             );
             let mut q = sqlx::query(&sql).bind(folder_id.to_string());
@@ -1136,7 +1150,8 @@ impl DatabaseProvider for PostgresProvider {
             let sql = format!(
                 "{subtree_cte} \
                  UPDATE sessions SET jump_host_id = $2 \
-                 WHERE folder_id IN (SELECT id FROM subtree) AND protocol != 'telnet'",
+                 WHERE folder_id IN (SELECT id FROM subtree) \
+                     AND owner = current_user AND protocol != 'telnet'",
             );
             let result = sqlx::query(&sql)
                 .bind(folder_id.to_string())
@@ -1440,12 +1455,13 @@ impl DatabaseProvider for PostgresProvider {
     ) -> DbResult<u32> {
         let result = sqlx::query(
             "WITH RECURSIVE subtree(id) AS ( \
-                 SELECT id FROM folders WHERE id = $2 \
+                 SELECT id FROM folders WHERE id = $2 AND owner = current_user \
                  UNION ALL \
                  SELECT f.id FROM folders f JOIN subtree s ON f.parent_id = s.id \
+                     WHERE f.owner = current_user \
              ) \
              UPDATE sessions SET login_sequence_id = $1 \
-             WHERE folder_id IN (SELECT id FROM subtree)",
+             WHERE folder_id IN (SELECT id FROM subtree) AND owner = current_user",
         )
         .bind(sequence_id.map(|u| u.to_string()))
         .bind(folder_id.to_string())
