@@ -12,6 +12,7 @@ All notable changes to this project are documented in this file.
 
 - Any authenticated user could rename, sort, reorder, or bulk-edit shared folders and sessions they don't own in PostgreSQL mode (authorization bypass)
 - Any authenticated user could update another user's shared sessions via `update_session` in PostgreSQL mode (authorization bypass)
+- Drag-and-drop overlay offset from cursor when UI scale is not 100% (CSS zoom compensation)
 - Sort and reorder operations in SQLite using non-atomic writes that could leave corrupted sort_order on crash
 - Bulk operations (credential profile, login sequence, bulk edit) in SQLite using non-atomic writes that could leave inconsistent state on crash
 

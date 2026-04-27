@@ -10,6 +10,7 @@ import {
   useSensors,
   type DragStartEvent,
   type DragEndEvent,
+  type Modifier,
 } from "@dnd-kit/core";
 import { useSessionStore } from "../stores/sessionStore";
 import type { Folder, Session } from "../stores/sessionStore";
@@ -138,7 +139,22 @@ export function SessionSidebar(): React.JSX.Element {
     useSensor(KeyboardSensor),
   );
 
-  const { autoRefreshInterval } = useSettingsStore();
+  const { autoRefreshInterval, uiScale } = useSettingsStore();
+
+  // Compensate for CSS zoom on the sidebar container so dnd-kit positions
+  // the drag overlay correctly at non-100% UI scale.
+  const zoomModifier = useCallback<Modifier>(
+    ({ transform }) => {
+      const zoom = uiScale / 100;
+      return {
+        ...transform,
+        x: transform.x / zoom,
+        y: transform.y / zoom,
+      };
+    },
+    [uiScale],
+  );
+  const dndModifiers = useMemo(() => [zoomModifier], [zoomModifier]);
 
   const loadHighlightProfiles = useHighlightStore((s) => s.loadProfiles);
   const loadCredentialProfiles = useCredentialProfilesStore((s) => s.loadAll);
@@ -1123,7 +1139,7 @@ export function SessionSidebar(): React.JSX.Element {
             </div>
           )}
         </div>
-        <DragOverlay>
+        <DragOverlay modifiers={dndModifiers}>
           {(() => {
             const { folder, session } = getActiveItemData();
             if (folder) {
