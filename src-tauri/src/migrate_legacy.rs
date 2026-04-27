@@ -66,9 +66,7 @@ pub async fn migrate_legacy_credentials(
     // secret once in the OS keychain.
     let mut session_to_profile: HashMap<uuid::Uuid, uuid::Uuid> = HashMap::new();
     let mut profiles_created = 0u32;
-    let mut name_counter: u32 = 1;
-
-    for ((auth_type, username, _secret), indices) in &groups {
+    for (name_counter, ((auth_type, username, _secret), indices)) in (1_u32..).zip(groups.iter()) {
         // Translate the legacy auth_type ("password", "publickey") to the
         // profile auth_type vocabulary ("password", "key").
         let profile_auth_type = match auth_type.as_str() {
@@ -91,8 +89,6 @@ pub async fn migrate_legacy_credentials(
         } else {
             format!("{username} ({profile_auth_type})")
         };
-        name_counter += 1;
-
         let profile = match cred_db
             .create_credential_profile(NewCredentialProfile {
                 name: base_name.clone(),

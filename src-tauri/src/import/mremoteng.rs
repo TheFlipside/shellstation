@@ -99,10 +99,8 @@ pub fn parse(xml: &str) -> Result<ParseResult, String> {
                     _ => {}
                 }
             }
-            Ok(Event::End(ref e)) => {
-                if e.local_name().as_ref() == b"Node" {
-                    folder_stack.pop();
-                }
+            Ok(Event::End(ref e)) if e.local_name().as_ref() == b"Node" => {
+                folder_stack.pop();
             }
             Ok(Event::Eof) => break,
             Err(e) => {

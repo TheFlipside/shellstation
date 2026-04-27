@@ -15,6 +15,7 @@ All notable changes to this project are documented in this file.
 
 - CSS selector in scroll-into-view helper now uses `CSS.escape()` to prevent malformed queries from non-UUID IDs
 - Expanded folder state loaded from localStorage is now validated at startup to prevent crashes from corrupted data
+- Resolved clippy warnings: collapsible match arms in mRemoteNG/SecureCRT importers, explicit counter loop in legacy migration
 
 ### Removed
 

@@ -57,14 +57,12 @@ pub fn parse(xml: &str) -> Result<ParseResult, String> {
 fn find_sessions_key(reader: &mut Reader<&[u8]>) -> Result<bool, String> {
     loop {
         match reader.read_event() {
-            Ok(Event::Start(ref e)) => {
-                if e.local_name().as_ref() == b"key" {
-                    if get_attr(e, "name").as_deref() == Some("Sessions") {
-                        return Ok(true);
-                    }
-                    // Not the Sessions key — skip its entire subtree.
-                    skip_through_end(reader, b"key")?;
+            Ok(Event::Start(ref e)) if e.local_name().as_ref() == b"key" => {
+                if get_attr(e, "name").as_deref() == Some("Sessions") {
+                    return Ok(true);
                 }
+                // Not the Sessions key — skip its entire subtree.
+                skip_through_end(reader, b"key")?;
             }
             Ok(Event::Eof) => return Ok(false),
             Err(e) => {
@@ -238,10 +236,8 @@ fn parse_key_block(
                     }
                 }
             }
-            Ok(Event::End(ref e)) => {
-                if e.local_name().as_ref() == b"key" {
-                    break;
-                }
+            Ok(Event::End(ref e)) if e.local_name().as_ref() == b"key" => {
+                break;
             }
             Ok(Event::Eof) => break,
             Err(e) => {
