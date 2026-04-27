@@ -388,12 +388,14 @@ pub async fn set_visibility(
     let id_str = id_uuid.to_string();
     match item_type.as_str() {
         "folder" => {
-            let result = sqlx::query("UPDATE folders SET visibility = $1 WHERE id = $2")
-                .bind(&visibility)
-                .bind(&id_str)
-                .execute(pool)
-                .await
-                .map_err(|e| format!("Failed to set visibility: {e}"))?;
+            let result = sqlx::query(
+                "UPDATE folders SET visibility = $1 WHERE id = $2 AND owner = current_user",
+            )
+            .bind(&visibility)
+            .bind(&id_str)
+            .execute(pool)
+            .await
+            .map_err(|e| format!("Failed to set visibility: {e}"))?;
             if result.rows_affected() == 0 {
                 return Err("Item not found or you are not the owner".to_string());
             }
@@ -430,12 +432,14 @@ pub async fn set_visibility(
             .map_err(|e| format!("Failed to cascade session visibility: {e}"))?;
         }
         "session" => {
-            let result = sqlx::query("UPDATE sessions SET visibility = $1 WHERE id = $2")
-                .bind(&visibility)
-                .bind(&id_str)
-                .execute(pool)
-                .await
-                .map_err(|e| format!("Failed to set visibility: {e}"))?;
+            let result = sqlx::query(
+                "UPDATE sessions SET visibility = $1 WHERE id = $2 AND owner = current_user",
+            )
+            .bind(&visibility)
+            .bind(&id_str)
+            .execute(pool)
+            .await
+            .map_err(|e| format!("Failed to set visibility: {e}"))?;
             if result.rows_affected() == 0 {
                 return Err("Item not found or you are not the owner".to_string());
             }

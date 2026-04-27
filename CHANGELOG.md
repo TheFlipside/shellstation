@@ -11,12 +11,17 @@ All notable changes to this project are documented in this file.
 - Search results not updating after editing a session name, requiring a new search to see the change
 - Deleting a session or folder jumping the view to the top of the list instead of selecting the parent folder
 - Dialog overlays clipping behind the title bar and menu bar when UI scale is above 100%
+- Session dialog and move dialog showing orphaned folders with broken parent chains in PostgreSQL mode
+- Search returning sessions in unreachable folders that cannot be navigated to in the sidebar tree
+- Any authenticated user could toggle another user's shared folder/session visibility via `set_visibility` (authorization bypass)
 
 ### Changed
 
 - CSS selector in scroll-into-view helper now uses `CSS.escape()` to prevent malformed queries from non-UUID IDs
 - Expanded folder state loaded from localStorage is now validated at startup to prevent crashes from corrupted data
 - Resolved clippy warnings: collapsible match arms in mRemoteNG/SecureCRT importers, explicit counter loop in legacy migration
+- Folder picker in session and move dialogs now restricted to tree-reachable folders owned by the current user (PostgreSQL mode)
+- `set_visibility` command enforces ownership check before updating folder or session visibility
 
 ### Removed
 

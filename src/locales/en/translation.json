@@ -136,6 +136,7 @@
     "portLabel": "Port",
     "protocolLabel": "Protocol",
     "portRange": "Enter a port between 1 and 65535",
+    "noFolder": "No folder available — create a folder first",
     "usernameLabel": "Username",
     "usernamePlaceholder": "user",
     "authMethodLabel": "Auth Method",

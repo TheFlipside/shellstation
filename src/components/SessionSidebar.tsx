@@ -819,12 +819,61 @@ export function SessionSidebar(): React.JSX.Element {
     setMoveTarget(null);
   };
 
-  const displaySessions = searchResults ?? sessions;
+  // Compute which folders are reachable from root (parent chain resolves to null).
+  // Folders whose parent is missing from the visible set are orphaned and should not
+  // appear in folder pickers or contain searchable sessions.
+  const folderIds = useMemo(() => new Set(folders.map((f) => f.id)), [folders]);
+  const reachableFolderIds = useMemo(() => {
+    const folderMap = new Map(folders.map((f) => [f.id, f]));
+    const reachable = new Set<string>();
+    const memo = new Map<string, boolean>();
+    const isReachable = (id: string): boolean => {
+      const cached = memo.get(id);
+      if (cached !== undefined) return cached;
+      const folder = folderMap.get(id);
+      if (!folder) {
+        memo.set(id, false);
+        return false;
+      }
+      if (folder.parent_id === null) {
+        memo.set(id, true);
+        return true;
+      }
+      if (!folderMap.has(folder.parent_id)) {
+        memo.set(id, false);
+        return false;
+      }
+      // Guard against circular references
+      memo.set(id, false);
+      const result = isReachable(folder.parent_id);
+      memo.set(id, result);
+      return result;
+    };
+    for (const f of folders) {
+      if (isReachable(f.id)) reachable.add(f.id);
+    }
+    return reachable;
+  }, [folders]);
+
+  // Filter search results to exclude sessions in unreachable folders (orphaned
+  // due to broken parent chains after DB manipulation or multi-user RLS).
+  const displaySessions = useMemo(() => {
+    if (!searchResults) return sessions;
+    return searchResults.filter((s) => reachableFolderIds.has(s.folder_id));
+  }, [searchResults, sessions, reachableFolderIds]);
+
+  // Folders eligible for session/move dialogs: owned by current user and tree-reachable.
+  const ownedReachableFolders = useMemo(
+    () =>
+      dbBackend === "postgres"
+        ? folders.filter((f) => f.owner === pgUser && reachableFolderIds.has(f.id))
+        : folders,
+    [folders, dbBackend, pgUser, reachableFolderIds],
+  );
 
   // Orphan shared sessions: sessions whose folder_id doesn't match any loaded folder.
   // In PG mode with RLS, this happens when another user shares a session but its folder
   // is personal and therefore not visible.
-  const folderIds = useMemo(() => new Set(folders.map((f) => f.id)), [folders]);
   const orphanShared = useMemo(
     () => sessions.filter((s) => s.visibility === "shared" && !folderIds.has(s.folder_id)),
     [sessions, folderIds],
@@ -1095,7 +1144,7 @@ export function SessionSidebar(): React.JSX.Element {
           title={
             sessionDialog.mode === "create" ? t("session.dialogCreate") : t("session.dialogEdit")
           }
-          folders={dbBackend === "postgres" ? folders.filter((f) => f.owner === pgUser) : folders}
+          folders={ownedReachableFolders}
           sessions={sessions}
           defaultFolderId={sessionDialog.folderId}
           sessionId={sessionDialog.sessionId}
@@ -1279,7 +1328,7 @@ export function SessionSidebar(): React.JSX.Element {
 
       {moveTarget && (
         <MoveDialog
-          folders={dbBackend === "postgres" ? folders.filter((f) => f.owner === pgUser) : folders}
+          folders={ownedReachableFolders}
           excludeId={moveTarget.id}
           showRoot={moveTarget.type === "folder"}
           onSubmit={handleMoveSubmit}

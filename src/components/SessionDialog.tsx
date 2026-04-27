@@ -55,7 +55,11 @@ export function SessionDialog({
   const { t } = useTranslation();
   useEscapeKey(onCancel);
   const isPg = useAppStore((s) => s.dbBackend) === "postgres";
-  const [folderId, setFolderId] = useState(initial?.folderId ?? defaultFolderId);
+  const [folderId, setFolderId] = useState(() => {
+    const preferred = initial?.folderId ?? defaultFolderId;
+    if (folders.some((f) => f.id === preferred)) return preferred;
+    return folders[0]?.id ?? "";
+  });
   const [name, setName] = useState(initial?.name ?? "");
   const [hostname, setHostname] = useState(initial?.hostname ?? "");
   const [protocol, setProtocol] = useState(initial?.protocol ?? "ssh");
@@ -107,6 +111,10 @@ export function SessionDialog({
     e.preventDefault();
     setError("");
     if (!name.trim() || !hostname.trim()) return;
+    if (!folderId) {
+      setError(t("session.noFolder"));
+      return;
+    }
     const portNum = Number(port);
     if (!Number.isInteger(portNum) || portNum < 1 || portNum > 65535) {
       setError(t("session.portRange"));
