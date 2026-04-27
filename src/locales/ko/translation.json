@@ -9,7 +9,7 @@
     "empty": "폴더가 없습니다. +F를 클릭하여 만드세요.",
     "refresh": "새로고침",
     "sortAlphabetically": "알파벳순 정렬",
-    "sharedFolder": "Shared"
+    "sharedFolder": "공유"
   },
   "contextMenu": {
     "newSession": "새 세션",
@@ -27,8 +27,8 @@
     "applyCredentialProfile": "자격 증명 프로필 적용…",
     "applyLoginSequence": "로그인 시퀀스 적용…",
     "bulkEdit": "세션 일괄 편집…",
-    "makeShared": "Make Shared",
-    "makePersonal": "Make Personal"
+    "makeShared": "공유로 설정",
+    "makePersonal": "개인으로 설정"
   },
   "bulkEdit": {
     "title": "일괄 편집 — {{name}}",

@@ -9,7 +9,7 @@
     "empty": "还没有文件夹。点击 +F 创建一个。",
     "refresh": "刷新",
     "sortAlphabetically": "按字母顺序排列",
-    "sharedFolder": "Shared"
+    "sharedFolder": "共享"
   },
   "contextMenu": {
     "newSession": "新建会话",
@@ -27,8 +27,8 @@
     "applyCredentialProfile": "应用凭据配置文件…",
     "applyLoginSequence": "应用登录序列…",
     "bulkEdit": "批量编辑会话…",
-    "makeShared": "Make Shared",
-    "makePersonal": "Make Personal"
+    "makeShared": "设为共享",
+    "makePersonal": "设为个人"
   },
   "bulkEdit": {
     "title": "批量编辑 — {{name}}",

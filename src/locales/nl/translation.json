@@ -9,7 +9,7 @@
     "empty": "Nog geen mappen. Klik op +F om er een aan te maken.",
     "refresh": "Vernieuwen",
     "sortAlphabetically": "Alfabetisch sorteren",
-    "sharedFolder": "Shared"
+    "sharedFolder": "Gedeeld"
   },
   "contextMenu": {
     "newSession": "Nieuwe sessie",
@@ -27,8 +27,8 @@
     "applyCredentialProfile": "Inloggegevensprofiel toepassen…",
     "applyLoginSequence": "Inlogsequentie toepassen…",
     "bulkEdit": "Sessies bulkbewerken…",
-    "makeShared": "Make Shared",
-    "makePersonal": "Make Personal"
+    "makeShared": "Delen",
+    "makePersonal": "Persoonlijk maken"
   },
   "bulkEdit": {
     "title": "Bulkbewerking — {{name}}",

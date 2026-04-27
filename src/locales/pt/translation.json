@@ -9,7 +9,7 @@
     "empty": "Nenhuma pasta ainda. Clique em +F para criar uma.",
     "refresh": "Atualizar",
     "sortAlphabetically": "Ordenar alfabeticamente",
-    "sharedFolder": "Shared"
+    "sharedFolder": "Compartilhado"
   },
   "contextMenu": {
     "newSession": "Nova sessão",
@@ -27,8 +27,8 @@
     "applyCredentialProfile": "Aplicar perfil de credenciais…",
     "applyLoginSequence": "Aplicar sequência de login…",
     "bulkEdit": "Editar sessões em massa…",
-    "makeShared": "Make Shared",
-    "makePersonal": "Make Personal"
+    "makeShared": "Compartilhar",
+    "makePersonal": "Tornar pessoal"
   },
   "bulkEdit": {
     "title": "Edição em massa — {{name}}",

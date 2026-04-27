@@ -9,7 +9,7 @@
     "empty": "Папок пока нет. Нажмите +F, чтобы создать.",
     "refresh": "Обновить",
     "sortAlphabetically": "Сортировать по алфавиту",
-    "sharedFolder": "Shared"
+    "sharedFolder": "Общие"
   },
   "contextMenu": {
     "newSession": "Новая сессия",
@@ -27,8 +27,8 @@
     "applyCredentialProfile": "Применить профиль учётных данных…",
     "applyLoginSequence": "Применить последовательность входа…",
     "bulkEdit": "Массовое редактирование сессий…",
-    "makeShared": "Make Shared",
-    "makePersonal": "Make Personal"
+    "makeShared": "Сделать общим",
+    "makePersonal": "Сделать личным"
   },
   "bulkEdit": {
     "title": "Массовое редактирование — {{name}}",

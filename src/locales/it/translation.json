@@ -9,7 +9,7 @@
     "empty": "Nessuna cartella presente. Clicca +F per crearne una.",
     "refresh": "Aggiorna",
     "sortAlphabetically": "Ordina alfabeticamente",
-    "sharedFolder": "Shared"
+    "sharedFolder": "Condiviso"
   },
   "contextMenu": {
     "newSession": "Nuova sessione",
@@ -27,8 +27,8 @@
     "applyCredentialProfile": "Applica profilo credenziali…",
     "applyLoginSequence": "Applica sequenza di login…",
     "bulkEdit": "Modifica sessioni in blocco…",
-    "makeShared": "Make Shared",
-    "makePersonal": "Make Personal"
+    "makeShared": "Condividi",
+    "makePersonal": "Rendi personale"
   },
   "bulkEdit": {
     "title": "Modifica in blocco — {{name}}",

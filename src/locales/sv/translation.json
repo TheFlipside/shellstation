@@ -9,7 +9,7 @@
     "empty": "Inga mappar ännu. Klicka på +F för att skapa en.",
     "refresh": "Uppdatera",
     "sortAlphabetically": "Sortera alfabetiskt",
-    "sharedFolder": "Shared"
+    "sharedFolder": "Delad"
   },
   "contextMenu": {
     "newSession": "Ny session",
@@ -27,8 +27,8 @@
     "applyCredentialProfile": "Tillämpa inloggningsprofil…",
     "applyLoginSequence": "Tillämpa inloggningssekvens…",
     "bulkEdit": "Massredigera sessioner…",
-    "makeShared": "Make Shared",
-    "makePersonal": "Make Personal"
+    "makeShared": "Dela",
+    "makePersonal": "Gör personlig"
   },
   "bulkEdit": {
     "title": "Massredigering — {{name}}",

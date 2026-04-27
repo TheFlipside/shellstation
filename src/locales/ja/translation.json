@@ -9,7 +9,7 @@
     "empty": "フォルダーがまだありません。+Fをクリックして作成してください。",
     "refresh": "更新",
     "sortAlphabetically": "アルファベット順に並べ替え",
-    "sharedFolder": "Shared"
+    "sharedFolder": "共有"
   },
   "contextMenu": {
     "newSession": "新規セッション",
@@ -27,12 +27,12 @@
     "applyCredentialProfile": "認証プロファイルを適用…",
     "applyLoginSequence": "ログインシーケンスを適用…",
     "bulkEdit": "セッションを一括編集…",
-    "makeShared": "Make Shared",
-    "makePersonal": "Make Personal"
+    "makeShared": "共有にする",
+    "makePersonal": "個人用にする"
   },
   "bulkEdit": {
     "title": "一括編集 — {{name}}",
-    "info": "このフォルダーとサブフォルダー内のすべてのセッションに変更を適用します。チェックしたフィールドのみが更新されます。ジャンプホストは SSH セッションにのみ適用されます。",
+    "info": "このフォルダーとサブフォルダー内の全てのセッションに変更を適用します。チェックしたフィールドのみが更新されます。ジャンプホストは SSH セッションにのみ適用されます。",
     "setJumpHost": "ジャンプホストを設定",
     "setHighlightProfile": "ハイライトプロファイルを設定",
     "setLoginSequence": "ログインシーケンスを設定",
@@ -50,14 +50,14 @@
   },
   "folderLoginSequence": {
     "title": "ログインシーケンスを適用 — {{name}}",
-    "info": "このフォルダーとサブフォルダー内のすべてのセッションにログインシーケンスを割り当てます。",
+    "info": "このフォルダーとサブフォルダー内の全てのセッションにログインシーケンスを割り当てます。",
     "sequenceLabel": "ログインシーケンス",
     "sequenceNone": "(割り当てをクリア)",
     "success": "{{count}} 件のセッションを更新しました"
   },
   "folderCredential": {
     "title": "認証プロファイルを適用 — {{name}}",
-    "info": "このフォルダーとサブフォルダー内のすべての SSH セッションに認証プロファイルを割り当てます。Telnet セッションは除外されます。",
+    "info": "このフォルダーとサブフォルダー内の全ての SSH セッションに認証プロファイルを割り当てます。Telnet セッションは除外されます。",
     "profileLabel": "認証プロファイル",
     "profileNone": "(割り当てをクリア)",
     "success": "{{count}} 件のセッションを更新しました"
@@ -194,11 +194,11 @@
     "quickConnect": "クイック接続",
     "connect": "接続",
     "closeTabConfirm": "このタブを閉じてセッションを切断しますか？",
-    "closeAllTabsConfirm": "{{count}}個のタブをすべて閉じてセッションを切断しますか？",
+    "closeAllTabsConfirm": "{{count}}個のタブを全て閉じてセッションを切断しますか？",
     "tabContextClose": "タブを閉じる",
     "tabContextCloseOthers": "他のタブを閉じる",
     "tabContextCloseRight": "右側のタブを閉じる",
-    "tabContextCloseAll": "すべてのタブを閉じる",
+    "tabContextCloseAll": "全てのタブを閉じる",
     "tabContextClone": "タブを複製",
     "scrollLeft": "タブを左にスクロール",
     "scrollRight": "タブを右にスクロール",
@@ -333,7 +333,7 @@
     "dbSaveRestart": "保存して再起動",
     "dbRestartRequired": "変更を適用するにはアプリケーションの再起動が必要です。",
     "dbCredentialNote": "認証情報は常にユーザーごとにローカルに保存され、中央データベースには保存されません。",
-    "pgIsolationNote": "セッションの分離には個別の PostgreSQL アカウントが必要です。共有データベースアカウントでは、すべてのセッションがすべてのユーザーに表示されます。",
+    "pgIsolationNote": "セッションの分離には個別の PostgreSQL アカウントが必要です。共有データベースアカウントでは、全てのセッションが全てのユーザーに表示されます。",
     "userIdentLabel": "ユーザー ID",
     "userIdentHint": "認証プロファイルをマシン間でセッションに紐付けるために使用されます。ユーザーごとに一意である必要があります。",
     "userIdentSaved": "ユーザー ID を保存しました。",
@@ -404,7 +404,7 @@
   },
   "userIdent": {
     "promptTitle": "ユーザー ID の設定",
-    "promptMessage": "ユーザー ID は認証プロファイルをセッションに紐付けるために使用されます。各ユーザーで一意であり、すべてのマシンで同じである必要があります。",
+    "promptMessage": "ユーザー ID は認証プロファイルをセッションに紐付けるために使用されます。各ユーザーで一意であり、全てのマシンで同じである必要があります。",
     "promptHint": "ID を入力してください（例: ユーザー名）"
   }
 }

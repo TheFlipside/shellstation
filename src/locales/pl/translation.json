@@ -9,7 +9,7 @@
     "empty": "Brak folderów. Kliknij +F, aby utworzyć.",
     "refresh": "Odśwież",
     "sortAlphabetically": "Sortuj alfabetycznie",
-    "sharedFolder": "Shared"
+    "sharedFolder": "Udostępnione"
   },
   "contextMenu": {
     "newSession": "Nowa sesja",
@@ -27,8 +27,8 @@
     "applyCredentialProfile": "Zastosuj profil poświadczeń…",
     "applyLoginSequence": "Zastosuj sekwencję logowania…",
     "bulkEdit": "Edycja zbiorcza sesji…",
-    "makeShared": "Make Shared",
-    "makePersonal": "Make Personal"
+    "makeShared": "Udostępnij",
+    "makePersonal": "Ustaw jako osobiste"
   },
   "bulkEdit": {
     "title": "Edycja zbiorcza — {{name}}",

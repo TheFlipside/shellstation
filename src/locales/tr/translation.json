@@ -9,7 +9,7 @@
     "empty": "Henüz klasör yok. Oluşturmak için +F’ye tıklayın.",
     "refresh": "Yenile",
     "sortAlphabetically": "Alfabetik sırala",
-    "sharedFolder": "Shared"
+    "sharedFolder": "Paylaşılan"
   },
   "contextMenu": {
     "newSession": "Yeni Oturum",
@@ -27,8 +27,8 @@
     "applyCredentialProfile": "Kimlik profilini uygula…",
     "applyLoginSequence": "Oturum açma sırasını uygula…",
     "bulkEdit": "Oturumları toplu düzenle…",
-    "makeShared": "Make Shared",
-    "makePersonal": "Make Personal"
+    "makeShared": "Paylaş",
+    "makePersonal": "Kişisel yap"
   },
   "bulkEdit": {
     "title": "Toplu Düzenleme — {{name}}",

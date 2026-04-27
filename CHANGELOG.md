@@ -8,6 +8,8 @@ All notable changes to this project are documented in this file.
 
 ### Fixed
 
+- Translation fixes and improvements
+
 ### Changed
 
 ### Removed
