@@ -484,7 +484,6 @@ body,
   align-items: center;
   justify-content: center;
   z-index: 100;
-  zoom: var(--ui-zoom, 1);
   padding: 24px;
   overflow-y: auto;
 }
@@ -496,9 +495,10 @@ body,
   padding: 20px 24px;
   min-width: 360px;
   max-width: 480px;
-  max-height: calc(100vh - 48px);
+  max-height: calc((100vh - 48px) / var(--ui-zoom, 1));
   overflow-y: auto;
   box-shadow: 0 8px 32px var(--color-shadow);
+  zoom: var(--ui-zoom, 1);
 }
 
 .dialog-title {

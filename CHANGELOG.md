@@ -10,6 +10,7 @@ All notable changes to this project are documented in this file.
 
 - Search results not updating after editing a session name, requiring a new search to see the change
 - Deleting a session or folder jumping the view to the top of the list instead of selecting the parent folder
+- Dialog overlays clipping behind the title bar and menu bar when UI scale is above 100%
 
 ### Changed
 
