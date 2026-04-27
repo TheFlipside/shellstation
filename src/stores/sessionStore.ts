@@ -168,6 +168,15 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       localStorage.setItem("shellstation:expandedFolders", JSON.stringify([...next]));
     }
     set({ folders, sessions, expandedFolderIds: pruned ? next : expanded });
+    const query = get().searchQuery;
+    if (query.trim()) {
+      try {
+        const results = await invoke<Session[]>("session_search", { query });
+        set({ searchResults: results });
+      } catch {
+        set({ searchResults: null });
+      }
+    }
   },
 
   checkForUpdates: async () => {

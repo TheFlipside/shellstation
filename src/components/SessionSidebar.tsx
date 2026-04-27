@@ -278,11 +278,15 @@ export function SessionSidebar(): React.JSX.Element {
         return;
       }
 
-      // Delete: trigger delete confirmation for selected item
+      // Delete: trigger delete confirmation for selected item (owned items only in PG mode)
       if (key === "Delete" && selectedItemId) {
         e.preventDefault();
+        const isPgMode = dbBackend === "postgres";
         if (selectedItemType === "folder") {
           const folderId = selectedItemId;
+          const targetFolder = folders.find((f) => f.id === folderId);
+          if (isPgMode && targetFolder?.owner !== pgUser) return;
+          const parentId = targetFolder?.parent_id ?? null;
           const childCount = sessions.filter((s) => s.folder_id === folderId).length;
           const msg =
             childCount > 0
@@ -293,7 +297,12 @@ export function SessionSidebar(): React.JSX.Element {
             onConfirm: () => {
               deleteFolder(folderId)
                 .then(() => {
-                  clearSelection();
+                  if (parentId) {
+                    selectItem(parentId, "folder");
+                    requestAnimationFrame(() => scrollItemIntoView(parentId));
+                  } else {
+                    clearSelection();
+                  }
                   setConfirmDialog(null);
                 })
                 .catch(noop);
@@ -301,12 +310,19 @@ export function SessionSidebar(): React.JSX.Element {
           });
         } else if (selectedItemType === "session") {
           const session = sessions.find((s) => s.id === selectedItemId);
+          if (isPgMode && session?.owner !== pgUser) return;
           setConfirmDialog({
             message: t("session.deleteConfirm", { name: session?.name ?? "" }),
             onConfirm: () => {
+              const parentFolderId = session?.folder_id;
               deleteSession(selectedItemId)
                 .then(() => {
-                  clearSelection();
+                  if (parentFolderId) {
+                    selectItem(parentFolderId, "folder");
+                    requestAnimationFrame(() => scrollItemIntoView(parentFolderId));
+                  } else {
+                    clearSelection();
+                  }
                   setConfirmDialog(null);
                 })
                 .catch(noop);
@@ -582,6 +598,7 @@ export function SessionSidebar(): React.JSX.Element {
                 danger: true,
                 onClick: () => {
                   const folderId = ctx.id;
+                  const parentId = folder?.parent_id ?? null;
                   const childCount = sessions.filter((s) => s.folder_id === folderId).length;
                   const msg =
                     childCount > 0
@@ -592,7 +609,12 @@ export function SessionSidebar(): React.JSX.Element {
                     onConfirm: () => {
                       deleteFolder(folderId)
                         .then(() => {
-                          clearSelection();
+                          if (parentId) {
+                            selectItem(parentId, "folder");
+                            requestAnimationFrame(() => scrollItemIntoView(parentId));
+                          } else {
+                            clearSelection();
+                          }
                           setConfirmDialog(null);
                         })
                         .catch(noop);
@@ -683,12 +705,18 @@ export function SessionSidebar(): React.JSX.Element {
               danger: true,
               onClick: () => {
                 const sessionId = ctx.id;
+                const parentFolderId = session?.folder_id;
                 setConfirmDialog({
                   message: t("session.deleteConfirm", { name: session?.name ?? "" }),
                   onConfirm: () => {
                     deleteSession(sessionId)
                       .then(() => {
-                        clearSelection();
+                        if (parentFolderId) {
+                          selectItem(parentFolderId, "folder");
+                          requestAnimationFrame(() => scrollItemIntoView(parentFolderId));
+                        } else {
+                          clearSelection();
+                        }
                         setConfirmDialog(null);
                       })
                       .catch(noop);
@@ -704,7 +732,15 @@ export function SessionSidebar(): React.JSX.Element {
   const handleFolderSubmit = (name: string): void => {
     if (!folderDialog) return;
     if (folderDialog.mode === "create") {
-      createFolder(name, folderDialog.parentId).catch(noop);
+      const parentId = folderDialog.parentId;
+      createFolder(name, parentId)
+        .then(() => {
+          if (parentId) {
+            selectItem(parentId, "folder");
+            requestAnimationFrame(() => scrollItemIntoView(parentId));
+          }
+        })
+        .catch(noop);
     } else if (folderDialog.folderId) {
       renameFolder(folderDialog.folderId, name).catch(noop);
     }
@@ -738,7 +774,12 @@ export function SessionSidebar(): React.JSX.Element {
         credentialProfileId: data.credentialProfileId ?? undefined,
         loginSequenceId: data.loginSequenceId ?? undefined,
         legacyAlgorithms: data.legacyAlgorithms,
-      }).catch(noop);
+      })
+        .then(() => {
+          selectItem(data.folderId, "folder");
+          requestAnimationFrame(() => scrollItemIntoView(data.folderId));
+        })
+        .catch(noop);
     } else if (sessionDialog.sessionId) {
       const sid = sessionDialog.sessionId;
       const originalFolderId = sessionDialog.folderId;
