@@ -121,6 +121,100 @@ jobs:
           name: windows-bundles
           path: dist-release/*
 
+  build-macos-x64:
+    runs-on: macos
+    steps:
+      - name: Checkout
+        uses: https://github.com/actions/checkout@v4
+
+      - name: Verify toolchain
+        run: |
+          node --version
+          npm --version
+          rustc --version
+          cargo --version
+          rustup target add x86_64-apple-darwin
+
+      - name: Cache cargo registry
+        uses: https://github.com/actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: macos-x64-cargo-${{ hashFiles('src-tauri/Cargo.lock') }}
+          restore-keys: |
+            macos-x64-cargo-
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Build Tauri app (x64)
+        run: npm run tauri build -- --target x86_64-apple-darwin --bundles dmg
+
+      - name: Collect artifacts
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          mkdir -p dist-release
+          for f in src-tauri/target/x86_64-apple-darwin/release/bundle/dmg/*.dmg; do
+            [ -f "$f" ] || continue
+            cp "$f" "dist-release/ShellStation-macos-x64-${version}.dmg"
+          done
+          ls -la dist-release/
+
+      - name: Upload artifacts
+        uses: https://github.com/actions/upload-artifact@v3
+        with:
+          name: macos-x64-bundles
+          path: dist-release/*
+
+  build-macos-arm64:
+    runs-on: macos
+    steps:
+      - name: Checkout
+        uses: https://github.com/actions/checkout@v4
+
+      - name: Verify toolchain
+        run: |
+          node --version
+          npm --version
+          rustc --version
+          cargo --version
+          rustup target add aarch64-apple-darwin
+
+      - name: Cache cargo registry
+        uses: https://github.com/actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: macos-arm64-cargo-${{ hashFiles('src-tauri/Cargo.lock') }}
+          restore-keys: |
+            macos-arm64-cargo-
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Build Tauri app (arm64)
+        run: npm run tauri build -- --target aarch64-apple-darwin --bundles dmg
+
+      - name: Collect artifacts
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          mkdir -p dist-release
+          for f in src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg; do
+            [ -f "$f" ] || continue
+            cp "$f" "dist-release/ShellStation-macos-arm64-${version}.dmg"
+          done
+          ls -la dist-release/
+
+      - name: Upload artifacts
+        uses: https://github.com/actions/upload-artifact@v3
+        with:
+          name: macos-arm64-bundles
+          path: dist-release/*
+
   build-extras:
     runs-on: linux
     steps:
@@ -143,7 +237,7 @@ jobs:
           path: dist-release/*
 
   publish-release:
-    needs: [build-linux, build-windows, build-extras]
+    needs: [build-linux, build-windows, build-macos-x64, build-macos-arm64, build-extras]
     runs-on: linux
     steps:
       - name: Checkout
@@ -159,6 +253,18 @@ jobs:
         uses: https://github.com/actions/download-artifact@v3
         with:
           name: windows-bundles
+          path: release-files
+
+      - name: Download macOS x64 artifacts
+        uses: https://github.com/actions/download-artifact@v3
+        with:
+          name: macos-x64-bundles
+          path: release-files
+
+      - name: Download macOS arm64 artifacts
+        uses: https://github.com/actions/download-artifact@v3
+        with:
+          name: macos-arm64-bundles
           path: release-files
 
       - name: Download extras artifact
