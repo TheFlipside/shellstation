@@ -83,7 +83,7 @@ export const useSettingsStore = create<SettingsState>()(
     (set) => ({
       language: "",
       uiScale: 100,
-      themeMode: "system" as ThemeMode,
+      themeMode: "system",
       closeOnDisconnect: false,
       openLocalOnStartup: false,
       confirmOnQuit: true,
