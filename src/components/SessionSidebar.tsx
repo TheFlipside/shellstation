@@ -299,7 +299,9 @@ export function SessionSidebar(): React.JSX.Element {
                 .then(() => {
                   if (parentId) {
                     selectItem(parentId, "folder");
-                    requestAnimationFrame(() => scrollItemIntoView(parentId));
+                    requestAnimationFrame(() => {
+                      scrollItemIntoView(parentId);
+                    });
                   } else {
                     clearSelection();
                   }
@@ -319,7 +321,9 @@ export function SessionSidebar(): React.JSX.Element {
                 .then(() => {
                   if (parentFolderId) {
                     selectItem(parentFolderId, "folder");
-                    requestAnimationFrame(() => scrollItemIntoView(parentFolderId));
+                    requestAnimationFrame(() => {
+                      scrollItemIntoView(parentFolderId);
+                    });
                   } else {
                     clearSelection();
                   }
@@ -502,7 +506,6 @@ export function SessionSidebar(): React.JSX.Element {
   const getContextItems = (): ContextMenuItem[] => {
     if (!ctx) return [];
 
-    const { dbBackend, pgUser } = useAppStore.getState();
     const isPg = dbBackend === "postgres";
 
     if (ctx.type === "folder") {
@@ -611,7 +614,9 @@ export function SessionSidebar(): React.JSX.Element {
                         .then(() => {
                           if (parentId) {
                             selectItem(parentId, "folder");
-                            requestAnimationFrame(() => scrollItemIntoView(parentId));
+                            requestAnimationFrame(() => {
+                              scrollItemIntoView(parentId);
+                            });
                           } else {
                             clearSelection();
                           }
@@ -713,7 +718,9 @@ export function SessionSidebar(): React.JSX.Element {
                       .then(() => {
                         if (parentFolderId) {
                           selectItem(parentFolderId, "folder");
-                          requestAnimationFrame(() => scrollItemIntoView(parentFolderId));
+                          requestAnimationFrame(() => {
+                            scrollItemIntoView(parentFolderId);
+                          });
                         } else {
                           clearSelection();
                         }
@@ -737,7 +744,9 @@ export function SessionSidebar(): React.JSX.Element {
         .then(() => {
           if (parentId) {
             selectItem(parentId, "folder");
-            requestAnimationFrame(() => scrollItemIntoView(parentId));
+            requestAnimationFrame(() => {
+              scrollItemIntoView(parentId);
+            });
           }
         })
         .catch(noop);
@@ -777,7 +786,9 @@ export function SessionSidebar(): React.JSX.Element {
       })
         .then(() => {
           selectItem(data.folderId, "folder");
-          requestAnimationFrame(() => scrollItemIntoView(data.folderId));
+          requestAnimationFrame(() => {
+            scrollItemIntoView(data.folderId);
+          });
         })
         .catch(noop);
     } else if (sessionDialog.sessionId) {
@@ -902,7 +913,7 @@ export function SessionSidebar(): React.JSX.Element {
             title={t("sidebar.newSession")}
             onClick={() => {
               if (folders.length === 0) {
-                alert(t("sidebar.createFolderFirst"));
+                useToastStore.getState().addToast(t("sidebar.createFolderFirst"));
                 return;
               }
               let targetFolderId = folders[0].id;
