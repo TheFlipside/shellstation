@@ -21,6 +21,7 @@
     "edit": "Düzenle",
     "clone": "Oturumu Klonla",
     "sortAlphabetically": "Alfabetik sırala",
+    "sortByHostname": "Ana bilgisayar adı / IP'ye göre sırala",
     "setCredentials": "Kimlik bilgilerini ayarla…",
     "editSessions": "Oturumları düzenle…",
     "applyCredentialProfile": "Kimlik profilini uygula…",

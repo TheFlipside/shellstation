@@ -548,6 +548,16 @@ export function SessionSidebar(): React.JSX.Element {
             store.sortFolderAlphabetically(ctx.id, true).catch(noop);
           },
         },
+        ...(!isPg || isOwner
+          ? [
+              {
+                label: t("contextMenu.sortByHostname"),
+                onClick: () => {
+                  store.sortSessionsByHostname(ctx.id).catch(noop);
+                },
+              },
+            ]
+          : []),
         {
           label: t("contextMenu.applyCredentialProfile"),
           onClick: () => {

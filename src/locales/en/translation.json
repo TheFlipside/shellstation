@@ -21,6 +21,7 @@
     "edit": "Edit",
     "clone": "Clone Session",
     "sortAlphabetically": "Sort Alphabetically",
+    "sortByHostname": "Sort by Hostname / IP",
     "setCredentials": "Set Credentials…",
     "editSessions": "Edit Sessions…",
     "applyCredentialProfile": "Apply Credential Profile…",

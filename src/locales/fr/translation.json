@@ -21,6 +21,7 @@
     "edit": "Modifier",
     "clone": "Cloner la session",
     "sortAlphabetically": "Trier par ordre alphabétique",
+    "sortByHostname": "Trier par nom d'hôte / IP",
     "setCredentials": "Définir les identifiants…",
     "editSessions": "Modifier les sessions…",
     "applyCredentialProfile": "Appliquer un profil d'identifiants…",

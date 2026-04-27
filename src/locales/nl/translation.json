@@ -21,6 +21,7 @@
     "edit": "Bewerken",
     "clone": "Sessie klonen",
     "sortAlphabetically": "Alfabetisch sorteren",
+    "sortByHostname": "Sorteren op hostnaam / IP",
     "setCredentials": "Inloggegevens instellen…",
     "editSessions": "Sessies bewerken…",
     "applyCredentialProfile": "Inloggegevensprofiel toepassen…",

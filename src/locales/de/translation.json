@@ -21,6 +21,7 @@
     "edit": "Bearbeiten",
     "clone": "Sitzung klonen",
     "sortAlphabetically": "Alphabetisch sortieren",
+    "sortByHostname": "Nach Hostname / IP sortieren",
     "setCredentials": "Zugangsdaten setzen…",
     "editSessions": "Sitzungen bearbeiten…",
     "applyCredentialProfile": "Anmeldeprofil anwenden…",

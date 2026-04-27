@@ -12,7 +12,7 @@ use super::models::{
     NewSession, Session, UpdateCredentialProfile, UpdateHighlightProfile, UpdateLoginSequence,
     UpdateSession,
 };
-use super::{BulkSessionEdit, DatabaseProvider, DbResult};
+use super::{cmp_hostname, BulkSessionEdit, DatabaseProvider, DbResult};
 
 pub struct SqliteProvider {
     pool: SqlitePool,
@@ -543,6 +543,43 @@ impl DatabaseProvider for SqliteProvider {
                 .await
                 .map_err(|e| format!("Failed to sort sessions: {e}"))?;
         }
+        Ok(())
+    }
+
+    async fn sort_sessions_by_hostname(&self, folder_id: Uuid) -> DbResult<()> {
+        let folder_str = folder_id.to_string();
+
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| format!("Failed to begin transaction: {e}"))?;
+
+        let rows = sqlx::query("SELECT id, hostname FROM sessions WHERE folder_id = ?")
+            .bind(&folder_str)
+            .fetch_all(&mut *tx)
+            .await
+            .map_err(|e| format!("Failed to sort sessions: {e}"))?;
+
+        let mut pairs: Vec<(String, String)> = rows
+            .iter()
+            .map(|r| (r.get("id"), r.get("hostname")))
+            .collect();
+        pairs.sort_by(|a, b| cmp_hostname(&a.1, &b.1));
+
+        for (i, (id, _)) in pairs.iter().enumerate() {
+            sqlx::query("UPDATE sessions SET sort_order = ? WHERE id = ? AND folder_id = ?")
+                .bind(i as i32)
+                .bind(id)
+                .bind(&folder_str)
+                .execute(&mut *tx)
+                .await
+                .map_err(|e| format!("Failed to sort sessions: {e}"))?;
+        }
+
+        tx.commit()
+            .await
+            .map_err(|e| format!("Failed to commit: {e}"))?;
         Ok(())
     }
 

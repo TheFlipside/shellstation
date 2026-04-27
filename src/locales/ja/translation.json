@@ -21,6 +21,7 @@
     "edit": "編集",
     "clone": "セッションを複製",
     "sortAlphabetically": "アルファベット順に並べ替え",
+    "sortByHostname": "ホスト名 / IP で並べ替え",
     "setCredentials": "認証情報を設定…",
     "editSessions": "セッションを編集…",
     "applyCredentialProfile": "認証プロファイルを適用…",

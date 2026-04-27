@@ -83,6 +83,7 @@ interface SessionState {
   reorderSessions: (folderId: string, orderedIds: string[]) => Promise<void>;
   sortFolderAlphabetically: (parentId: string | null, recursive?: boolean) => Promise<void>;
   sortSessionsAlphabetically: (folderId: string) => Promise<void>;
+  sortSessionsByHostname: (folderId: string) => Promise<void>;
 
   // UI
   toggleFolder: (id: string) => void;
@@ -368,6 +369,11 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
   sortSessionsAlphabetically: async (folderId) => {
     await invoke("session_sort_alphabetically", { folderId });
+    await get().loadAll();
+  },
+
+  sortSessionsByHostname: async (folderId) => {
+    await invoke("session_sort_by_hostname", { folderId });
     await get().loadAll();
   },
 

@@ -508,6 +508,15 @@ pub async fn session_sort_alphabetically(
     state.0.sort_sessions_alphabetically(folder_uuid).await
 }
 
+#[tauri::command]
+pub async fn session_sort_by_hostname(
+    state: State<'_, DbState>,
+    folder_id: String,
+) -> Result<(), String> {
+    let folder_uuid = Uuid::parse_str(&folder_id).map_err(|e| format!("Invalid folder_id: {e}"))?;
+    state.0.sort_sessions_by_hostname(folder_uuid).await
+}
+
 /// Sort the immediate children (folders + sessions) of a parent folder
 /// alphabetically.  When `recursive` is true, descend into every subfolder
 /// and do the same.

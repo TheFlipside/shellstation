@@ -21,6 +21,7 @@
     "edit": "Edytuj",
     "clone": "Klonuj sesję",
     "sortAlphabetically": "Sortuj alfabetycznie",
+    "sortByHostname": "Sortuj wg nazwy hosta / IP",
     "setCredentials": "Ustaw dane logowania…",
     "editSessions": "Edytuj sesje…",
     "applyCredentialProfile": "Zastosuj profil poświadczeń…",

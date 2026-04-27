@@ -21,6 +21,7 @@
     "edit": "Редактировать",
     "clone": "Клонировать сессию",
     "sortAlphabetically": "Сортировать по алфавиту",
+    "sortByHostname": "Сортировать по имени хоста / IP",
     "setCredentials": "Установить учётные данные…",
     "editSessions": "Редактировать сессии…",
     "applyCredentialProfile": "Применить профиль учётных данных…",

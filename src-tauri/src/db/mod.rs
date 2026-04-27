@@ -2,6 +2,8 @@ pub mod models;
 pub mod postgres;
 pub mod sqlite;
 
+use std::cmp::Ordering;
+use std::net::IpAddr;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -14,6 +16,20 @@ use models::{
 };
 
 pub type DbResult<T> = Result<T, String>;
+
+/// Compare two hostnames with numeric IP-address awareness.
+/// IPv4 addresses sort before IPv6 (enum variant order of `IpAddr`), both
+/// sort before non-IP hostnames.  Among IPs, octets/hextets are compared
+/// numerically (so 10.0.0.2 < 10.0.0.10).  Non-IP hostnames fall back to
+/// case-insensitive lexicographic order.
+pub fn cmp_hostname(a: &str, b: &str) -> Ordering {
+    match (a.parse::<IpAddr>(), b.parse::<IpAddr>()) {
+        (Ok(ia), Ok(ib)) => ia.cmp(&ib),
+        (Ok(_), Err(_)) => Ordering::Less,
+        (Err(_), Ok(_)) => Ordering::Greater,
+        (Err(_), Err(_)) => a.to_lowercase().cmp(&b.to_lowercase()),
+    }
+}
 
 /// Fields that can be updated in a bulk edit. `None` means "leave alone"; for
 /// nullable columns, `Some(None)` means "clear to NULL".
@@ -85,6 +101,10 @@ pub trait DatabaseProvider: Send + Sync {
 
     /// Reset sort_order for sessions inside a folder so they appear alphabetically.
     async fn sort_sessions_alphabetically(&self, folder_id: Uuid) -> DbResult<()>;
+
+    /// Reset sort_order for sessions inside a folder so they appear sorted by
+    /// hostname, with proper numeric ordering for IP addresses.
+    async fn sort_sessions_by_hostname(&self, folder_id: Uuid) -> DbResult<()>;
 
     // ── Credentials (metadata — secrets live in OS keychain) ─────────────
     //

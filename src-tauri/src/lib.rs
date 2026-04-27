@@ -954,6 +954,7 @@ pub fn run() {
             commands::session_reorder,
             commands::folder_sort_alphabetically,
             commands::session_sort_alphabetically,
+            commands::session_sort_by_hostname,
             // Credential Profiles
             commands::credential_profile_create,
             commands::credential_profile_list,

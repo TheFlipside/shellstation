@@ -21,6 +21,7 @@
     "edit": "编辑",
     "clone": "克隆会话",
     "sortAlphabetically": "按字母顺序排列",
+    "sortByHostname": "按主机名 / IP 排序",
     "setCredentials": "设置凭据…",
     "editSessions": "编辑会话…",
     "applyCredentialProfile": "应用凭据配置文件…",

@@ -21,6 +21,7 @@
     "edit": "편집",
     "clone": "세션 복제",
     "sortAlphabetically": "알파벳순 정렬",
+    "sortByHostname": "호스트명 / IP 순 정렬",
     "setCredentials": "자격 증명 설정…",
     "editSessions": "세션 편집…",
     "applyCredentialProfile": "자격 증명 프로필 적용…",

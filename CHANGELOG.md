@@ -6,6 +6,8 @@ All notable changes to this project are documented in this file.
 
 ### Added
 
+- "Sort by Hostname / IP" context menu action for folders, with numeric IP-address-aware ordering (e.g. 10.0.0.2 before 10.0.0.10)
+
 ### Fixed
 
 ### Changed
