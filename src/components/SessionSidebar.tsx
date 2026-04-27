@@ -980,6 +980,14 @@ export function SessionSidebar(): React.JSX.Element {
               clearSearch();
             }
           }}
+          onKeyDown={(e) => {
+            if (e.key === "Escape") {
+              e.preventDefault();
+              e.stopPropagation();
+              clearSearch();
+              treeRef.current?.focus();
+            }
+          }}
         />
         {searchQuery && (
           <button
