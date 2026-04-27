@@ -8,6 +8,14 @@ All notable changes to this project are documented in this file.
 
 ### Fixed
 
+### Changed
+
+### Removed
+
+### 0.11.2 - 2026-04-27
+
+### Fixed
+
 - Search results not updating after editing a session name, requiring a new search to see the change
 - Deleting a session or folder jumping the view to the top of the list instead of selecting the parent folder
 - Dialog overlays clipping behind the title bar and menu bar when UI scale is above 100%
@@ -22,8 +30,6 @@ All notable changes to this project are documented in this file.
 - Resolved clippy warnings: collapsible match arms in mRemoteNG/SecureCRT importers, explicit counter loop in legacy migration
 - Folder picker in session and move dialogs now restricted to tree-reachable folders owned by the current user (PostgreSQL mode)
 - `set_visibility` command enforces ownership check before updating folder or session visibility
-
-### Removed
 
 ### 0.11.1 - 2026-04-23
 
