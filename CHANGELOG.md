@@ -6,6 +6,8 @@ All notable changes to this project are documented in this file.
 
 ### Added
 
+- Optional "Confirm before pasting multi-line content" setting (Security section): when enabled, a preview dialog appears whenever pasted clipboard content contains line breaks or escape sequences. Helps prevent paste-jacking attacks where hidden commands embedded in copied text would execute on paste. Off by default.
+
 ### Fixed
 
 - Translation fixes and improvements

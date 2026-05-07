@@ -186,6 +186,12 @@
     "targetFolder": "目标文件夹",
     "root": "（根目录）"
   },
+  "pasteConfirm": {
+    "title": "确认粘贴",
+    "message": "即将向终端粘贴 {{count}} 行内容。请在继续之前检查下方内容。",
+    "confirm": "粘贴",
+    "truncated": "预览已截断；将粘贴完整内容。"
+  },
   "terminal": {
     "newTab": "终端 {{count}}",
     "newLocalTerminal": "新建本地终端",
@@ -300,6 +306,8 @@
     "copyOnSelectHint": "启用后，选中的文本会自动复制到剪贴板（PuTTY 样式）。禁用后，使用 Ctrl+Shift+C 复制。",
     "pasteOnRightClickLabel": "右键粘贴",
     "pasteOnRightClickHint": "启用后，在终端中右键点击会粘贴剪贴板内容（PuTTY 样式）。",
+    "confirmMultilinePasteLabel": "粘贴多行内容前确认",
+    "confirmMultilinePasteHint": "启用后，当粘贴的剪贴板内容包含换行符或转义序列时，会显示预览对话框。有助于防止意外执行复制文本中隐藏的命令（\"粘贴劫持\"）。",
     "database": "数据库",
     "dbBackendLabel": "存储后端",
     "dbSqlite": "本地 (SQLite)",

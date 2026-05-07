@@ -186,6 +186,12 @@
     "targetFolder": "Hedef klasör",
     "root": "(Kök)"
   },
+  "pasteConfirm": {
+    "title": "Yapıştırmayı onayla",
+    "message": "Terminale {{count}} satır yapıştırılacak. Devam etmeden önce aşağıdaki içeriği inceleyin.",
+    "confirm": "Yapıştır",
+    "truncated": "Önizleme kısaltıldı; tam içerik yapıştırılacak."
+  },
   "terminal": {
     "newTab": "Terminal {{count}}",
     "newLocalTerminal": "Yeni yerel terminal",
@@ -300,6 +306,8 @@
     "copyOnSelectHint": "Etkinleştirildiğinde seçilen metin otomatik olarak panoya kopyalanır (PuTTY tarzı). Devre dışı bırakıldığında Ctrl+Shift+C kullanın.",
     "pasteOnRightClickLabel": "Sağ tıkla yapıştır",
     "pasteOnRightClickHint": "Etkinleştirildiğinde terminalde sağ tıklama pano içeriğini yapıştırır (PuTTY tarzı).",
+    "confirmMultilinePasteLabel": "Çok satırlı yapıştırmadan önce onayla",
+    "confirmMultilinePasteHint": "Etkinleştirildiğinde, yapıştırılan pano içeriği satır sonları veya kaçış dizileri içerdiğinde bir önizleme iletişim kutusu görüntülenir. Kopyalanan metinde gizlenmiş komutların yanlışlıkla çalıştırılmasını önlemeye yardımcı olur (\"paste-jacking\").",
     "database": "Veritabanı",
     "dbBackendLabel": "Depolama arka ucu",
     "dbSqlite": "Yerel (SQLite)",

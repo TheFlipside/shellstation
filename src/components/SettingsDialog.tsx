@@ -95,6 +95,8 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
     setCopyOnSelect,
     pasteOnRightClick,
     setPasteOnRightClick,
+    confirmMultilinePaste,
+    setConfirmMultilinePaste,
     restrictPrivateIps,
     setRestrictPrivateIps,
     autoRefreshInterval,
@@ -858,6 +860,22 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
             {t("settings.restrictPrivateIpsLabel")}
           </label>
           <span className="settings-help" title={t("settings.restrictPrivateIpsHint")}>
+            ?
+          </span>
+        </div>
+        <div className="dialog-field dialog-field-row">
+          <input
+            type="checkbox"
+            id="settings-confirm-multiline-paste"
+            checked={confirmMultilinePaste}
+            onChange={(e) => {
+              setConfirmMultilinePaste(e.target.checked);
+            }}
+          />
+          <label htmlFor="settings-confirm-multiline-paste">
+            {t("settings.confirmMultilinePasteLabel")}
+          </label>
+          <span className="settings-help" title={t("settings.confirmMultilinePasteHint")}>
             ?
           </span>
         </div>

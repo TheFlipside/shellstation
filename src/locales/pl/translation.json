@@ -186,6 +186,12 @@
     "targetFolder": "Folder docelowy",
     "root": "(Katalog główny)"
   },
+  "pasteConfirm": {
+    "title": "Potwierdź wklejanie",
+    "message": "Za chwilę zostanie wklejonych {{count}} linii do terminala. Sprawdź zawartość poniżej, zanim kontynuujesz.",
+    "confirm": "Wklej",
+    "truncated": "Podgląd skrócony; zostanie wklejona pełna zawartość."
+  },
   "terminal": {
     "newTab": "Terminal {{count}}",
     "newLocalTerminal": "Nowy lokalny terminal",
@@ -300,6 +306,8 @@
     "copyOnSelectHint": "Po włączeniu zaznaczony tekst jest automatycznie kopiowany do schowka (styl PuTTY). Po wyłączeniu użyj Ctrl+Shift+C do kopiowania.",
     "pasteOnRightClickLabel": "Wklej prawym przyciskiem myszy",
     "pasteOnRightClickHint": "Po włączeniu kliknięcie prawym przyciskiem w terminalu wkleja zawartość schowka (styl PuTTY).",
+    "confirmMultilinePasteLabel": "Potwierdzaj wklejanie wielowierszowej zawartości",
+    "confirmMultilinePasteHint": "Po włączeniu, gdy wklejana zawartość schowka zawiera znaki nowej linii lub sekwencje sterujące, pojawia się okno podglądu. Pomaga to zapobiegać przypadkowemu wykonaniu poleceń ukrytych w skopiowanym tekście (\"paste-jacking\").",
     "database": "Baza danych",
     "dbBackendLabel": "Backend magazynowy",
     "dbSqlite": "Lokalna (SQLite)",

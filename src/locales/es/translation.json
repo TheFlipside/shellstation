@@ -186,6 +186,12 @@
     "targetFolder": "Carpeta destino",
     "root": "(Raíz)"
   },
+  "pasteConfirm": {
+    "title": "Confirmar pegado",
+    "message": "Se pegarán {{count}} líneas en el terminal. Revisa el contenido a continuación antes de continuar.",
+    "confirm": "Pegar",
+    "truncated": "Vista previa truncada; se pegará el contenido completo."
+  },
   "terminal": {
     "newTab": "Terminal {{count}}",
     "newLocalTerminal": "Nuevo terminal local",
@@ -300,6 +306,8 @@
     "copyOnSelectHint": "Cuando está activado, el texto seleccionado se copia automáticamente al portapapeles (estilo PuTTY). Cuando está desactivado, usa Ctrl+Mayús+C para copiar.",
     "pasteOnRightClickLabel": "Pegar con clic derecho",
     "pasteOnRightClickHint": "Cuando está activado, al hacer clic derecho en el terminal se pega el contenido del portapapeles (estilo PuTTY).",
+    "confirmMultilinePasteLabel": "Confirmar antes de pegar contenido multilínea",
+    "confirmMultilinePasteHint": "Cuando está habilitado, aparece un diálogo de vista previa cuando el contenido pegado del portapapeles contiene saltos de línea o secuencias de escape. Ayuda a evitar la ejecución accidental de comandos ocultos en el texto copiado («paste-jacking»).",
     "database": "Base de datos",
     "dbBackendLabel": "Backend de almacenamiento",
     "dbSqlite": "Local (SQLite)",

@@ -186,6 +186,12 @@
     "targetFolder": "Zielordner",
     "root": "(Stammverzeichnis)"
   },
+  "pasteConfirm": {
+    "title": "Einfügen bestätigen",
+    "message": "Es werden {{count}} Zeilen in das Terminal eingefügt. Überprüfen Sie den Inhalt unten, bevor Sie fortfahren.",
+    "confirm": "Einfügen",
+    "truncated": "Vorschau gekürzt; der vollständige Inhalt wird eingefügt."
+  },
   "terminal": {
     "newTab": "Terminal {{count}}",
     "newLocalTerminal": "Neues lokales Terminal",
@@ -300,6 +306,8 @@
     "copyOnSelectHint": "Wenn aktiviert, wird markierter Text automatisch in die Zwischenablage kopiert (PuTTY-Stil). Wenn deaktiviert, verwende Strg+Umschalt+C zum Kopieren.",
     "pasteOnRightClickLabel": "Einfügen per Rechtsklick",
     "pasteOnRightClickHint": "Wenn aktiviert, wird beim Rechtsklick im Terminal der Inhalt der Zwischenablage eingefügt (PuTTY-Stil).",
+    "confirmMultilinePasteLabel": "Bestätigung vor mehrzeiligem Einfügen",
+    "confirmMultilinePasteHint": "Wenn aktiviert, erscheint ein Vorschau-Dialog, sobald eingefügter Zwischenablage-Inhalt Zeilenumbrüche oder Steuerzeichen enthält. Hilft, das versehentliche Ausführen versteckter Befehle in kopiertem Text zu verhindern („Paste-Jacking\").",
     "database": "Datenbank",
     "dbBackendLabel": "Speicher-Backend",
     "dbSqlite": "Lokal (SQLite)",

@@ -186,6 +186,12 @@
     "targetFolder": "Cartella di destinazione",
     "root": "(Radice)"
   },
+  "pasteConfirm": {
+    "title": "Conferma incolla",
+    "message": "Stai per incollare {{count}} righe nel terminale. Controlla il contenuto qui sotto prima di continuare.",
+    "confirm": "Incolla",
+    "truncated": "Anteprima troncata; verrà incollato il contenuto completo."
+  },
   "terminal": {
     "newTab": "Terminale {{count}}",
     "newLocalTerminal": "Nuovo terminale locale",
@@ -300,6 +306,8 @@
     "copyOnSelectHint": "Quando attivato, il testo selezionato viene copiato automaticamente negli appunti (stile PuTTY). Quando disattivato, usa Ctrl+Maiusc+C per copiare.",
     "pasteOnRightClickLabel": "Incolla con clic destro",
     "pasteOnRightClickHint": "Quando attivato, il clic destro nel terminale incolla il contenuto degli appunti (stile PuTTY).",
+    "confirmMultilinePasteLabel": "Conferma prima di incollare contenuto multilinea",
+    "confirmMultilinePasteHint": "Quando abilitato, appare una finestra di anteprima quando il contenuto incollato dagli appunti contiene interruzioni di riga o sequenze di escape. Aiuta a prevenire l'esecuzione accidentale di comandi nascosti nel testo copiato (\"paste-jacking\").",
     "database": "Database",
     "dbBackendLabel": "Backend di archiviazione",
     "dbSqlite": "Locale (SQLite)",

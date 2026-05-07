@@ -186,6 +186,12 @@
     "targetFolder": "Pasta destino",
     "root": "(Raiz)"
   },
+  "pasteConfirm": {
+    "title": "Confirmar colagem",
+    "message": "Serão coladas {{count}} linhas no terminal. Reveja o conteúdo abaixo antes de continuar.",
+    "confirm": "Colar",
+    "truncated": "Pré-visualização truncada; o conteúdo completo será colado."
+  },
   "terminal": {
     "newTab": "Terminal {{count}}",
     "newLocalTerminal": "Novo terminal local",
@@ -300,6 +306,8 @@
     "copyOnSelectHint": "Quando ativado, o texto selecionado é copiado automaticamente para a área de transferência (estilo PuTTY). Quando desativado, use Ctrl+Shift+C para copiar.",
     "pasteOnRightClickLabel": "Colar com clique direito",
     "pasteOnRightClickHint": "Quando ativado, clicar com o botão direito no terminal cola o conteúdo da área de transferência (estilo PuTTY).",
+    "confirmMultilinePasteLabel": "Confirmar antes de colar conteúdo de várias linhas",
+    "confirmMultilinePasteHint": "Quando ativado, uma caixa de diálogo de pré-visualização aparece sempre que o conteúdo colado da área de transferência contém quebras de linha ou sequências de escape. Ajuda a evitar a execução acidental de comandos ocultos em texto copiado (\"paste-jacking\").",
     "database": "Banco de dados",
     "dbBackendLabel": "Backend de armazenamento",
     "dbSqlite": "Local (SQLite)",

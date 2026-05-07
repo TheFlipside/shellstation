@@ -186,6 +186,12 @@
     "targetFolder": "대상 폴더",
     "root": "(루트)"
   },
+  "pasteConfirm": {
+    "title": "붙여넣기 확인",
+    "message": "터미널에 {{count}}줄을 붙여넣으려 합니다. 계속하기 전에 아래 내용을 확인하세요.",
+    "confirm": "붙여넣기",
+    "truncated": "미리보기가 잘렸습니다. 전체 내용이 붙여넣어집니다."
+  },
   "terminal": {
     "newTab": "터미널 {{count}}",
     "newLocalTerminal": "새 로컬 터미널",
@@ -300,6 +306,8 @@
     "copyOnSelectHint": "활성화하면 선택한 텍스트가 클립보드에 자동 복사됩니다 (PuTTY 스타일). 비활성화하면 Ctrl+Shift+C로 복사합니다.",
     "pasteOnRightClickLabel": "우클릭으로 붙여넣기",
     "pasteOnRightClickHint": "활성화하면 터미널에서 우클릭 시 클립보드 내용이 붙여넣어집니다 (PuTTY 스타일).",
+    "confirmMultilinePasteLabel": "여러 줄 붙여넣기 전 확인",
+    "confirmMultilinePasteHint": "활성화하면 클립보드 내용에 줄 바꿈이나 이스케이프 시퀀스가 포함된 경우 미리보기 대화 상자가 표시됩니다. 복사된 텍스트에 숨겨진 명령어가 실수로 실행되는 것(\"페이스트 재킹\")을 방지하는 데 도움이 됩니다.",
     "database": "데이터베이스",
     "dbBackendLabel": "저장소 백엔드",
     "dbSqlite": "로컬 (SQLite)",

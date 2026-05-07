@@ -43,6 +43,7 @@ interface SettingsState {
   terminalFontSize: number;
   copyOnSelect: boolean;
   pasteOnRightClick: boolean;
+  confirmMultilinePaste: boolean;
   restrictPrivateIps: boolean;
   autoRefreshInterval: number;
   connectTimeout: number;
@@ -68,6 +69,7 @@ interface SettingsState {
   setTerminalFontSize: (size: number) => void;
   setCopyOnSelect: (value: boolean) => void;
   setPasteOnRightClick: (value: boolean) => void;
+  setConfirmMultilinePaste: (value: boolean) => void;
   setRestrictPrivateIps: (value: boolean) => void;
   setAutoRefreshInterval: (seconds: number) => void;
   setConnectTimeout: (seconds: number) => void;
@@ -92,6 +94,7 @@ export const useSettingsStore = create<SettingsState>()(
       terminalFontSize: 14,
       copyOnSelect: false,
       pasteOnRightClick: false,
+      confirmMultilinePaste: false,
       restrictPrivateIps: false,
       autoRefreshInterval: 0,
       connectTimeout: 10,
@@ -172,6 +175,9 @@ export const useSettingsStore = create<SettingsState>()(
       },
       setPasteOnRightClick: (value: boolean) => {
         set({ pasteOnRightClick: value });
+      },
+      setConfirmMultilinePaste: (value: boolean) => {
+        set({ confirmMultilinePaste: value });
       },
       setRestrictPrivateIps: (value: boolean) => {
         set({ restrictPrivateIps: value });

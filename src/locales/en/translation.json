@@ -187,6 +187,12 @@
     "targetFolder": "Target Folder",
     "root": "(Root)"
   },
+  "pasteConfirm": {
+    "title": "Confirm paste",
+    "message": "About to paste {{count}} lines into the terminal. Review the content below before continuing.",
+    "confirm": "Paste",
+    "truncated": "Preview truncated; the full content will be pasted."
+  },
   "terminal": {
     "newTab": "Terminal {{count}}",
     "newLocalTerminal": "New local terminal",
@@ -301,6 +307,8 @@
     "copyOnSelectHint": "When enabled, selected text is automatically copied to the clipboard (PuTTY-style). When disabled, use Ctrl+Shift+C to copy.",
     "pasteOnRightClickLabel": "Paste on right-click",
     "pasteOnRightClickHint": "When enabled, right-clicking in the terminal pastes clipboard content (PuTTY-style).",
+    "confirmMultilinePasteLabel": "Confirm before pasting multi-line content",
+    "confirmMultilinePasteHint": "When enabled, a preview dialog appears whenever pasted clipboard content contains line breaks or escape sequences. Helps prevent accidentally executing commands hidden in copied text (\"paste-jacking\").",
     "database": "Database",
     "dbBackendLabel": "Storage Backend",
     "dbSqlite": "Local (SQLite)",

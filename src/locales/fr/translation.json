@@ -186,6 +186,12 @@
     "targetFolder": "Dossier cible",
     "root": "(Racine)"
   },
+  "pasteConfirm": {
+    "title": "Confirmer le collage",
+    "message": "{{count}} lignes vont être collées dans le terminal. Vérifiez le contenu ci-dessous avant de continuer.",
+    "confirm": "Coller",
+    "truncated": "Aperçu tronqué ; le contenu complet sera collé."
+  },
   "terminal": {
     "newTab": "Terminal {{count}}",
     "newLocalTerminal": "Nouveau terminal local",
@@ -300,6 +306,8 @@
     "copyOnSelectHint": "Lorsqu'activé, le texte sélectionné est automatiquement copié dans le presse-papiers (style PuTTY). Lorsque désactivé, utilisez Ctrl+Maj+C pour copier.",
     "pasteOnRightClickLabel": "Coller au clic droit",
     "pasteOnRightClickHint": "Lorsqu'activé, un clic droit dans le terminal colle le contenu du presse-papiers (style PuTTY).",
+    "confirmMultilinePasteLabel": "Confirmer avant de coller un contenu multi-ligne",
+    "confirmMultilinePasteHint": "Si activé, une boîte de dialogue d'aperçu apparaît lorsque le contenu collé du presse-papiers contient des sauts de ligne ou des séquences d'échappement. Aide à prévenir l'exécution accidentelle de commandes cachées dans le texte copié (« paste-jacking »).",
     "database": "Base de données",
     "dbBackendLabel": "Backend de stockage",
     "dbSqlite": "Local (SQLite)",

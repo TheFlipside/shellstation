@@ -186,6 +186,12 @@
     "targetFolder": "Doelmap",
     "root": "(Hoofdmap)"
   },
+  "pasteConfirm": {
+    "title": "Plakken bevestigen",
+    "message": "Er worden {{count}} regels in de terminal geplakt. Controleer de inhoud hieronder voordat u doorgaat.",
+    "confirm": "Plakken",
+    "truncated": "Voorbeeld is afgekapt; de volledige inhoud wordt geplakt."
+  },
   "terminal": {
     "newTab": "Terminal {{count}}",
     "newLocalTerminal": "Nieuwe lokale terminal",
@@ -300,6 +306,8 @@
     "copyOnSelectHint": "Indien ingeschakeld wordt geselecteerde tekst automatisch naar het klembord gekopieerd (PuTTY-stijl). Indien uitgeschakeld gebruikt u Ctrl+Shift+C.",
     "pasteOnRightClickLabel": "Plakken bij rechtermuisklik",
     "pasteOnRightClickHint": "Indien ingeschakeld plakt rechtermuisklik in de terminal de klembordinhoud (PuTTY-stijl).",
+    "confirmMultilinePasteLabel": "Bevestigen voor plakken van meerregelige inhoud",
+    "confirmMultilinePasteHint": "Indien ingeschakeld verschijnt een voorbeeldvenster zodra geplakte klembordinhoud regeleinden of escape-sequenties bevat. Helpt voorkomen dat verborgen commando's in gekopieerde tekst per ongeluk worden uitgevoerd (\"paste-jacking\").",
     "database": "Database",
     "dbBackendLabel": "Opslagbackend",
     "dbSqlite": "Lokaal (SQLite)",

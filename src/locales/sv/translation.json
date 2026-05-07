@@ -186,6 +186,12 @@
     "targetFolder": "Målmapp",
     "root": "(Rot)"
   },
+  "pasteConfirm": {
+    "title": "Bekräfta inklistring",
+    "message": "{{count}} rader kommer att klistras in i terminalen. Granska innehållet nedan innan du fortsätter.",
+    "confirm": "Klistra in",
+    "truncated": "Förhandsgranskningen är avkortad; det fullständiga innehållet klistras in."
+  },
   "terminal": {
     "newTab": "Terminal {{count}}",
     "newLocalTerminal": "Ny lokal terminal",
@@ -300,6 +306,8 @@
     "copyOnSelectHint": "När aktiverat kopieras markerad text automatiskt till urklipp (PuTTY-stil). När inaktiverat använd Ctrl+Shift+C.",
     "pasteOnRightClickLabel": "Klistra in vid högerklick",
     "pasteOnRightClickHint": "När aktiverat klistrar högerklick i terminalen in urklippsinnehåll (PuTTY-stil).",
+    "confirmMultilinePasteLabel": "Bekräfta innan inklistring av flerradigt innehåll",
+    "confirmMultilinePasteHint": "När aktiverat visas en förhandsgranskningsdialog när inklistrat urklippsinnehåll innehåller radbrytningar eller escape-sekvenser. Hjälper till att förhindra oavsiktlig körning av dolda kommandon i kopierad text (\"paste-jacking\").",
     "database": "Databas",
     "dbBackendLabel": "Lagringsbackend",
     "dbSqlite": "Lokal (SQLite)",

@@ -186,6 +186,12 @@
     "targetFolder": "移動先フォルダー",
     "root": "（ルート）"
   },
+  "pasteConfirm": {
+    "title": "貼り付けの確認",
+    "message": "{{count}} 行をターミナルに貼り付けようとしています。続行する前に下の内容を確認してください。",
+    "confirm": "貼り付け",
+    "truncated": "プレビューは省略されています。実際には全文が貼り付けられます。"
+  },
   "terminal": {
     "newTab": "ターミナル {{count}}",
     "newLocalTerminal": "新規ローカルターミナル",
@@ -300,6 +306,8 @@
     "copyOnSelectHint": "有効にすると、選択したテキストが自動的にクリップボードにコピーされます（PuTTYスタイル）。無効にすると、Ctrl+Shift+Cでコピーします。",
     "pasteOnRightClickLabel": "右クリックで貼り付け",
     "pasteOnRightClickHint": "有効にすると、ターミナルでの右クリックでクリップボードの内容が貼り付けられます（PuTTYスタイル）。",
+    "confirmMultilinePasteLabel": "複数行の貼り付け前に確認する",
+    "confirmMultilinePasteHint": "有効な場合、貼り付けるクリップボードの内容に改行やエスケープシーケンスが含まれていると、プレビューダイアログが表示されます。コピーされたテキストに隠されたコマンドの誤実行（「ペーストジャッキング」）を防ぐのに役立ちます。",
     "database": "データベース",
     "dbBackendLabel": "ストレージバックエンド",
     "dbSqlite": "ローカル (SQLite)",

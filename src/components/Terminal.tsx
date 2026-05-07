@@ -13,6 +13,7 @@ import { useSessionStore } from "../stores/sessionStore";
 import { useHighlightStore } from "../stores/highlightStore";
 import { HighlightEngine } from "../highlightEngine";
 import { useTheme, type ResolvedTheme } from "../hooks/useTheme";
+import { PasteConfirmDialog } from "./PasteConfirmDialog";
 
 interface TerminalProps {
   sessionId: string;
@@ -120,12 +121,19 @@ export function Terminal({
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
 
-  const { terminalFontFamily, terminalFontSize, copyOnSelect, pasteOnRightClick } =
-    useSettingsStore();
+  const {
+    terminalFontFamily,
+    terminalFontSize,
+    copyOnSelect,
+    pasteOnRightClick,
+    confirmMultilinePaste,
+  } = useSettingsStore();
   const resolvedTheme = useTheme();
 
   // Per-tab zoom offset — not persisted, local to this terminal instance.
   const [localZoomOffset, setLocalZoomOffset] = useState(0);
+  // Pending paste content awaiting user confirmation (null = no dialog open).
+  const [pendingPaste, setPendingPaste] = useState<string | null>(null);
   const effectiveFontSize = Math.max(
     MIN_FONT_SIZE,
     Math.min(MAX_FONT_SIZE, terminalFontSize + localZoomOffset),
@@ -137,6 +145,10 @@ export function Terminal({
   copyOnSelectRef.current = copyOnSelect;
   const pasteOnRightClickRef = useRef(pasteOnRightClick);
   pasteOnRightClickRef.current = pasteOnRightClick;
+  const confirmMultilinePasteRef = useRef(confirmMultilinePaste);
+  confirmMultilinePasteRef.current = confirmMultilinePaste;
+  const pendingPasteRef = useRef<string | null>(pendingPaste);
+  pendingPasteRef.current = pendingPaste;
   const localZoomOffsetRef = useRef(localZoomOffset);
   localZoomOffsetRef.current = localZoomOffset;
   const baseFontSizeRef = useRef(terminalFontSize);
@@ -218,6 +230,26 @@ export function Terminal({
       invoke(writeCmd, { id: sessionId, data }).catch(noop);
     });
 
+    // Route clipboard text into the terminal. If the "warn before multi-line
+    // paste" setting is on and the content contains any C0/C1 control
+    // character (newline, ESC, BEL, BS, NUL, DEL, …; tab is allowed),
+    // open the confirmation dialog instead of pasting immediately.
+    // Subsequent paste attempts while a dialog is already open are dropped
+    // so the pending content can't be silently swapped under the user;
+    // pendingPasteRef is set synchronously to close the check-then-set
+    // race for paste events arriving in the same event-loop turn.
+    // eslint-disable-next-line no-control-regex
+    const CONTROL_CHAR_RE = /[\x00-\x08\x0a-\x1f\x7f-\x9f]/;
+    const attemptPaste = (text: string): void => {
+      if (confirmMultilinePasteRef.current && CONTROL_CHAR_RE.test(text)) {
+        if (pendingPasteRef.current !== null) return;
+        pendingPasteRef.current = text;
+        setPendingPaste(text);
+      } else {
+        term.paste(text);
+      }
+    };
+
     // Copy-on-select: when user finishes a selection, copy to clipboard.
     const onSelectionDisposable = term.onSelectionChange(() => {
       if (copyOnSelectRef.current) {
@@ -250,7 +282,7 @@ export function Terminal({
         void readText()
           .then((text) => {
             if (text) {
-              term.paste(text);
+              attemptPaste(text);
             }
           })
           .catch(noop);
@@ -312,13 +344,29 @@ export function Terminal({
         void readText()
           .then((text) => {
             if (text) {
-              term.paste(text);
+              attemptPaste(text);
             }
           })
           .catch(noop);
       }
     };
     container.addEventListener("mousedown", handleRightClick, true);
+
+    // Native browser paste (Ctrl+V, menu paste) — xterm.js attaches its own
+    // paste listener to its internal textarea and would otherwise call
+    // term.paste() directly, bypassing attemptPaste and defeating the
+    // confirmMultilinePaste setting. Intercept in the capture phase before
+    // xterm sees the event and route the content through attemptPaste.
+    const handleNativePaste = (event: ClipboardEvent): void => {
+      // Always consume the paste event so xterm's bubble-phase handler
+      // never sees it, even if clipboardData turns out to be empty.
+      event.preventDefault();
+      event.stopPropagation();
+      const text = event.clipboardData?.getData("text/plain");
+      if (!text) return;
+      attemptPaste(text);
+    };
+    container.addEventListener("paste", handleNativePaste, true);
 
     // Listen for terminal output.
     let outputUnlisten: UnlistenFn | null = null;
@@ -367,8 +415,10 @@ export function Terminal({
       onDataDisposable.dispose();
       onSelectionDisposable.dispose();
       container.removeEventListener("mousedown", handleRightClick, true);
+      container.removeEventListener("paste", handleNativePaste, true);
       if (outputUnlisten) outputUnlisten();
       if (exitUnlisten) exitUnlisten();
+      setPendingPaste(null);
       term.dispose();
       termRef.current = null;
       fitAddonRef.current = null;
@@ -400,9 +450,30 @@ export function Terminal({
   }, [visible]);
 
   return (
-    <div
-      ref={containerRef}
-      className={`terminal-instance${visible ? "" : " terminal-instance-hidden"}`}
-    />
+    <>
+      <div
+        ref={containerRef}
+        className={`terminal-instance${visible ? "" : " terminal-instance-hidden"}`}
+      />
+      {pendingPaste !== null ? (
+        <PasteConfirmDialog
+          content={pendingPaste}
+          onConfirm={() => {
+            // Functional updater reads the latest pending content, even if
+            // a re-render happened between the user clicking Confirm and
+            // this handler firing.
+            setPendingPaste((current) => {
+              if (current !== null) {
+                termRef.current?.paste(current);
+              }
+              return null;
+            });
+          }}
+          onCancel={() => {
+            setPendingPaste(null);
+          }}
+        />
+      ) : null}
+    </>
   );
 }
