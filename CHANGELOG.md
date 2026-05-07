@@ -15,6 +15,8 @@ All notable changes to this project are documented in this file.
 
 ### Changed
 
+- Updated Tauri to 2.11.1 (Rust crate and `@tauri-apps/api`), plus matching plugin versions
+
 ### Removed
 
 ### 0.11.3 - 2026-04-27
