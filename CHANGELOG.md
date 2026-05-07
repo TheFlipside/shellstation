@@ -6,6 +6,16 @@ All notable changes to this project are documented in this file.
 
 ### Added
 
+### Fixed
+
+### Changed
+
+### Removed
+
+### 0.11.4
+
+### Added
+
 - Optional "Confirm before pasting multi-line content" setting (Security section): when enabled, a preview dialog appears whenever pasted clipboard content contains line breaks or escape sequences. Helps prevent paste-jacking attacks where hidden commands embedded in copied text would execute on paste. Off by default.
 
 ### Fixed
@@ -16,8 +26,6 @@ All notable changes to this project are documented in this file.
 ### Changed
 
 - Updated Tauri to 2.11.1 (Rust crate and `@tauri-apps/api`), plus matching plugin versions
-
-### Removed
 
 ### 0.11.3 - 2026-04-27
 
