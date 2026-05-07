@@ -378,3 +378,21 @@ jobs:
               exit 1
             fi
           done
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GH_RELEASE_TOKEN }}
+          GH_REPO: TheFlipside/shellstation
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "GitHub release $TAG already exists; uploading assets with --clobber"
+            gh release upload "$TAG" release-files/* --clobber
+          else
+            echo "Creating GitHub release $TAG"
+            gh release create "$TAG" \
+              --title "ShellStation $TAG" \
+              --generate-notes \
+              release-files/*
+          fi
