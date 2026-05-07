@@ -250,7 +250,7 @@ export function Terminal({
         void readText()
           .then((text) => {
             if (text) {
-              invoke(writeCmd, { id: sessionId, data: text }).catch(noop);
+              term.paste(text);
             }
           })
           .catch(noop);
@@ -312,7 +312,7 @@ export function Terminal({
         void readText()
           .then((text) => {
             if (text) {
-              invoke(writeCmd, { id: sessionId, data: text }).catch(noop);
+              term.paste(text);
             }
           })
           .catch(noop);

@@ -9,6 +9,7 @@ All notable changes to this project are documented in this file.
 ### Fixed
 
 - Translation fixes and improvements
+- Pasting multi-line text on Windows inserted an extra blank line after each line (CRLF clipboard content is now normalized; bracketed paste mode is also honored when the remote shell enables it)
 
 ### Changed
 
