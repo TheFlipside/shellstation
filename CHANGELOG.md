@@ -19,6 +19,7 @@ All notable changes to this project are documented in this file.
 - `DndContext` was remounting on every folder/session add or delete (count-based key), aborting any in-flight drag
 - `addCommandButton`, `updateCommandButton`, `reorderCommandButtons`, and `setToastDismissSeconds` accepted unvalidated input that could bypass the limits enforced on rehydration
 - Confirming the SSH host-key verification dialog with Enter on a first-time connection opened the session twice: the dialog listener fired on the bubble phase after the sidebar's tree `onKeyDown` had already re-triggered the connect. `useEnterKey` now listens in the capture phase, uses a stack so only the topmost dialog reacts, and stops propagation before the event reaches background handlers.
+- `useEnterKey` / `useEscapeKey` now register a stable ref per hook instance instead of pushing the raw callback onto the stack. The stack only mutates on mount/unmount, eliminating two latent issues: StrictMode's intentional mount → unmount → mount no longer leaves duplicate entries, and unstable callbacks (inline arrow functions in dialog props) no longer churn the stack on every render. `useEscapeKey` also moves to the capture phase to match `useEnterKey`, so background tree/list handlers cannot fire before the dialog consumes the keypress.
 
 ### Security
 
