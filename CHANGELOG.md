@@ -6,11 +6,31 @@ All notable changes to this project are documented in this file.
 
 ### Added
 
+- Visible warning in settings when PostgreSQL SSL mode is set to `disable` (cleartext credentials over the wire) and a softer note for `prefer` (which falls back to cleartext when the server lacks TLS)
+- Keyboard activation (Enter/Space) on the shared-folder chevron in the sidebar (a11y)
+
 ### Fixed
+
+- Drag-and-drop overlay drifted away from the cursor at non-100% UI scale (regression after the Tauri 2.11 / wry 0.55 upgrade — webview now reports `getBoundingClientRect` and pointer-event coordinates in different units around CSS `zoom`, defeating the previous compensation modifier)
+- Search-result rows in the sidebar were skipped by `scrollIntoView` on selection because they lacked the `data-item-id` attribute the lookup queries
+- Shared-folder expansion state could persist after the folder disappeared, causing it to re-open expanded when shared sessions reappeared
+- "Saved" indicators for session logging, application logging, and user identity stayed visible indefinitely (or could fire `setState` on an unmounted dialog); they now auto-clear after 3 s and cancel cleanly on dialog close
+- Hidden `<input type="file">` elements leaked into `document.body` when the user dismissed the highlight, database, or mRemoteNG/SecureCRT import pickers without selecting a file
+- `DndContext` was remounting on every folder/session add or delete (count-based key), aborting any in-flight drag
+- `addCommandButton`, `updateCommandButton`, `reorderCommandButtons`, and `setToastDismissSeconds` accepted unvalidated input that could bypass the limits enforced on rehydration
+
+### Security
+
+- PostgreSQL password is no longer round-tripped from the OS keychain through Tauri IPC into webview state when opening Settings; the field loads empty and an empty submission preserves the existing keychain entry
+- `autoRefreshInterval` requires a minimum of 5 s (or 0 to disable); prevents a tampered persisted value from driving sub-second `session_data_fingerprint` polling against the IPC bridge
+- `setLanguage` validates against the bundled-locale allowlist before passing to i18next (defense against attacker-supplied keys reaching i18next's internal resource map via tampered localStorage)
+- Command-button rehydration now requires UUID-format ids and validates field shape (length, color regex)
 
 ### Changed
 
 ### Removed
+
+- 150% from the UI scale options. A small (~50 px) residual drag-overlay offset remains at exactly that zoom ratio under the new wry webview; 125% is now the maximum. Users with 150% saved are migrated to 125% on load.
 
 ### 0.11.4
 
@@ -220,4 +240,3 @@ All notable changes to this project are documented in this file.
 ### Removed
 
 - Obsolete dependency of russh-keys
-  

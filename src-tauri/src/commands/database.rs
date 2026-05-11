@@ -39,10 +39,10 @@ pub async fn db_get_config(state: State<'_, ConfigState>) -> Result<AppConfig, S
         .lock()
         .map_err(|e| format!("Config lock poisoned: {e}"))?
         .clone();
-    // Populate PostgreSQL password from OS keychain for the settings UI.
-    config.postgres.password = crate::credentials::retrieve(config::PG_PASSWORD_KEYCHAIN_REF)
-        .map(|z| (*z).clone())
-        .unwrap_or_default();
+    // Never return the PostgreSQL password to the webview. The settings UI
+    // shows an empty field; the keychain entry is preserved on save unless
+    // the user types a replacement value.
+    config.postgres.password.clear();
     Ok(config)
 }
 
@@ -326,42 +326,57 @@ pub async fn db_save_config(
     };
 
     // Store the PostgreSQL password in the OS keychain, not in config.json.
+    // An empty password from the frontend means "keep the existing keychain
+    // entry" — the settings UI does not display the stored password, so a
+    // blank field is the normal case when the user is changing other fields.
     // Verify the round-trip: after storing, immediately retrieve and compare.
     // This catches cases where the keychain backend silently corrupts or
     // truncates the value, so the user finds out at save time instead of on
     // the next app launch.
-    if db_backend == DbBackend::Postgres {
-        if let Err(e) = crate::credentials::store(config::PG_PASSWORD_KEYCHAIN_REF, &password) {
-            tracing::error!("Failed to store PostgreSQL password in keychain: {e}");
-            return Err(format!("Failed to store database password securely: {e}"));
+    let resolved_password = if db_backend == DbBackend::Postgres {
+        if password.is_empty() {
+            // Preserve the existing keychain entry. If none exists, fall back
+            // to an empty string so the save still proceeds; the test/connect
+            // flow will surface the missing password to the user.
+            crate::credentials::retrieve(config::PG_PASSWORD_KEYCHAIN_REF)
+                .map(|z| (*z).clone())
+                .unwrap_or_default()
+        } else {
+            if let Err(e) = crate::credentials::store(config::PG_PASSWORD_KEYCHAIN_REF, &password) {
+                tracing::error!("Failed to store PostgreSQL password in keychain: {e}");
+                return Err(format!("Failed to store database password securely: {e}"));
+            }
+            match crate::credentials::retrieve(config::PG_PASSWORD_KEYCHAIN_REF) {
+                Ok(round_tripped)
+                    if round_tripped.len() == password.len()
+                        && subtle::ConstantTimeEq::ct_eq(
+                            round_tripped.as_bytes(),
+                            password.as_bytes(),
+                        )
+                        .into() =>
+                {
+                    tracing::info!("PostgreSQL password stored and verified in keychain");
+                }
+                Ok(_) => {
+                    tracing::error!("PostgreSQL keychain round-trip verification failed");
+                    return Err(
+                        "Keychain round-trip verification failed: the OS keychain returned a \
+                         different value than what was stored. Database password not saved."
+                            .to_string(),
+                    );
+                }
+                Err(e) => {
+                    tracing::error!("Keychain round-trip read-back failed: {e}");
+                    return Err(format!(
+                        "Keychain round-trip verification failed: {e}. Database password not saved."
+                    ));
+                }
+            }
+            password
         }
-        match crate::credentials::retrieve(config::PG_PASSWORD_KEYCHAIN_REF) {
-            Ok(round_tripped)
-                if round_tripped.len() == password.len()
-                    && subtle::ConstantTimeEq::ct_eq(
-                        round_tripped.as_bytes(),
-                        password.as_bytes(),
-                    )
-                    .into() =>
-            {
-                tracing::info!("PostgreSQL password stored and verified in keychain");
-            }
-            Ok(_) => {
-                tracing::error!("PostgreSQL keychain round-trip verification failed");
-                return Err(
-                    "Keychain round-trip verification failed: the OS keychain returned a \
-                     different value than what was stored. Database password not saved."
-                        .to_string(),
-                );
-            }
-            Err(e) => {
-                tracing::error!("Keychain round-trip read-back failed: {e}");
-                return Err(format!(
-                    "Keychain round-trip verification failed: {e}. Database password not saved."
-                ));
-            }
-        }
-    }
+    } else {
+        password
+    };
 
     // Preserve user_ident across config saves.
     let existing_user_ident = state
@@ -379,7 +394,7 @@ pub async fn db_save_config(
             port,
             database,
             username,
-            password,
+            password: resolved_password,
             ssl_mode: ssl,
         },
         logging: existing_logging,

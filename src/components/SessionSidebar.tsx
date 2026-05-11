@@ -142,14 +142,23 @@ export function SessionSidebar(): React.JSX.Element {
   const { autoRefreshInterval, uiScale } = useSettingsStore();
 
   // Compensate for CSS zoom on the sidebar container so dnd-kit positions
-  // the drag overlay correctly at non-100% UI scale.
+  // the drag overlay correctly at non-100% UI scale. Two coupled effects:
+  //   - dnd-kit reports draggingNodeRect in screen pixels (post-zoom), so
+  //     the overlay is placed too far down/right by rect * (zoom - 1).
+  //   - dnd-kit reports the cursor transform pre-multiplied by zoom, so the
+  //     overlay translates further than the cursor each frame.
+  // The combined correction divides (transform - rect * (zoom - 1)) by zoom,
+  // cancelling both the initial-position excess and the movement
+  // amplification at once.
   const zoomModifier = useCallback<Modifier>(
-    ({ transform }) => {
+    ({ transform, draggingNodeRect }) => {
       const zoom = uiScale / 100;
+      const dx = draggingNodeRect ? draggingNodeRect.left * (zoom - 1) : 0;
+      const dy = draggingNodeRect ? draggingNodeRect.top * (zoom - 1) : 0;
       return {
         ...transform,
-        x: transform.x / zoom,
-        y: transform.y / zoom,
+        x: (transform.x - dx) / zoom,
+        y: (transform.y - dy) / zoom,
       };
     },
     [uiScale],
@@ -515,15 +524,15 @@ export function SessionSidebar(): React.JSX.Element {
     store.sortFolderAlphabetically(null).catch(noop);
   }, [store]);
 
-  const getActiveItemData = (): { folder?: Folder; session?: Session } => {
+  const getActiveItemData = useCallback((): { folder?: Folder; session?: Session } => {
     if (!activeItem) return {};
     if (activeItem.type === "folder") {
       return { folder: folders.find((f) => f.id === activeItem.id) };
     }
     return { session: sessions.find((s) => s.id === activeItem.id) };
-  };
+  }, [activeItem, folders, sessions]);
 
-  const getContextItems = (): ContextMenuItem[] => {
+  const getContextItems = useCallback((): ContextMenuItem[] => {
     if (!ctx) return [];
 
     const isPg = dbBackend === "postgres";
@@ -768,68 +777,63 @@ export function SessionSidebar(): React.JSX.Element {
           ]
         : []),
     ];
-  };
+  }, [
+    ctx,
+    dbBackend,
+    pgUser,
+    folders,
+    sessions,
+    t,
+    store,
+    loadAll,
+    cloneSession,
+    handleSessionDoubleClick,
+    scrollItemIntoView,
+    selectItem,
+    clearSelection,
+    deleteFolder,
+    deleteSession,
+  ]);
 
-  const handleFolderSubmit = (name: string): void => {
-    if (!folderDialog) return;
-    if (folderDialog.mode === "create") {
-      const parentId = folderDialog.parentId;
-      createFolder(name, parentId)
-        .then(() => {
-          if (parentId) {
-            selectItem(parentId, "folder");
-            requestAnimationFrame(() => {
-              scrollItemIntoView(parentId);
-            });
-          }
-        })
-        .catch(noop);
-    } else if (folderDialog.folderId) {
-      renameFolder(folderDialog.folderId, name).catch(noop);
-    }
-    setFolderDialog(null);
-    treeRef.current?.focus();
-  };
+  const handleFolderSubmit = useCallback(
+    (name: string): void => {
+      if (!folderDialog) return;
+      if (folderDialog.mode === "create") {
+        const parentId = folderDialog.parentId;
+        createFolder(name, parentId)
+          .then(() => {
+            if (parentId) {
+              selectItem(parentId, "folder");
+              requestAnimationFrame(() => {
+                scrollItemIntoView(parentId);
+              });
+            }
+          })
+          .catch(noop);
+      } else if (folderDialog.folderId) {
+        renameFolder(folderDialog.folderId, name).catch(noop);
+      }
+      setFolderDialog(null);
+      treeRef.current?.focus();
+    },
+    [folderDialog, createFolder, renameFolder, selectItem, scrollItemIntoView],
+  );
 
-  const handleSessionSubmit = (data: SessionFormData): void => {
-    if (!sessionDialog) return;
-    const tagsJson = data.tags
-      ? JSON.stringify(
-          data.tags
-            .split(",")
-            .map((tg) => tg.trim())
-            .filter(Boolean),
-        )
-      : "[]";
+  const handleSessionSubmit = useCallback(
+    (data: SessionFormData): void => {
+      if (!sessionDialog) return;
+      const tagsJson = data.tags
+        ? JSON.stringify(
+            data.tags
+              .split(",")
+              .map((tg) => tg.trim())
+              .filter(Boolean),
+          )
+        : "[]";
 
-    if (sessionDialog.mode === "create") {
-      createSession({
-        folderId: data.folderId,
-        name: data.name,
-        hostname: data.hostname,
-        port: data.port,
-        protocol: data.protocol,
-        username: data.username,
-        tags: tagsJson,
-        icon: data.icon,
-        jumpHostId: data.jumpHostId ?? undefined,
-        highlightProfileId: data.highlightProfileId ?? undefined,
-        credentialProfileId: data.credentialProfileId ?? undefined,
-        loginSequenceId: data.loginSequenceId ?? undefined,
-        legacyAlgorithms: data.legacyAlgorithms,
-      })
-        .then(() => {
-          selectItem(data.folderId, "folder");
-          requestAnimationFrame(() => {
-            scrollItemIntoView(data.folderId);
-          });
-        })
-        .catch(noop);
-    } else if (sessionDialog.sessionId) {
-      const sid = sessionDialog.sessionId;
-      const originalFolderId = sessionDialog.folderId;
-      const doUpdate = async (): Promise<void> => {
-        await updateSession(sid, {
+      if (sessionDialog.mode === "create") {
+        createSession({
+          folderId: data.folderId,
           name: data.name,
           hostname: data.hostname,
           port: data.port,
@@ -837,21 +841,48 @@ export function SessionSidebar(): React.JSX.Element {
           username: data.username,
           tags: tagsJson,
           icon: data.icon,
-          jumpHostId: data.jumpHostId,
-          highlightProfileId: data.highlightProfileId,
-          credentialProfileId: data.credentialProfileId,
-          loginSequenceId: data.loginSequenceId,
+          jumpHostId: data.jumpHostId ?? undefined,
+          highlightProfileId: data.highlightProfileId ?? undefined,
+          credentialProfileId: data.credentialProfileId ?? undefined,
+          loginSequenceId: data.loginSequenceId ?? undefined,
           legacyAlgorithms: data.legacyAlgorithms,
-        });
-        if (data.folderId !== originalFolderId) {
-          await moveSession(sid, data.folderId);
-        }
-      };
-      doUpdate().catch(noop);
-    }
-    setSessionDialog(null);
-    treeRef.current?.focus();
-  };
+        })
+          .then(() => {
+            selectItem(data.folderId, "folder");
+            requestAnimationFrame(() => {
+              scrollItemIntoView(data.folderId);
+            });
+          })
+          .catch(noop);
+      } else if (sessionDialog.sessionId) {
+        const sid = sessionDialog.sessionId;
+        const originalFolderId = sessionDialog.folderId;
+        const doUpdate = async (): Promise<void> => {
+          await updateSession(sid, {
+            name: data.name,
+            hostname: data.hostname,
+            port: data.port,
+            protocol: data.protocol,
+            username: data.username,
+            tags: tagsJson,
+            icon: data.icon,
+            jumpHostId: data.jumpHostId,
+            highlightProfileId: data.highlightProfileId,
+            credentialProfileId: data.credentialProfileId,
+            loginSequenceId: data.loginSequenceId,
+            legacyAlgorithms: data.legacyAlgorithms,
+          });
+          if (data.folderId !== originalFolderId) {
+            await moveSession(sid, data.folderId);
+          }
+        };
+        doUpdate().catch(noop);
+      }
+      setSessionDialog(null);
+      treeRef.current?.focus();
+    },
+    [sessionDialog, createSession, updateSession, moveSession, selectItem, scrollItemIntoView],
+  );
 
   const handleMoveSubmit = (targetFolderId: string): void => {
     if (!moveTarget) return;
@@ -925,6 +956,11 @@ export function SessionSidebar(): React.JSX.Element {
   );
   const showSharedFolder = !searchResults && orphanShared.length > 0;
   const [sharedExpanded, setSharedExpanded] = useState(false);
+  // Collapse the shared folder whenever it disappears so that re-appearance
+  // starts in the collapsed state rather than reusing stale expansion.
+  useEffect(() => {
+    if (!showSharedFolder) setSharedExpanded(false);
+  }, [showSharedFolder]);
 
   return (
     <div className="session-sidebar">
@@ -1019,8 +1055,8 @@ export function SessionSidebar(): React.JSX.Element {
         )}
       </div>
       <DndContext
-        key={`dnd-${String(folders.length)}-${String(sessions.length)}`}
         sensors={sensors}
+        modifiers={dndModifiers}
         onDragStart={handleDragStart}
         onDragEnd={handleDragEnd}
       >
@@ -1035,6 +1071,7 @@ export function SessionSidebar(): React.JSX.Element {
             displaySessions.map((s) => (
               <div
                 key={s.id}
+                data-item-id={s.id}
                 className={`tree-item tree-session${selectedItemId === s.id ? " tree-item-selected" : ""}`}
                 onClick={() => {
                   selectItem(s.id, "session");
@@ -1095,7 +1132,15 @@ export function SessionSidebar(): React.JSX.Element {
                     e.stopPropagation();
                     setSharedExpanded((v) => !v);
                   }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      setSharedExpanded((v) => !v);
+                    }
+                  }}
                   role="button"
+                  tabIndex={0}
                   aria-label={sharedExpanded ? "Collapse" : "Expand"}
                 >
                   {sharedExpanded ? "\u25BE" : "\u25B8"}
@@ -1139,7 +1184,7 @@ export function SessionSidebar(): React.JSX.Element {
             </div>
           )}
         </div>
-        <DragOverlay modifiers={dndModifiers}>
+        <DragOverlay>
           {(() => {
             const { folder, session } = getActiveItemData();
             if (folder) {

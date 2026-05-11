@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -20,6 +20,45 @@ import { ConfirmDialog } from "./ConfirmDialog";
 // eslint-disable-next-line @typescript-eslint/no-empty-function
 const noop = (): void => {};
 
+/**
+ * Show a native file picker and resolve with the selected file (or null if
+ * the user cancelled). Cleans up the hidden <input> in every code path,
+ * including picker-cancel, where `onchange` is never invoked. The window
+ * focus fallback covers older webviews that do not dispatch the `cancel`
+ * event on <input type="file">.
+ */
+function pickFile(accept: string): Promise<File | null> {
+  return new Promise((resolve) => {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = accept;
+    input.style.display = "none";
+    let resolved = false;
+    const finish = (value: File | null): void => {
+      if (resolved) return;
+      resolved = true;
+      window.removeEventListener("focus", onFocus);
+      if (input.parentNode) input.remove();
+      resolve(value);
+    };
+    const onFocus = (): void => {
+      // Picker closed; give onchange one frame to fire before treating as cancel.
+      requestAnimationFrame(() => {
+        if (!resolved && (input.files?.length ?? 0) === 0) finish(null);
+      });
+    };
+    input.onchange = (): void => {
+      finish(input.files?.[0] ?? null);
+    };
+    input.addEventListener("cancel", () => {
+      finish(null);
+    });
+    window.addEventListener("focus", onFocus);
+    document.body.appendChild(input);
+    input.click();
+  });
+}
+
 const AVAILABLE_LANGUAGES = [
   { code: "en", label: "English" },
   { code: "de", label: "Deutsch" },
@@ -37,7 +76,11 @@ const AVAILABLE_LANGUAGES = [
   { code: "zh", label: "\u4e2d\u6587" },
 ];
 
-const UI_SCALE_OPTIONS = [75, 80, 90, 100, 110, 120, 125, 150];
+// 150% is intentionally omitted: at exactly that ratio, dnd-kit's overlay
+// retains a small (~50px) item-dependent residual offset under the current
+// wry/webview after the CSS-zoom compensation in SessionSidebar.tsx.
+// All other listed scales (75-125%) are compensated correctly.
+const UI_SCALE_OPTIONS = [75, 80, 90, 100, 110, 120, 125];
 
 const FONT_OPTIONS = ALLOWED_TERMINAL_FONTS;
 
@@ -138,10 +181,22 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
   const appUserIdent = useAppStore((s) => s.userIdent);
   const [userIdentInput, setUserIdentInput] = useState(appUserIdent ?? "");
   const [userIdentSaved, setUserIdentSaved] = useState(false);
+  const userIdentSavedTimer = useRef<number | null>(null);
 
   useEffect(() => {
     setUserIdentInput(appUserIdent ?? "");
   }, [appUserIdent]);
+
+  // Clear the "saved" indicator timer on unmount so it cannot fire a
+  // setState on a torn-down component.
+  useEffect(() => {
+    return () => {
+      if (userIdentSavedTimer.current !== null) {
+        window.clearTimeout(userIdentSavedTimer.current);
+        userIdentSavedTimer.current = null;
+      }
+    };
+  }, []);
 
   const handleUserIdentSave = useCallback(async () => {
     const trimmed = userIdentInput.trim();
@@ -149,8 +204,12 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
     try {
       await useAppStore.getState().setUserIdent(trimmed);
       setUserIdentSaved(true);
-      setTimeout(() => {
+      if (userIdentSavedTimer.current !== null) {
+        window.clearTimeout(userIdentSavedTimer.current);
+      }
+      userIdentSavedTimer.current = window.setTimeout(() => {
         setUserIdentSaved(false);
+        userIdentSavedTimer.current = null;
       }, 3000);
     } catch (err: unknown) {
       useToastStore.getState().addToast(String(err));
@@ -206,14 +265,9 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
     setHighlightDialog(null);
   };
 
-  const handleImportHighlights = (): void => {
-    const input = document.createElement("input");
-    input.type = "file";
-    input.accept = ".ini";
-    input.style.display = "none";
-    document.body.appendChild(input);
-    input.onchange = async (): Promise<void> => {
-      const file = input.files?.[0];
+  const handleImportHighlights = useCallback((): void => {
+    void (async () => {
+      const file = await pickFile(".ini");
       if (!file) return;
       try {
         const text = await file.text();
@@ -231,12 +285,9 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
         );
       } catch (e) {
         useToastStore.getState().addToast(String(e), "error");
-      } finally {
-        document.body.removeChild(input);
       }
-    };
-    input.click();
-  };
+    })();
+  }, [loadHighlightProfiles, t]);
 
   useEffect(() => {
     invoke<AppConfig>("db_get_config")
@@ -280,6 +331,24 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
       });
   }, []);
 
+  const loggingSavedTimer = useRef<number | null>(null);
+  const appLoggingSavedTimer = useRef<number | null>(null);
+
+  // Clear "saved" indicator timers on unmount so they cannot fire a setState
+  // on a torn-down component.
+  useEffect(() => {
+    return () => {
+      if (loggingSavedTimer.current !== null) {
+        window.clearTimeout(loggingSavedTimer.current);
+        loggingSavedTimer.current = null;
+      }
+      if (appLoggingSavedTimer.current !== null) {
+        window.clearTimeout(appLoggingSavedTimer.current);
+        appLoggingSavedTimer.current = null;
+      }
+    };
+  }, []);
+
   const handleLoggingSave = useCallback(async () => {
     setLoggingError(null);
     try {
@@ -290,6 +359,13 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
       });
       setLoggingDirty(false);
       setLoggingSaved(true);
+      if (loggingSavedTimer.current !== null) {
+        window.clearTimeout(loggingSavedTimer.current);
+      }
+      loggingSavedTimer.current = window.setTimeout(() => {
+        setLoggingSaved(false);
+        loggingSavedTimer.current = null;
+      }, 3000);
     } catch (e) {
       setLoggingError(String(e));
     }
@@ -305,6 +381,13 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
       });
       setAppLoggingDirty(false);
       setAppLoggingSaved(true);
+      if (appLoggingSavedTimer.current !== null) {
+        window.clearTimeout(appLoggingSavedTimer.current);
+      }
+      appLoggingSavedTimer.current = window.setTimeout(() => {
+        setAppLoggingSaved(false);
+        appLoggingSavedTimer.current = null;
+      }, 3000);
     } catch (e) {
       setAppLoggingError(String(e));
     }
@@ -403,15 +486,10 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
   const handleDbImport = useCallback(() => {
     setDbOpResult(null);
     setDbError(null);
-    const input = document.createElement("input");
-    input.type = "file";
-    input.accept = ".json";
-    input.style.display = "none";
-    document.body.appendChild(input);
-    input.onchange = async () => {
+    void (async () => {
+      const file = await pickFile(".json");
+      if (!file) return;
       try {
-        const file = input.files?.[0];
-        if (!file) return;
         const MAX_IMPORT_SIZE = 100 * 1024 * 1024; // 100 MB
         if (file.size > MAX_IMPORT_SIZE) {
           setDbError("Import file is too large (max 100 MB).");
@@ -436,25 +514,17 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
         setDbOpResult(result);
       } catch (e) {
         setDbError(String(e));
-      } finally {
-        input.remove();
       }
-    };
-    input.click();
+    })();
   }, []);
 
   const handleImportExternal = useCallback(
-    (command: string, accept: string) => {
-      const input = document.createElement("input");
-      input.type = "file";
-      input.accept = accept;
-      input.style.display = "none";
-      document.body.appendChild(input);
-      input.onchange = async () => {
+    (command: "import_mremoteng" | "import_securecrt", accept: string) => {
+      void (async () => {
+        const file = await pickFile(accept);
+        if (!file) return;
         let unlisten: (() => void) | null = null;
         try {
-          const file = input.files?.[0];
-          if (!file) return;
           const MAX_SIZE = 100 * 1024 * 1024;
           if (file.size > MAX_SIZE) {
             useToastStore.getState().addToast(t("settings.importTooLarge"));
@@ -495,10 +565,8 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
         } finally {
           if (unlisten) unlisten();
           setImportProgress(null);
-          input.remove();
         }
-      };
-      input.click();
+      })();
     },
     [t],
   );
@@ -1262,11 +1330,13 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
                 type="password"
                 value={pgPassword}
                 placeholder={t("settings.dbPasswordPlaceholder")}
+                autoComplete="off"
                 onChange={(e) => {
                   setPgPassword(e.target.value);
                   handlePgFieldChange();
                 }}
               />
+              <span className="dialog-hint">{t("settings.dbPasswordUnchangedHint")}</span>
             </div>
             <div className="dialog-field">
               <label htmlFor="settings-pg-sslmode">{t("settings.dbSslModeLabel")}</label>
@@ -1283,6 +1353,12 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
                   { value: "require", label: t("settings.dbSslModeRequire") },
                 ]}
               />
+              {pgSslMode === "disable" && (
+                <p className="settings-db-error">⚠ {t("settings.dbSslModeDisableWarning")}</p>
+              )}
+              {pgSslMode === "prefer" && (
+                <p className="settings-db-warning">{t("settings.dbSslModePreferWarning")}</p>
+              )}
             </div>
             <div className="dialog-field">
               <button
