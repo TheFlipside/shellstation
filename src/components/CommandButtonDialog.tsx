@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useCallback, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useEnterKey } from "../hooks/useEnterKey";
 import { useEscapeKey } from "../hooks/useEscapeKey";
@@ -62,16 +62,16 @@ export function CommandButtonDialog({
   const [command, setCommand] = useState(initial?.command ?? "");
   const [color, setColor] = useState(initial?.color ?? COLOR_PRESETS[0]);
 
-  const handleClear = (): void => {
+  const handleClear = useCallback((): void => {
     setName("");
     setCommand("");
     setColor(COLOR_PRESETS[0]);
-  };
+  }, []);
 
-  const handleSave = (): void => {
+  const handleSave = useCallback((): void => {
     if (!name.trim() || !command) return;
     onSave({ name: name.trim(), command, color });
-  };
+  }, [name, command, color, onSave]);
 
   useEnterKey(handleSave);
 
