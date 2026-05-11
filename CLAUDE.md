@@ -40,6 +40,10 @@ npx prettier --check "src/**/*.{ts,tsx,css,json}"
 npx tsc --noEmit
 ```
 
+## Project-Specific Rules
+
+- **Pre-commit gate (binding).** Before every commit, run `/review` and `/security-audit` and address all findings — fix them, or get explicit user sign-off to defer with a tracked follow-up. No commit ships with unresolved findings from either skill. This applies to every commit, including small ones.
+
 ## Skills Available
 
 - `codebase-navigator` — use when first exploring this repo
