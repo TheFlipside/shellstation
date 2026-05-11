@@ -6,6 +6,18 @@ All notable changes to this project are documented in this file.
 
 ### Added
 
+### Fixed
+
+### Security
+
+### Changed
+
+### Removed
+
+### 0.12.0
+
+### Added
+
 - Visible warning in settings when PostgreSQL SSL mode is set to `disable` (cleartext credentials over the wire) and a softer note for `prefer` (which falls back to cleartext when the server lacks TLS)
 - Keyboard activation (Enter/Space) on the shared-folder chevron in the sidebar (a11y)
 
@@ -27,8 +39,6 @@ All notable changes to this project are documented in this file.
 - `autoRefreshInterval` requires a minimum of 5 s (or 0 to disable); prevents a tampered persisted value from driving sub-second `session_data_fingerprint` polling against the IPC bridge
 - `setLanguage` validates against the bundled-locale allowlist before passing to i18next (defense against attacker-supplied keys reaching i18next's internal resource map via tampered localStorage)
 - Command-button rehydration now requires UUID-format ids and validates field shape (length, color regex)
-
-### Changed
 
 ### Removed
 
