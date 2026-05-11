@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef } from "react";
 
 // Each hook instance registers a ref, not the raw callback. The ref is
 // updated in a layout-time effect so the latest closure always fires, while
@@ -37,8 +37,14 @@ function handleGlobalKeyDown(e: KeyboardEvent): void {
  */
 export function useEnterKey(callback: () => void): void {
   const ref = useRef(callback);
-  // Keep the ref pointed at the latest callback every render.
-  ref.current = callback;
+  // Update the ref in a layout effect rather than during render. Mutating
+  // refs at render time is unsafe in concurrent mode: a render can be
+  // discarded or replayed before it commits, leaving the ref pointing at a
+  // closure from an abandoned render. useLayoutEffect runs synchronously
+  // after commit, so ref.current is always the closure of the rendered tree.
+  useLayoutEffect(() => {
+    ref.current = callback;
+  }, [callback]);
 
   useEffect(() => {
     enterStack.push(ref);

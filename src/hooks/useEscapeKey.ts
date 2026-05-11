@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef } from "react";
 
 // Each hook instance registers a ref, not the raw callback. The ref is
 // updated each render so the latest closure always fires, while the stack
@@ -24,15 +24,25 @@ function handleGlobalKeyDown(e: KeyboardEvent): void {
 /** Calls the given callback when the Escape key is pressed.
  *
  * Registered in the capture phase so the keypress is consumed before any
- * background React handler can also act on it.
+ * background React handler can also act on it. The handler returns early
+ * when no dialog is mounted (empty stack), so background Escape handlers
+ * — e.g. ContextMenu, CustomSelect dropdown — keep working when no dialog
+ * is open. While a dialog IS open, however, this hook calls
+ * `stopPropagation()` and the event will NOT reach those background
+ * handlers: the topmost dialog "owns" Escape exclusively. That is the
+ * intended modal behavior; if you want Escape to do something other than
+ * dismiss the dialog while it is open, handle it inside the dialog itself.
  *
  * When several dialogs are mounted at once, only the most recently mounted
  * one reacts to Escape — matching typical modal dismissal behavior.
  */
 export function useEscapeKey(callback: () => void): void {
   const ref = useRef(callback);
-  // Keep the ref pointed at the latest callback every render.
-  ref.current = callback;
+  // Update the ref in a layout effect rather than during render. Mutating
+  // refs at render time is unsafe in concurrent mode (see useEnterKey.ts).
+  useLayoutEffect(() => {
+    ref.current = callback;
+  }, [callback]);
 
   useEffect(() => {
     escapeStack.push(ref);
