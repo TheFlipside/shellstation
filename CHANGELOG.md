@@ -18,6 +18,7 @@ All notable changes to this project are documented in this file.
 - Hidden `<input type="file">` elements leaked into `document.body` when the user dismissed the highlight, database, or mRemoteNG/SecureCRT import pickers without selecting a file
 - `DndContext` was remounting on every folder/session add or delete (count-based key), aborting any in-flight drag
 - `addCommandButton`, `updateCommandButton`, `reorderCommandButtons`, and `setToastDismissSeconds` accepted unvalidated input that could bypass the limits enforced on rehydration
+- Confirming the SSH host-key verification dialog with Enter on a first-time connection opened the session twice: the dialog listener fired on the bubble phase after the sidebar's tree `onKeyDown` had already re-triggered the connect. `useEnterKey` now listens in the capture phase, uses a stack so only the topmost dialog reacts, and stops propagation before the event reaches background handlers.
 
 ### Security
 
