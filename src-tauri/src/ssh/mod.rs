@@ -101,6 +101,11 @@ pub struct SshConnectParams {
     /// When true, extend the preferred algorithm list with legacy SSH kex,
     /// ciphers and MACs (group14-sha1, aes*-cbc, hmac-sha1, …). Required to
     /// negotiate with old network gear that doesn't support modern algos.
+    ///
+    /// Note: since russh 0.60.2 (`Preferred::DEFAULT` no longer includes
+    /// SHA-1 MACs), this toggle is the **only** path that re-enables
+    /// `hmac-sha1` / `hmac-sha1-etm`. Targets that previously connected on
+    /// default settings via SHA-1 MAC negotiation will now need this on.
     pub legacy_algorithms: bool,
     pub logger: Option<std::sync::Arc<std::sync::Mutex<crate::session_logger::SessionLogManager>>>,
     pub kbd_interactive_senders: KbdInteractiveSenders,
@@ -738,6 +743,9 @@ fn base_preferred() -> russh::Preferred {
 /// MACs to the modern defaults. Secure algorithms remain first in the list so
 /// a legacy-capable switch won't downgrade a modern server, but old gear that
 /// only speaks group14-sha1 / aes-cbc / hmac-sha1 can now be reached.
+///
+/// SHA-1 MACs (`hmac-sha1`, `hmac-sha1-etm`) are added only on this path —
+/// since russh 0.60.2 they are no longer part of `Preferred::DEFAULT.mac`.
 fn legacy_preferred() -> russh::Preferred {
     use std::borrow::Cow;
     let base = base_preferred();

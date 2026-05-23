@@ -33,7 +33,7 @@ serde_json = "1"
 # toggle can negotiate with old network gear that only speaks 3DES. It is NOT
 # in russh's default cipher list and is only appended to `Preferred` when a
 # session explicitly opts in — see `legacy_preferred()` in src/ssh/mod.rs.
-russh = { version = "0.60", features = ["des"] }
+russh = { version = "0.61", features = ["des"] }
 # default-features disabled to exclude sqlx-mysql, which is unused and
 # otherwise pulls in the `rsa` crate (see RUSTSEC-2023-0071 above).
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls", "sqlite", "postgres", "uuid", "chrono", "macros", "migrate"] }
