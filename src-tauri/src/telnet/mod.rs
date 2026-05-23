@@ -493,3 +493,42 @@ fn sanitize_telnet_error(raw: &str) -> String {
         "Telnet connection failed".to_string()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // sanitize_telnet_error mirrors sanitize_ssh_error in structure but
+    // covers the smaller telnet error surface. Tested for the same
+    // reason: internal OS paths / FDs / addresses must not leak through.
+
+    #[test]
+    fn telnet_connection_refused() {
+        assert!(sanitize_telnet_error("Connection refused (os error 111)")
+            .contains("connection refused"));
+    }
+
+    #[test]
+    fn telnet_timeout() {
+        assert!(sanitize_telnet_error("connection timed out").contains("timed out"));
+        assert!(sanitize_telnet_error("read timeout").contains("timed out"));
+    }
+
+    #[test]
+    fn telnet_unreachable() {
+        assert!(sanitize_telnet_error("No route to host").contains("unreachable"));
+        assert!(sanitize_telnet_error("Network is unreachable").contains("unreachable"));
+    }
+
+    #[test]
+    fn telnet_dns() {
+        assert!(sanitize_telnet_error("Name or service not known").contains("resolved"));
+        assert!(sanitize_telnet_error("could not resolve hostname").contains("resolved"));
+    }
+
+    #[test]
+    fn telnet_fallback() {
+        let s = sanitize_telnet_error("/dev/pts/3: I/O error reading from device");
+        assert_eq!(s, "Telnet connection failed");
+    }
+}

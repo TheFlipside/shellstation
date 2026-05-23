@@ -6,6 +6,8 @@ All notable changes to this project are documented in this file.
 
 ### Added
 
+- Unit tests covering every branch of the security-relevant pure functions in the Rust backend: `is_restricted_ip` (SSRF guard against private/CGNAT/link-local/ULA ranges on IPv4 and IPv6), `validate_import_data` (count caps and per-field length/port validation on import payloads), `sanitize_pg_error` / `sanitize_ssh_error` / `sanitize_telnet_error` (verify error messages collapse to user-facing strings without leaking paths, FDs, or usernames). All five functions went from 0% → 100% (97.4% for `validate_import_data`) line coverage; CRAP scores dropped ~90%, moving them out of the "complex and untested" bucket flagged by `cargo crap`.
+
 ### Fixed
 
 ### Security

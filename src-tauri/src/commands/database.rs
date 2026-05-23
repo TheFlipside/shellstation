@@ -842,3 +842,257 @@ fn topological_sort_folders(folders: &[Folder]) -> Vec<Folder> {
 
     sorted
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::models::{
+        Credential, ExportData, Folder, HighlightProfile, LoginSequence, Session,
+    };
+    use uuid::Uuid;
+
+    // validate_import_data is the first line of defense against a
+    // malicious or corrupt export file. Each branch corresponds to a
+    // distinct DoS vector (count caps) or a stored-data integrity rule
+    // (field-length caps, port range). Every branch needs an explicit
+    // test so silent collapsing into "Ok" cannot regress.
+
+    fn folder(name: &str) -> Folder {
+        Folder {
+            id: Uuid::new_v4(),
+            name: name.to_string(),
+            parent_id: None,
+            sort_order: 0,
+            owner: "local".to_string(),
+            visibility: "personal".to_string(),
+        }
+    }
+
+    fn session(name: &str, hostname: &str, port: i32) -> Session {
+        Session {
+            id: Uuid::new_v4(),
+            folder_id: Uuid::new_v4(),
+            name: name.to_string(),
+            hostname: hostname.to_string(),
+            port,
+            protocol: "ssh".to_string(),
+            username: String::new(),
+            auth_method: "password".to_string(),
+            jump_host_id: None,
+            tags: String::new(),
+            icon: String::new(),
+            sort_order: 0,
+            highlight_profile_id: None,
+            credential_profile_id: None,
+            legacy_algorithms: false,
+            login_sequence_id: None,
+            owner: "local".to_string(),
+            visibility: "personal".to_string(),
+        }
+    }
+
+    #[test]
+    fn empty_export_is_valid() {
+        assert!(validate_import_data(&ExportData::default()).is_ok());
+    }
+
+    #[test]
+    fn typical_small_export_is_valid() {
+        let data = ExportData {
+            folders: vec![folder("prod")],
+            sessions: vec![session("web1", "web1.example.com", 22)],
+            ..Default::default()
+        };
+        assert!(validate_import_data(&data).is_ok());
+    }
+
+    #[test]
+    fn too_many_folders() {
+        let data = ExportData {
+            folders: (0..=MAX_IMPORT_FOLDERS)
+                .map(|i| folder(&format!("f{i}")))
+                .collect(),
+            ..Default::default()
+        };
+        let err = validate_import_data(&data).unwrap_err();
+        assert!(err.contains("Too many folders"));
+    }
+
+    #[test]
+    fn too_many_sessions() {
+        let data = ExportData {
+            sessions: (0..=MAX_IMPORT_SESSIONS)
+                .map(|i| session(&format!("s{i}"), "h", 22))
+                .collect(),
+            ..Default::default()
+        };
+        let err = validate_import_data(&data).unwrap_err();
+        assert!(err.contains("Too many sessions"));
+    }
+
+    #[test]
+    fn too_many_credentials() {
+        let cred = Credential {
+            id: Uuid::new_v4(),
+            session_id: Uuid::new_v4(),
+            username: String::new(),
+            auth_type: "password".to_string(),
+            keychain_ref: String::new(),
+        };
+        let data = ExportData {
+            credentials: (0..=MAX_IMPORT_CREDENTIALS).map(|_| cred.clone()).collect(),
+            ..Default::default()
+        };
+        let err = validate_import_data(&data).unwrap_err();
+        assert!(err.contains("Too many credentials"));
+    }
+
+    #[test]
+    fn too_many_highlight_profiles() {
+        let p = HighlightProfile {
+            id: Uuid::new_v4(),
+            name: "p".to_string(),
+            rules: String::new(),
+            sort_order: 0,
+        };
+        let data = ExportData {
+            highlight_profiles: (0..=MAX_IMPORT_HIGHLIGHT_PROFILES)
+                .map(|_| p.clone())
+                .collect(),
+            ..Default::default()
+        };
+        let err = validate_import_data(&data).unwrap_err();
+        assert!(err.contains("Too many highlight profiles"));
+    }
+
+    #[test]
+    fn too_many_login_sequences() {
+        let seq = LoginSequence {
+            id: Uuid::new_v4(),
+            name: "s".to_string(),
+            send_initial_cr: true,
+            steps: vec![],
+            sort_order: 0,
+        };
+        let data = ExportData {
+            login_sequences: (0..=MAX_IMPORT_LOGIN_SEQUENCES)
+                .map(|_| seq.clone())
+                .collect(),
+            ..Default::default()
+        };
+        let err = validate_import_data(&data).unwrap_err();
+        assert!(err.contains("Too many login sequences"));
+    }
+
+    #[test]
+    fn folder_name_too_long() {
+        let mut f = folder("");
+        f.name = "x".repeat(256);
+        let data = ExportData {
+            folders: vec![f],
+            ..Default::default()
+        };
+        let err = validate_import_data(&data).unwrap_err();
+        assert!(err.contains("Folder name too long"));
+    }
+
+    #[test]
+    fn session_name_too_long() {
+        let mut s = session("", "h", 22);
+        s.name = "x".repeat(256);
+        let data = ExportData {
+            sessions: vec![s],
+            ..Default::default()
+        };
+        let err = validate_import_data(&data).unwrap_err();
+        assert!(err.contains("Session name too long"));
+    }
+
+    #[test]
+    fn session_hostname_too_long() {
+        let mut s = session("ok", "", 22);
+        s.hostname = "h".repeat(256);
+        let data = ExportData {
+            sessions: vec![s],
+            ..Default::default()
+        };
+        let err = validate_import_data(&data).unwrap_err();
+        assert!(err.contains("hostname too long"));
+    }
+
+    #[test]
+    fn session_tags_too_long() {
+        let mut s = session("ok", "h", 22);
+        s.tags = "t".repeat(1025);
+        let data = ExportData {
+            sessions: vec![s],
+            ..Default::default()
+        };
+        let err = validate_import_data(&data).unwrap_err();
+        assert!(err.contains("tags too long"));
+    }
+
+    #[test]
+    fn session_port_out_of_range() {
+        for port in [0, -1, 65536, i32::MAX] {
+            let s = session("ok", "h", port);
+            let data = ExportData {
+                sessions: vec![s],
+                ..Default::default()
+            };
+            let err = validate_import_data(&data).unwrap_err();
+            assert!(
+                err.contains("Invalid port"),
+                "expected port-error for {port}"
+            );
+        }
+    }
+
+    #[test]
+    fn session_port_boundaries_valid() {
+        for port in [1, 22, 65535] {
+            let s = session("ok", "h", port);
+            let data = ExportData {
+                sessions: vec![s],
+                ..Default::default()
+            };
+            assert!(
+                validate_import_data(&data).is_ok(),
+                "port {port} should be valid"
+            );
+        }
+    }
+
+    #[test]
+    fn highlight_profile_name_too_long() {
+        let p = HighlightProfile {
+            id: Uuid::new_v4(),
+            name: "x".repeat(256),
+            rules: String::new(),
+            sort_order: 0,
+        };
+        let data = ExportData {
+            highlight_profiles: vec![p],
+            ..Default::default()
+        };
+        let err = validate_import_data(&data).unwrap_err();
+        assert!(err.contains("Highlight profile name too long"));
+    }
+
+    #[test]
+    fn login_sequence_name_too_long() {
+        let seq = LoginSequence {
+            id: Uuid::new_v4(),
+            name: "x".repeat(256),
+            send_initial_cr: true,
+            steps: vec![],
+            sort_order: 0,
+        };
+        let data = ExportData {
+            login_sequences: vec![seq],
+            ..Default::default()
+        };
+        let err = validate_import_data(&data).unwrap_err();
+        assert!(err.contains("Login sequence name too long"));
+    }
+}

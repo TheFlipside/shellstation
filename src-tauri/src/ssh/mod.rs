@@ -1547,3 +1547,140 @@ impl client::Handler for SshHandler {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+
+    fn v4(a: u8, b: u8, c: u8, d: u8) -> IpAddr {
+        IpAddr::V4(Ipv4Addr::new(a, b, c, d))
+    }
+
+    fn v6(s: &str) -> IpAddr {
+        IpAddr::V6(s.parse::<Ipv6Addr>().unwrap())
+    }
+
+    // ── is_restricted_ip ─────────────────────────────────────────────────
+    // Security-critical SSRF guard. Every branch corresponds to a CIDR
+    // range that must not be reachable via SSH tunnel; adding a branch
+    // without a matching test is how the guard silently regresses.
+
+    #[test]
+    fn restricted_ipv4_loopback() {
+        assert!(is_restricted_ip(&v4(127, 0, 0, 1)));
+        assert!(is_restricted_ip(&v4(127, 255, 255, 254)));
+    }
+
+    #[test]
+    fn restricted_ipv4_private_ranges() {
+        assert!(is_restricted_ip(&v4(10, 0, 0, 1)));
+        assert!(is_restricted_ip(&v4(10, 255, 255, 254)));
+        assert!(is_restricted_ip(&v4(172, 16, 0, 1)));
+        assert!(is_restricted_ip(&v4(172, 31, 255, 254)));
+        assert!(is_restricted_ip(&v4(192, 168, 0, 1)));
+        assert!(is_restricted_ip(&v4(192, 168, 255, 254)));
+    }
+
+    #[test]
+    fn restricted_ipv4_link_local_and_specials() {
+        assert!(is_restricted_ip(&v4(169, 254, 0, 1)));
+        assert!(is_restricted_ip(&v4(0, 0, 0, 0)));
+        assert!(is_restricted_ip(&v4(255, 255, 255, 255)));
+    }
+
+    #[test]
+    fn restricted_ipv4_cgnat() {
+        assert!(is_restricted_ip(&v4(100, 64, 0, 1)));
+        assert!(is_restricted_ip(&v4(100, 127, 255, 254)));
+    }
+
+    #[test]
+    fn allowed_ipv4_public() {
+        // Anything outside the restricted CIDRs must pass — including
+        // edge addresses just outside private blocks.
+        assert!(!is_restricted_ip(&v4(8, 8, 8, 8)));
+        assert!(!is_restricted_ip(&v4(1, 1, 1, 1)));
+        assert!(!is_restricted_ip(&v4(172, 15, 255, 254))); // just outside 172.16/12
+        assert!(!is_restricted_ip(&v4(172, 32, 0, 1))); // just outside 172.16/12
+        assert!(!is_restricted_ip(&v4(192, 167, 255, 254))); // just outside 192.168/16
+        assert!(!is_restricted_ip(&v4(11, 0, 0, 1))); // just outside 10/8
+        assert!(!is_restricted_ip(&v4(100, 63, 255, 254))); // just outside CGNAT
+        assert!(!is_restricted_ip(&v4(100, 128, 0, 1))); // just outside CGNAT
+    }
+
+    #[test]
+    fn restricted_ipv6_loopback_and_unspecified() {
+        assert!(is_restricted_ip(&v6("::1")));
+        assert!(is_restricted_ip(&v6("::")));
+    }
+
+    #[test]
+    fn restricted_ipv6_link_local_and_ula() {
+        assert!(is_restricted_ip(&v6("fe80::1")));
+        assert!(is_restricted_ip(&v6("fc00::1")));
+        assert!(is_restricted_ip(&v6("fd00::1")));
+    }
+
+    #[test]
+    fn allowed_ipv6_public() {
+        // GUA addresses (2000::/3) must be allowed.
+        assert!(!is_restricted_ip(&v6("2001:db8::1"))); // documentation range, but in GUA
+        assert!(!is_restricted_ip(&v6("2606:4700:4700::1111"))); // 1.1.1.1 v6
+    }
+
+    // ── sanitize_ssh_error ──────────────────────────────────────────────
+    // Maps raw russh / std::io errors to user-facing messages; the goal is
+    // that nothing leaking internal paths, file descriptors, or stack
+    // traces reaches the UI, and that the legacy-algorithm hint fires on
+    // every variant of "no common algo" russh produces.
+
+    #[test]
+    fn ssh_error_connection_refused() {
+        assert!(
+            sanitize_ssh_error("Connection refused (os error 111)").contains("connection refused")
+        );
+    }
+
+    #[test]
+    fn ssh_error_timeout() {
+        assert!(sanitize_ssh_error("connection timed out").contains("timed out"));
+        assert!(sanitize_ssh_error("read timeout after 30s").contains("timed out"));
+    }
+
+    #[test]
+    fn ssh_error_unreachable() {
+        assert!(sanitize_ssh_error("No route to host").contains("unreachable"));
+        assert!(sanitize_ssh_error("Network is unreachable").contains("unreachable"));
+    }
+
+    #[test]
+    fn ssh_error_dns() {
+        assert!(sanitize_ssh_error("Name or service not known").contains("resolved"));
+        assert!(sanitize_ssh_error("failed to resolve hostname foo").contains("resolved"));
+    }
+
+    #[test]
+    fn ssh_error_no_common_algo_variants() {
+        // All three russh variants must produce the legacy-algorithm hint.
+        assert!(sanitize_ssh_error("No common Kex algorithm").contains("Legacy algorithms"));
+        assert!(sanitize_ssh_error("key exchange init failed").contains("Legacy algorithms"));
+        assert!(sanitize_ssh_error("key exchange failed").contains("Legacy algorithms"));
+    }
+
+    #[test]
+    fn ssh_error_authentication() {
+        assert!(
+            sanitize_ssh_error("authentication failed for user root").contains("authentication")
+        );
+    }
+
+    #[test]
+    fn ssh_error_fallback() {
+        // Anything we don't recognize collapses to a generic message —
+        // critical so internal paths / FDs / OS error codes never reach
+        // the toast.
+        let s = sanitize_ssh_error("/home/user/.ssh/id_rsa: permission denied (oserror 13)");
+        assert_eq!(s, "SSH connection failed");
+    }
+}

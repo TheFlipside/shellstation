@@ -1014,3 +1014,80 @@ pub fn run() {
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // sanitize_pg_error converts sqlx / libpq error text into a UX-safe
+    // message. The branches matter: each one corresponds to a distinct
+    // user remediation, so a regression that collapses one branch into
+    // the generic fallback degrades support quality without being
+    // visible in any other test.
+
+    #[test]
+    fn pg_auth_failure() {
+        let s =
+            sanitize_pg_error("FATAL: password authentication failed for user \"shellstation\"");
+        assert!(s.contains("Authentication failed"));
+        // Must NOT leak the username from the raw error.
+        assert!(!s.contains("shellstation"));
+    }
+
+    #[test]
+    fn pg_connection_refused() {
+        assert!(
+            sanitize_pg_error("could not connect to server: Connection refused")
+                .contains("Connection refused")
+        );
+        assert!(sanitize_pg_error("io error: connection refused").contains("Connection refused"));
+    }
+
+    #[test]
+    fn pg_timeout() {
+        assert!(sanitize_pg_error("connection timeout expired").contains("timed out"));
+        assert!(sanitize_pg_error("Timed out connecting").contains("timed out"));
+    }
+
+    #[test]
+    fn pg_migration_checksum_mismatch() {
+        // Three different sqlx phrasings — all must produce the
+        // schema-from-older-revision message.
+        let s1 = sanitize_pg_error(
+            "migration 20240101000000 was previously applied but has been modified",
+        );
+        let s2 = sanitize_pg_error("migration checksum mismatch");
+        let s3 = sanitize_pg_error("VersionMismatch(20240101000000)");
+        assert!(s1.contains("older revision"));
+        assert!(s2.contains("older revision"));
+        assert!(s3.contains("older revision"));
+    }
+
+    #[test]
+    fn pg_version_missing() {
+        let s = sanitize_pg_error("VersionMissing(20240101000000)");
+        assert!(s.contains("no longer present"));
+    }
+
+    #[test]
+    fn pg_relation_missing() {
+        let s = sanitize_pg_error("error: relation \"sessions\" does not exist");
+        assert!(s.contains("required table is missing"));
+    }
+
+    #[test]
+    fn pg_database_missing() {
+        let s = sanitize_pg_error("FATAL: database \"shellstation\" does not exist");
+        assert!(s.contains("Database does not exist"));
+    }
+
+    #[test]
+    fn pg_fallback_strips_internals() {
+        // Anything we don't recognize must collapse to a generic message
+        // that does not leak the original text (paths, sockets, etc.).
+        let raw = "io error: /var/run/postgresql/.s.PGSQL.5432: No such file or directory";
+        let s = sanitize_pg_error(raw);
+        assert!(s.contains("See application logs"));
+        assert!(!s.contains("/var/run/postgresql"));
+    }
+}
