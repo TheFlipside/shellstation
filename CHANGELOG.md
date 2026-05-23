@@ -6,6 +6,20 @@ All notable changes to this project are documented in this file.
 
 ### Added
 
+### Changed
+
+### Fixed
+
+### Security
+
+### Changed
+
+### Removed
+
+### 0.20.0 - 2026-05-23
+
+### Added
+
 - Unit tests covering every branch of the security-relevant pure functions in the Rust backend: `is_restricted_ip` (SSRF guard against private/CGNAT/link-local/ULA ranges on IPv4 and IPv6), `validate_import_data` (count caps and per-field length/port validation on import payloads), `sanitize_pg_error` / `sanitize_ssh_error` / `sanitize_telnet_error` (verify error messages collapse to user-facing strings without leaking paths, FDs, or usernames). All five functions went from 0% → 100% (97.4% for `validate_import_data`) line coverage; CRAP scores dropped ~90%, moving them out of the "complex and untested" bucket flagged by `cargo crap`.
 - `db::update_builder::UpdateBuilder`: a typed dynamic-SQL helper that owns the placeholder syntax (PostgreSQL `$N` vs SQLite `?`), the `BindVal` enum, and the bool-as-int / optional-UUID three-state semantics that previously lived as ~90 lines of `if let Some(...)` boilerplate in each provider. The builder is unit-tested without a live database. `PostgresProvider::update_session` and `SqliteProvider::update_session` now consist of 13 builder calls plus the per-dialect WHERE clause; both dropped from CC 29 (CRAP 870) to CC 8 (CRAP 72).
 - `db::update_builder::SessionColumn`: an enum of the thirteen `sessions`-table columns that the session-edit IPC may touch, replacing the untyped `col: &str` parameter on `UpdateBuilder`. Column names now go through `SessionColumn::as_sql() -> &'static str`, so the SQL embedded by `format!()` is provably one of thirteen hardcoded strings — SQL injection via column name is impossible by construction rather than by call-site discipline. Adding a new column requires a deliberate enum extension that fails to compile until the consumers are wired up. Closes the medium-severity design fragility flagged in the security audit.
@@ -16,21 +30,16 @@ All notable changes to this project are documented in this file.
 
 ### Changed
 
-- Upgraded sqlx to 0.9. The two consumer-visible changes:
+- Upgraded `tauri` to 2.11.2 and `tauri-build` to 2.6.2.
+- Upgraded `serde_json` to 1.0.150.
+- Upgraded `tokio` to 1.52.3.
+- Upgraded `sqlx` to 0.9. The two consumer-visible changes:
   - `sqlx::query()` (and family) now only accept `&'static str` or `sqlx::AssertSqlSafe<…>` (PR #3723). The twenty dynamic-SQL call sites that build statements with `format!()` — the `UpdateBuilder` consumers, the bulk-edit `IN (?,?,…)` builders, the BFS folder-walk queries, and the keychain-rotation `CREATE DATABASE` path — are now wrapped in `sqlx::AssertSqlSafe(sql.as_str())`. With `SessionColumn` already enforcing that the only non-placeholder dynamic content is a typed column name, each `AssertSqlSafe` is honest by inspection.
   - The Cargo feature `sqlite` is now a meta-feature that pulls in `sqlite-deserialize` / `sqlite-load-extension` / `sqlite-unlock-notify` (PR #3928, SQLite extension loading is now `unsafe`). ShellStation uses none of those APIs, so the feature was switched to `sqlite-bundled` to keep the binary surface minimal.
 - Upgraded russh to 0.61. As of russh 0.60.2, SHA-1 MACs (`hmac-sha1`, `hmac-sha1-etm`) are no longer part of `Preferred::DEFAULT.mac`. ShellStation's default (non-legacy) connection path inherits that tightening — these MACs are no longer offered during negotiation when **Legacy algorithms** is off. The Legacy toggle in the session editor remains the escape hatch and is now the **only** way to re-enable SHA-1 MACs. Targets that previously connected on default settings via SHA-1 MAC negotiation (some older Cisco IOS releases, certain industrial switches) will now require enabling the toggle; the existing "no shared algorithm" hint already points users at that setting.
 - Moved `ADMIN_GUIDE.md`, `DESIGN.md`, `DEVELOPMENT.md`, and `RELEASING.md` into a dedicated `docs/` folder. Internal cross-references between these documents continue to use plain filenames because they still share a directory; external references in `README.md`, `CLAUDE.md`, and a comment in `src-tauri/src/db/postgres.rs` were updated to point at `docs/`.
 - Upgraded `quick-xml` to 0.40.1. `Attribute::unescape_value()` was deprecated in favour of `Attribute::normalized_value(XmlVersion)` (PR #371), and `BytesText::xml_content()` likewise gained a required `XmlVersion` parameter for correct EOL normalization (PR #938). Both importers pass `XmlVersion::Implicit1_0` because both mRemoteNG (`confCons.xml`) and SecureCRT XML exports declare `<?xml version="1.0"?>`. For the two `Attribute::normalized_value` call sites this is behaviour-preserving — `unescape_value()` in 0.39.2 already delegated to XML 1.0 normalization. For the `BytesText::xml_content()` call site in the SecureCRT parser it is a **deliberate semantic change**: the old `xml_content()` was internally aliased to the XML 1.1 path, which also collapses U+0085 (NEL) and U+2028 (LS) to `\n`. XML 1.0 keeps those code points as-is, matching the file's own version declaration. The call site carries a comment explaining the choice. None of the other 0.40 breaking changes apply to ShellStation (no `NsReader`, no `Reader::read_text()`, no namespace `resolve*()` calls).
 - Rust backend now passes `clippy::pedantic` clean (`just check`). Most fixes were mechanical (use method references over closures, `map_or`/`let-else` over `match` for one-arm cases, `clone_from` over reassignment, inlined format args, redundant `continue`/`async` removed). Doc comments throughout the backend now backtick identifier-shaped tokens (snake_case, CamelCase, product names like `PostgreSQL`/`SQLite`/`SecureCRT`/`ShellStation`/`ConPTY`, and protocol abbreviations like `NAWS`/`IAC`/`SB`/`SE`). Crate-level allows are documented in `src-tauri/src/lib.rs` for patterns that are deliberate architectural choices (`option_option` for three-state nullable updates, `cast_*` for already-bounded integer ranges, `too_many_lines` for the documented orchestration entry points, `needless_pass_by_value` for Tauri command convention).
-
-### Fixed
-
-### Security
-
-### Changed
-
-### Removed
 
 ### 0.12.0
 
