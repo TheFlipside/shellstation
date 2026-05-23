@@ -44,7 +44,16 @@ russh = { version = "0.61", features = ["des"] }
 # and avoids linking in code paths we never reach (the load-extension API
 # is also `unsafe` in 0.9 and is something we explicitly do not want
 # enabled).
-sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "tls-rustls", "sqlite-bundled", "postgres", "uuid", "chrono", "macros", "migrate"] }
+sqlx = { version = "0.9", default-features = false, features = [
+    "runtime-tokio",
+    "tls-rustls",
+    "sqlite-bundled",
+    "postgres",
+    "uuid",
+    "chrono",
+    "macros",
+    "migrate",
+] }
 tokio = { version = "1", features = ["full"] }
 keyring = { version = "3", features = ["crypto-rust"] }
 uuid = { version = "1", features = ["v4", "serde"] }
@@ -64,7 +73,10 @@ subtle = "2.6.1"
 regex = "1"
 
 [target.'cfg(target_os = "linux")'.dependencies]
-keyring = { version = "3", features = ["linux-native-sync-persistent", "crypto-rust"] }
+keyring = { version = "3", features = [
+    "linux-native-sync-persistent",
+    "crypto-rust",
+] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 keyring = { version = "3", features = ["apple-native", "crypto-rust"] }
@@ -73,7 +85,7 @@ keyring = { version = "3", features = ["apple-native", "crypto-rust"] }
 keyring = { version = "3", features = ["windows-native"] }
 
 [profile.release]
-strip = true        # Strip debug symbols
-lto = true          # Link-time optimization (slower build, smaller binary)
-codegen-units = 1   # Single codegen unit (slower build, better optimization)
-opt-level = "s"     # Optimize for size over speed
+strip = true      # Strip debug symbols
+lto = true        # Link-time optimization (slower build, smaller binary)
+codegen-units = 1 # Single codegen unit (slower build, better optimization)
+opt-level = "s"   # Optimize for size over speed
