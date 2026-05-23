@@ -36,7 +36,15 @@ serde_json = "1"
 russh = { version = "0.61", features = ["des"] }
 # default-features disabled to exclude sqlx-mysql, which is unused and
 # otherwise pulls in the `rsa` crate (see RUSTSEC-2023-0071 above).
-sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls", "sqlite", "postgres", "uuid", "chrono", "macros", "migrate"] }
+#
+# `sqlite-bundled` is used instead of `sqlite` because, as of sqlx 0.9,
+# `sqlite` is a meta-feature that additionally pulls in `sqlite-deserialize`,
+# `sqlite-load-extension`, and `sqlite-unlock-notify`. ShellStation uses
+# none of those APIs — `sqlite-bundled` keeps the binary surface minimal
+# and avoids linking in code paths we never reach (the load-extension API
+# is also `unsafe` in 0.9 and is something we explicitly do not want
+# enabled).
+sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "tls-rustls", "sqlite-bundled", "postgres", "uuid", "chrono", "macros", "migrate"] }
 tokio = { version = "1", features = ["full"] }
 keyring = { version = "3", features = ["crypto-rust"] }
 uuid = { version = "1", features = ["v4", "serde"] }

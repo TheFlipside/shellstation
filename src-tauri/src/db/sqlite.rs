@@ -348,7 +348,7 @@ impl DatabaseProvider for SqliteProvider {
             b.set_clause(),
             b.where_placeholder(),
         );
-        let mut query = sqlx::query(&sql);
+        let mut query = sqlx::query(sqlx::AssertSqlSafe(sql.as_str()));
         for val in b.values() {
             query = match val {
                 BindVal::Text(s) => query.bind(s.as_str()),
@@ -749,7 +749,7 @@ impl DatabaseProvider for SqliteProvider {
             "UPDATE credential_profiles SET {} WHERE id = ?",
             sets.join(", ")
         );
-        let mut query = sqlx::query(&sql);
+        let mut query = sqlx::query(sqlx::AssertSqlSafe(sql.as_str()));
         for val in &values {
             query = query.bind(val.as_str());
         }
@@ -796,7 +796,7 @@ impl DatabaseProvider for SqliteProvider {
         while !frontier.is_empty() {
             let placeholders = vec!["?"; frontier.len()].join(",");
             let sql = format!("SELECT id FROM folders WHERE parent_id IN ({placeholders})");
-            let mut q = sqlx::query(&sql);
+            let mut q = sqlx::query(sqlx::AssertSqlSafe(sql.as_str()));
             for f in &frontier {
                 q = q.bind(f);
             }
@@ -813,7 +813,7 @@ impl DatabaseProvider for SqliteProvider {
             "UPDATE sessions SET credential_profile_id = ? \
              WHERE folder_id IN ({placeholders}) AND protocol != 'telnet'"
         );
-        let mut q = sqlx::query(&sql);
+        let mut q = sqlx::query(sqlx::AssertSqlSafe(sql.as_str()));
         q = q.bind(profile_id.map(|u| u.to_string()));
         for f in &folder_ids {
             q = q.bind(f);
@@ -850,7 +850,7 @@ impl DatabaseProvider for SqliteProvider {
         while !frontier.is_empty() {
             let placeholders = vec!["?"; frontier.len()].join(",");
             let sql = format!("SELECT id FROM folders WHERE parent_id IN ({placeholders})");
-            let mut q = sqlx::query(&sql);
+            let mut q = sqlx::query(sqlx::AssertSqlSafe(sql.as_str()));
             for f in &frontier {
                 q = q.bind(f);
             }
@@ -889,7 +889,7 @@ impl DatabaseProvider for SqliteProvider {
                 "UPDATE sessions SET {} WHERE folder_id IN ({placeholders})",
                 setters_all.join(", "),
             );
-            let mut q = sqlx::query(&sql);
+            let mut q = sqlx::query(sqlx::AssertSqlSafe(sql.as_str()));
             if let Some(hp) = &edit.highlight_profile_id {
                 q = q.bind(hp.map(|u| u.to_string()));
             }
@@ -915,7 +915,7 @@ impl DatabaseProvider for SqliteProvider {
                 "UPDATE sessions SET jump_host_id = ? \
                  WHERE folder_id IN ({placeholders}) AND protocol != 'telnet'",
             );
-            let mut q = sqlx::query(&sql);
+            let mut q = sqlx::query(sqlx::AssertSqlSafe(sql.as_str()));
             q = q.bind(jh.map(|u| u.to_string()));
             for f in &folder_ids {
                 q = q.bind(f);
@@ -1023,7 +1023,7 @@ impl DatabaseProvider for SqliteProvider {
             "UPDATE highlight_profiles SET {} WHERE id = ?",
             sets.join(", ")
         );
-        let mut query = sqlx::query(&sql);
+        let mut query = sqlx::query(sqlx::AssertSqlSafe(sql.as_str()));
         for val in &values {
             query = query.bind(val.as_str());
         }
@@ -1149,7 +1149,7 @@ impl DatabaseProvider for SqliteProvider {
             "UPDATE login_sequences SET {} WHERE id = ?",
             sets.join(", ")
         );
-        let mut query = sqlx::query(&sql);
+        let mut query = sqlx::query(sqlx::AssertSqlSafe(sql.as_str()));
         for val in &values {
             match val {
                 BindVal::Text(s) => query = query.bind(s.as_str()),
@@ -1198,7 +1198,7 @@ impl DatabaseProvider for SqliteProvider {
         while !frontier.is_empty() {
             let placeholders = vec!["?"; frontier.len()].join(",");
             let sql = format!("SELECT id FROM folders WHERE parent_id IN ({placeholders})");
-            let mut q = sqlx::query(&sql);
+            let mut q = sqlx::query(sqlx::AssertSqlSafe(sql.as_str()));
             for f in &frontier {
                 q = q.bind(f);
             }
@@ -1215,7 +1215,7 @@ impl DatabaseProvider for SqliteProvider {
             "UPDATE sessions SET login_sequence_id = ? \
              WHERE folder_id IN ({placeholders})"
         );
-        let mut q = sqlx::query(&sql);
+        let mut q = sqlx::query(sqlx::AssertSqlSafe(sql.as_str()));
         q = q.bind(sequence_id.map(|u| u.to_string()));
         for f in &folder_ids {
             q = q.bind(f);

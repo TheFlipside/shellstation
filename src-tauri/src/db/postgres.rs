@@ -472,7 +472,7 @@ impl DatabaseProvider for PostgresProvider {
             b.set_clause(),
             b.where_placeholder(),
         );
-        let mut query = sqlx::query(&sql);
+        let mut query = sqlx::query(sqlx::AssertSqlSafe(sql.as_str()));
         for val in b.values() {
             query = match val {
                 BindVal::Text(s) => query.bind(s.as_str()),
@@ -976,7 +976,7 @@ impl DatabaseProvider for PostgresProvider {
             "UPDATE credential_profiles SET {} WHERE id = ${idx}",
             sets.join(", ")
         );
-        let mut query = sqlx::query(&sql);
+        let mut query = sqlx::query(sqlx::AssertSqlSafe(sql.as_str()));
         for val in &values {
             query = query.bind(val.as_str());
         }
@@ -1070,7 +1070,7 @@ impl DatabaseProvider for PostgresProvider {
                  WHERE folder_id IN (SELECT id FROM subtree) AND owner = current_user",
                 setters.join(", "),
             );
-            let mut q = sqlx::query(&sql).bind(folder_id.to_string());
+            let mut q = sqlx::query(sqlx::AssertSqlSafe(sql.as_str())).bind(folder_id.to_string());
             if let Some(hp) = &edit.highlight_profile_id {
                 q = q.bind(hp.map(|u| u.to_string()));
             }
@@ -1095,7 +1095,7 @@ impl DatabaseProvider for PostgresProvider {
                  WHERE folder_id IN (SELECT id FROM subtree) \
                      AND owner = current_user AND protocol != 'telnet'",
             );
-            let result = sqlx::query(&sql)
+            let result = sqlx::query(sqlx::AssertSqlSafe(sql.as_str()))
                 .bind(folder_id.to_string())
                 .bind(jh.map(|u| u.to_string()))
                 .execute(&self.pool)
@@ -1213,7 +1213,7 @@ impl DatabaseProvider for PostgresProvider {
             "UPDATE highlight_profiles SET {} WHERE id = ${idx}",
             sets.join(", ")
         );
-        let mut query = sqlx::query(&sql);
+        let mut query = sqlx::query(sqlx::AssertSqlSafe(sql.as_str()));
         for val in &values {
             query = query.bind(val.as_str());
         }
@@ -1357,7 +1357,7 @@ impl DatabaseProvider for PostgresProvider {
             "UPDATE login_sequences SET {} WHERE id = ${idx}",
             sets.join(", ")
         );
-        let mut query = sqlx::query(&sql);
+        let mut query = sqlx::query(sqlx::AssertSqlSafe(sql.as_str()));
         for val in &values {
             match val {
                 BindVal::Text(s) => query = query.bind(s.as_str()),

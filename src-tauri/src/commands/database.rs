@@ -244,7 +244,7 @@ pub async fn db_create_database(
     let quoted = format!("\"{}\"", database.replace('"', "\"\""));
     let sql = format!("CREATE DATABASE {quoted}");
 
-    sqlx::query(&sql)
+    sqlx::query(sqlx::AssertSqlSafe(sql.as_str()))
         .execute(&pool)
         .await
         .map_err(|e| format!("Failed to create database: {e}"))?;

@@ -214,7 +214,8 @@ async fn fix_crlf_migration_checksums(
 
         // Checksums differ — verify it's purely a line-ending difference.
         // Compute the SHA-384 of the SQL with LF-only line endings.
-        let lf_sql = migration.sql.replace("\r\n", "\n");
+        // migration.sql is `sqlx::SqlStr` since sqlx 0.9; call `.as_str()`.
+        let lf_sql = migration.sql.as_str().replace("\r\n", "\n");
         let lf_hash: Vec<u8> = Sha384::digest(lf_sql.as_bytes()).to_vec();
 
         // Compute the SHA-384 of the SQL with CRLF line endings.
@@ -424,7 +425,7 @@ async fn setup_postgres_rls(pool: &sqlx::PgPool) -> Result<(), String> {
              EXCEPTION WHEN duplicate_object THEN NULL; \
              END $$"
         );
-        sqlx::query(&sql)
+        sqlx::query(sqlx::AssertSqlSafe(sql.as_str()))
             .execute(pool)
             .await
             .map_err(|e| format!("RLS setup (policy {name}): {e}"))?;
@@ -439,7 +440,7 @@ async fn setup_postgres_rls(pool: &sqlx::PgPool) -> Result<(), String> {
              EXCEPTION WHEN duplicate_object THEN NULL; \
              END $$"
         );
-        sqlx::query(&sql)
+        sqlx::query(sqlx::AssertSqlSafe(sql.as_str()))
             .execute(pool)
             .await
             .map_err(|e| format!("RLS setup (constraint {table}_vis_ck): {e}"))?;
