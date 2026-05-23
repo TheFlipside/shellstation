@@ -1,3 +1,18 @@
+//! mRemoteNG `confCons.xml` parser.
+//!
+//! Implemented as a streaming pull-parser (`quick_xml::Reader`) rather
+//! than a DOM walk: production mRemoteNG files are routinely tens of
+//! megabytes once they accumulate a few thousand sessions, and we cannot
+//! afford to materialise the whole tree in memory. The trade-off is that
+//! each branch in `parse` corresponds to one *transition* in the XML
+//! event stream — it's flat by construction. Reorganising it into
+//! recursive helpers would just shift the same number of branches into
+//! the helpers without simplifying the protocol they decode.
+//!
+//! The branch table the parser must cover is captured by the test
+//! fixtures at the bottom of this file; each fixture exercises one
+//! `<Node>` shape the parser commits to a different action on.
+
 use std::collections::HashMap;
 
 use quick_xml::events::Event;
@@ -210,4 +225,131 @@ fn build_session(
         username,
         jump_host_name,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // The mRemoteNG parser is a stateful pull-parser over an XML stream:
+    // tag-by-tag input, a folder-stack mutated on each `<Node Type="…">`,
+    // and skip-ahead logic for unsupported subtrees. Branches that only
+    // appear under specific tag sequences (deep nesting, RDP skip,
+    // unclosed Connection nodes) can't be covered by reading the function
+    // in isolation; each behaviour gets a minimal XML fixture below.
+
+    #[test]
+    fn parse_empty_root() {
+        let xml = r#"<?xml version="1.0"?><Confcons></Confcons>"#;
+        let (folders, sessions, warnings) = parse(xml).unwrap();
+        assert!(folders.is_empty());
+        assert!(sessions.is_empty());
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn parse_single_ssh_session() {
+        let xml = r#"<?xml version="1.0"?>
+            <Confcons>
+                <Node Type="Connection" Name="web1" Hostname="web1.example.com"
+                      Port="22" Protocol="SSH2" Username="root"/>
+            </Confcons>"#;
+        let (folders, sessions, warnings) = parse(xml).unwrap();
+        assert!(folders.is_empty());
+        assert_eq!(sessions.len(), 1);
+        assert!(warnings.is_empty());
+        let s = &sessions[0];
+        assert_eq!(s.name, "web1");
+        assert_eq!(s.hostname, "web1.example.com");
+        assert_eq!(s.port, 22);
+        assert_eq!(s.protocol, "ssh");
+        assert_eq!(s.username.as_deref(), Some("root"));
+    }
+
+    #[test]
+    fn parse_telnet_session() {
+        let xml = r#"<?xml version="1.0"?>
+            <Confcons>
+                <Node Type="Connection" Name="switch" Hostname="10.0.0.1"
+                      Port="23" Protocol="Telnet"/>
+            </Confcons>"#;
+        let (_, sessions, warnings) = parse(xml).unwrap();
+        assert_eq!(sessions.len(), 1);
+        assert!(warnings.is_empty());
+        assert_eq!(sessions[0].protocol, "telnet");
+    }
+
+    #[test]
+    fn parse_unsupported_protocol_warns_but_continues() {
+        let xml = r#"<?xml version="1.0"?>
+            <Confcons>
+                <Node Type="Connection" Name="rdp1" Hostname="srv" Protocol="RDP"/>
+                <Node Type="Connection" Name="ssh1" Hostname="web" Port="22" Protocol="SSH2"/>
+            </Confcons>"#;
+        let (_, sessions, warnings) = parse(xml).unwrap();
+        // Unsupported entry produces a warning, supported entry still imports.
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].name, "ssh1");
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].to_lowercase().contains("rdp"));
+    }
+
+    #[test]
+    fn parse_nested_folders_track_parent() {
+        let xml = r#"<?xml version="1.0"?>
+            <Confcons>
+                <Node Type="Container" Name="Production">
+                    <Node Type="Container" Name="EU">
+                        <Node Type="Connection" Name="eu1" Hostname="h" Port="22" Protocol="SSH2"/>
+                    </Node>
+                </Node>
+            </Confcons>"#;
+        let (folders, sessions, _) = parse(xml).unwrap();
+        assert_eq!(folders.len(), 2);
+        assert_eq!(folders[0].name, "Production");
+        assert_eq!(folders[0].parent_temp_id, Some(0)); // root
+        assert_eq!(folders[1].name, "EU");
+        assert_eq!(folders[1].parent_temp_id, Some(folders[0].temp_id));
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].folder_temp_id, folders[1].temp_id);
+    }
+
+    #[test]
+    fn parse_rejects_excessive_nesting() {
+        // Build a folder chain deeper than MAX_NESTING_DEPTH (100).
+        let mut xml = String::from(r#"<?xml version="1.0"?><Confcons>"#);
+        for i in 0..=MAX_NESTING_DEPTH {
+            xml.push_str(&format!(r#"<Node Type="Container" Name="f{i}">"#));
+        }
+        for _ in 0..=MAX_NESTING_DEPTH {
+            xml.push_str("</Node>");
+        }
+        xml.push_str("</Confcons>");
+        let err = parse(&xml).unwrap_err();
+        assert!(err.contains("nesting"));
+    }
+
+    #[test]
+    fn parse_malformed_xml_returns_error() {
+        let xml = r#"<?xml version="1.0"?><Confcons><Node Type="Container" Name="x"#;
+        let result = parse(xml);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_jump_host_reference() {
+        // mRemoteNG uses "Inheritance" / SSHOptions block — emulate the
+        // form the parser actually understands.
+        let xml = r#"<?xml version="1.0"?>
+            <Confcons>
+                <Node Type="Connection" Name="bastion" Hostname="bastion.example.com"
+                      Port="22" Protocol="SSH2"/>
+                <Node Type="Connection" Name="target" Hostname="target.example.com"
+                      Port="22" Protocol="SSH2" SSHTunnelConnectionName="bastion"/>
+            </Confcons>"#;
+        let (_, sessions, _) = parse(xml).unwrap();
+        assert_eq!(sessions.len(), 2);
+        let target = sessions.iter().find(|s| s.name == "target").unwrap();
+        assert_eq!(target.jump_host_name.as_deref(), Some("bastion"));
+    }
 }

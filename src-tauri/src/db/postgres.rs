@@ -12,6 +12,7 @@ use super::models::{
     NewSession, Session, UpdateCredentialProfile, UpdateHighlightProfile, UpdateLoginSequence,
     UpdateSession,
 };
+use super::update_builder::{BindVal, Dialect, UpdateBuilder};
 use super::{cmp_hostname, BulkSessionEdit, DatabaseProvider, DbResult};
 
 pub struct PostgresProvider {
@@ -435,111 +436,40 @@ impl DatabaseProvider for PostgresProvider {
 
     // RLS enforces access: owner_all + shared_update (DESIGN.md §4.5).
     async fn update_session(&self, id: Uuid, update: UpdateSession) -> DbResult<()> {
-        let mut sets = Vec::new();
-        let mut idx: usize = 1;
+        let mut b = UpdateBuilder::new(Dialect::Postgres);
+        b.set_text("name", &update.name);
+        b.set_text("hostname", &update.hostname);
+        b.set_int("port", update.port);
+        b.set_text("protocol", &update.protocol);
+        b.set_text("username", &update.username);
+        b.set_text("auth_method", &update.auth_method);
+        b.set_optional_uuid("jump_host_id", &update.jump_host_id);
+        b.set_text("tags", &update.tags);
+        b.set_text("icon", &update.icon);
+        b.set_optional_uuid("highlight_profile_id", &update.highlight_profile_id);
+        b.set_optional_uuid("credential_profile_id", &update.credential_profile_id);
+        b.set_bool_as_int("legacy_algorithms", update.legacy_algorithms);
+        b.set_optional_uuid("login_sequence_id", &update.login_sequence_id);
 
-        // Track bind values with their types so PostgreSQL receives correct
-        // types (it does not coerce TEXT → INTEGER like SQLite does).
-        enum BindVal {
-            Text(String),
-            Int(i32),
-            Null,
-        }
-        let mut values: Vec<BindVal> = Vec::new();
-
-        if let Some(ref name) = update.name {
-            sets.push(format!("name = ${idx}"));
-            values.push(BindVal::Text(name.clone()));
-            idx += 1;
-        }
-        if let Some(ref hostname) = update.hostname {
-            sets.push(format!("hostname = ${idx}"));
-            values.push(BindVal::Text(hostname.clone()));
-            idx += 1;
-        }
-        if let Some(port) = update.port {
-            sets.push(format!("port = ${idx}"));
-            values.push(BindVal::Int(port));
-            idx += 1;
-        }
-        if let Some(ref protocol) = update.protocol {
-            sets.push(format!("protocol = ${idx}"));
-            values.push(BindVal::Text(protocol.clone()));
-            idx += 1;
-        }
-        if let Some(ref username) = update.username {
-            sets.push(format!("username = ${idx}"));
-            values.push(BindVal::Text(username.clone()));
-            idx += 1;
-        }
-        if let Some(ref auth_method) = update.auth_method {
-            sets.push(format!("auth_method = ${idx}"));
-            values.push(BindVal::Text(auth_method.clone()));
-            idx += 1;
-        }
-        if let Some(ref jump_host_id) = update.jump_host_id {
-            sets.push(format!("jump_host_id = ${idx}"));
-            match jump_host_id {
-                Some(u) => values.push(BindVal::Text(u.to_string())),
-                None => values.push(BindVal::Null),
-            }
-            idx += 1;
-        }
-        if let Some(ref tags) = update.tags {
-            sets.push(format!("tags = ${idx}"));
-            values.push(BindVal::Text(tags.clone()));
-            idx += 1;
-        }
-        if let Some(ref icon) = update.icon {
-            sets.push(format!("icon = ${idx}"));
-            values.push(BindVal::Text(icon.clone()));
-            idx += 1;
-        }
-        if let Some(ref highlight_profile_id) = update.highlight_profile_id {
-            sets.push(format!("highlight_profile_id = ${idx}"));
-            match highlight_profile_id {
-                Some(u) => values.push(BindVal::Text(u.to_string())),
-                None => values.push(BindVal::Null),
-            }
-            idx += 1;
-        }
-        if let Some(ref credential_profile_id) = update.credential_profile_id {
-            sets.push(format!("credential_profile_id = ${idx}"));
-            match credential_profile_id {
-                Some(u) => values.push(BindVal::Text(u.to_string())),
-                None => values.push(BindVal::Null),
-            }
-            idx += 1;
-        }
-        if let Some(legacy) = update.legacy_algorithms {
-            sets.push(format!("legacy_algorithms = ${idx}"));
-            values.push(BindVal::Int(i32::from(legacy)));
-            idx += 1;
-        }
-        if let Some(ref login_sequence_id) = update.login_sequence_id {
-            sets.push(format!("login_sequence_id = ${idx}"));
-            match login_sequence_id {
-                Some(u) => values.push(BindVal::Text(u.to_string())),
-                None => values.push(BindVal::Null),
-            }
-            idx += 1;
-        }
-
-        if sets.is_empty() {
+        if b.is_empty() {
             return Ok(());
         }
 
+        // RLS: a non-owner attempting to UPDATE will match zero rows, which
+        // the caller surfaces as "Session {id} not found" — same shape as a
+        // genuinely missing row, no enumeration channel.
         let sql = format!(
-            "UPDATE sessions SET {} WHERE id = ${idx} AND owner = current_user",
-            sets.join(", ")
+            "UPDATE sessions SET {} WHERE id = {} AND owner = current_user",
+            b.set_clause(),
+            b.where_placeholder(),
         );
         let mut query = sqlx::query(&sql);
-        for val in &values {
-            match val {
-                BindVal::Text(s) => query = query.bind(s.as_str()),
-                BindVal::Int(n) => query = query.bind(*n),
-                BindVal::Null => query = query.bind(None::<String>),
-            }
+        for val in b.values() {
+            query = match val {
+                BindVal::Text(s) => query.bind(s.as_str()),
+                BindVal::Int(n) => query.bind(*n),
+                BindVal::Null => query.bind(None::<String>),
+            };
         }
         query = query.bind(id.to_string());
 

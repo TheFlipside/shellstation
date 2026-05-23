@@ -12,6 +12,7 @@ use super::models::{
     NewSession, Session, UpdateCredentialProfile, UpdateHighlightProfile, UpdateLoginSequence,
     UpdateSession,
 };
+use super::update_builder::{BindVal, Dialect, UpdateBuilder};
 use super::{cmp_hostname, BulkSessionEdit, DatabaseProvider, DbResult};
 
 pub struct SqliteProvider {
@@ -307,94 +308,37 @@ impl DatabaseProvider for SqliteProvider {
     }
 
     async fn update_session(&self, id: Uuid, update: UpdateSession) -> DbResult<()> {
-        let mut sets = Vec::new();
+        let mut b = UpdateBuilder::new(Dialect::Sqlite);
+        b.set_text("name", &update.name);
+        b.set_text("hostname", &update.hostname);
+        b.set_int("port", update.port);
+        b.set_text("protocol", &update.protocol);
+        b.set_text("username", &update.username);
+        b.set_text("auth_method", &update.auth_method);
+        b.set_optional_uuid("jump_host_id", &update.jump_host_id);
+        b.set_text("tags", &update.tags);
+        b.set_text("icon", &update.icon);
+        b.set_optional_uuid("highlight_profile_id", &update.highlight_profile_id);
+        b.set_optional_uuid("credential_profile_id", &update.credential_profile_id);
+        b.set_bool_as_int("legacy_algorithms", update.legacy_algorithms);
+        b.set_optional_uuid("login_sequence_id", &update.login_sequence_id);
 
-        // Use typed bind values so port binds as integer and
-        // jump_host_id = None binds as SQL NULL (not empty string).
-        enum BindVal {
-            Text(String),
-            Int(i32),
-            Null,
-        }
-        let mut values: Vec<BindVal> = Vec::new();
-
-        if let Some(ref name) = update.name {
-            sets.push("name = ?");
-            values.push(BindVal::Text(name.clone()));
-        }
-        if let Some(ref hostname) = update.hostname {
-            sets.push("hostname = ?");
-            values.push(BindVal::Text(hostname.clone()));
-        }
-        if let Some(port) = update.port {
-            sets.push("port = ?");
-            values.push(BindVal::Int(port));
-        }
-        if let Some(ref protocol) = update.protocol {
-            sets.push("protocol = ?");
-            values.push(BindVal::Text(protocol.clone()));
-        }
-        if let Some(ref username) = update.username {
-            sets.push("username = ?");
-            values.push(BindVal::Text(username.clone()));
-        }
-        if let Some(ref auth_method) = update.auth_method {
-            sets.push("auth_method = ?");
-            values.push(BindVal::Text(auth_method.clone()));
-        }
-        if let Some(ref jump_host_id) = update.jump_host_id {
-            sets.push("jump_host_id = ?");
-            match jump_host_id {
-                Some(u) => values.push(BindVal::Text(u.to_string())),
-                None => values.push(BindVal::Null),
-            }
-        }
-        if let Some(ref tags) = update.tags {
-            sets.push("tags = ?");
-            values.push(BindVal::Text(tags.clone()));
-        }
-        if let Some(ref icon) = update.icon {
-            sets.push("icon = ?");
-            values.push(BindVal::Text(icon.clone()));
-        }
-        if let Some(ref highlight_profile_id) = update.highlight_profile_id {
-            sets.push("highlight_profile_id = ?");
-            match highlight_profile_id {
-                Some(u) => values.push(BindVal::Text(u.to_string())),
-                None => values.push(BindVal::Null),
-            }
-        }
-        if let Some(ref credential_profile_id) = update.credential_profile_id {
-            sets.push("credential_profile_id = ?");
-            match credential_profile_id {
-                Some(u) => values.push(BindVal::Text(u.to_string())),
-                None => values.push(BindVal::Null),
-            }
-        }
-        if let Some(legacy) = update.legacy_algorithms {
-            sets.push("legacy_algorithms = ?");
-            values.push(BindVal::Int(i32::from(legacy)));
-        }
-        if let Some(ref login_sequence_id) = update.login_sequence_id {
-            sets.push("login_sequence_id = ?");
-            match login_sequence_id {
-                Some(u) => values.push(BindVal::Text(u.to_string())),
-                None => values.push(BindVal::Null),
-            }
-        }
-
-        if sets.is_empty() {
+        if b.is_empty() {
             return Ok(());
         }
 
-        let sql = format!("UPDATE sessions SET {} WHERE id = ?", sets.join(", "));
+        let sql = format!(
+            "UPDATE sessions SET {} WHERE id = {}",
+            b.set_clause(),
+            b.where_placeholder(),
+        );
         let mut query = sqlx::query(&sql);
-        for val in &values {
-            match val {
-                BindVal::Text(s) => query = query.bind(s.as_str()),
-                BindVal::Int(n) => query = query.bind(*n),
-                BindVal::Null => query = query.bind(None::<String>),
-            }
+        for val in b.values() {
+            query = match val {
+                BindVal::Text(s) => query.bind(s.as_str()),
+                BindVal::Int(n) => query.bind(*n),
+                BindVal::Null => query.bind(None::<String>),
+            };
         }
         query = query.bind(id.to_string());
 

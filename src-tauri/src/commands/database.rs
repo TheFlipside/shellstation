@@ -256,6 +256,25 @@ pub async fn db_create_database(
     Ok("ok".to_string())
 }
 
+/// Persist the database configuration and rotate the PostgreSQL password
+/// in the OS keychain.
+///
+/// ## Why this function is large
+///
+/// This is an IPC command that *must* finish atomically from the user's
+/// perspective: either the new config and the new keychain entry are both
+/// stored, or neither is. The branches are: validate backend / SQLite path
+/// → conditionally store password in keychain with round-trip verification
+/// → preserve existing logging + user_ident state under a separate lock →
+/// emit the new AppConfig to disk. Each step is itself simple; the
+/// complexity is in *ordering* them so a failure in step N can't leave the
+/// keychain and config file in disagreement.
+///
+/// The empty-password branch is the only non-obvious bit: an empty
+/// password means "keep the current keychain entry", not "wipe it". This
+/// lets the settings UI load with the password field blank (so the value
+/// never round-trips to the webview) and still let the user save unrelated
+/// changes without re-entering the password.
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 pub async fn db_save_config(
@@ -591,6 +610,28 @@ fn validate_import_data(data: &ExportData) -> Result<(), String> {
     Ok(())
 }
 
+/// Import a JSON export into the live database.
+///
+/// ## Why this function is large
+///
+/// `db_import` walks six independent entity types (folders, sessions,
+/// credentials, credential profiles, highlight profiles, login sequences)
+/// and applies upsert semantics to each: existing rows by id are
+/// preserved (skipped), new rows are inserted. Each entity type has its
+/// own duplicate-detection and per-row error handling, and partial
+/// success is the expected outcome — a half-broken export should import
+/// what it can and report the rest as warnings rather than rolling back.
+///
+/// The complexity is essential: collapsing the six entity loops into a
+/// generic loop requires either a trait-object per-entity dispatch
+/// (which loses sqlx's compile-time query checks) or a macro (which
+/// hides the per-entity divergence in defaults and FK resolution). The
+/// flat structure here is verbose but each branch is independently
+/// auditable, which matters because import is a frequent source of
+/// support tickets.
+///
+/// Validation of the import payload (count caps, length caps) is done
+/// up-front by [`validate_import_data`], which is unit-tested.
 #[tauri::command]
 pub async fn db_import(
     state: State<'_, DbState>,

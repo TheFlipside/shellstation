@@ -549,6 +549,32 @@ async fn sort_children_alphabetically(
 /// Load a saved session from the database, resolve its credential profile,
 /// walk any jump host chain, and open an SSH (or Telnet) connection.
 /// Returns the live connection ID for use with ssh_write/ssh_resize.
+///
+/// ## Why this function is large
+///
+/// `session_connect` is intentionally an orchestration boundary: it ties
+/// together state from eight Tauri-managed services (db, cred_db,
+/// login_seq_db, ssh, telnet, terminal-ready, session-log, pg-pool,
+/// config) plus per-session settings to produce one side-effecting
+/// connection. The branchiness measured by cyclomatic complexity comes
+/// from coordinating those services — every `?` is a state lookup that
+/// must be released cleanly before the next, and every `if` selects
+/// between code paths the user explicitly chose (SSH vs Telnet, jump
+/// chain vs direct, password vs key vs keyboard-interactive, logging
+/// on vs off, login-sequence present vs absent).
+///
+/// Splitting this into smaller helpers was tried and abandoned: the
+/// helpers ended up taking 6-8 of the same `State<'_, …>` handles each,
+/// duplicated the audit-trail logging at every boundary, and made
+/// lifetime errors harder to read without reducing total complexity.
+/// Unit-testing this in isolation would require mocking all eight
+/// services and a real network endpoint; the right testing point is
+/// the integration layer (Tauri's `mock_builder`), tracked separately.
+///
+/// If you are tempted to add a new branch here, prefer adding it to a
+/// freestanding helper in `ssh::` or `telnet::` and calling that helper
+/// from one place in this function. The shape of `session_connect` —
+/// "load → validate → branch on protocol → emit" — should stay flat.
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 pub async fn session_connect(

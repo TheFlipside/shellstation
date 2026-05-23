@@ -1,3 +1,19 @@
+//! SecureCRT XML session-store parser.
+//!
+//! SecureCRT stores sessions as a recursive `<key>` tree where a key is
+//! a folder iff it has child `<key>` elements, and a session iff it has
+//! a `<dword name="Is Session">1</dword>` plus a hostname. The same
+//! `<key>` opening tag can be either kind, and the only way to know is
+//! to see what comes next — so the parser commits to a folder
+//! interpretation on the *first* child key it encounters, otherwise
+//! collects properties until the closing tag and treats the key as a
+//! session if `Is Session` was set.
+//!
+//! That look-ahead pattern is why `parse_key_block` is large: the
+//! branchiness reflects a genuinely ambiguous grammar, not avoidable
+//! accidental complexity. Each branch is exercised by a fixture in the
+//! test module at the bottom of this file.
+
 use quick_xml::events::Event;
 use quick_xml::Reader;
 
@@ -417,4 +433,239 @@ fn get_attr(e: &quick_xml::events::BytesStart<'_>, name: &str) -> Option<String>
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // The SecureCRT parser walks a recursive `<key>` tree where a key is a
+    // folder iff it has child keys, and a session iff it has a
+    // `<dword name="Is Session">1</dword>` flag plus a `<string name="Hostname">`.
+    // The folder-vs-session disambiguation depends on which event we see
+    // *first* — child key, or property — and the function commits to the
+    // folder interpretation on the first child key. Each branch of that
+    // decision tree (built-in sessions skipped, missing hostname, telnet
+    // vs SSH ports, jump-host "Session:" prefix) gets a fixture.
+
+    fn wrap(inner: &str) -> String {
+        // Minimal SecureCRT-shaped envelope around `<key name="Sessions">`.
+        format!(
+            r#"<?xml version="1.0"?>
+            <VanDyke version="3.0">
+                <key name="Sessions">{inner}</key>
+            </VanDyke>"#
+        )
+    }
+
+    #[test]
+    fn parse_requires_sessions_key() {
+        // Without a `<key name="Sessions">` we cannot determine where
+        // sessions live — must error rather than silently return empty.
+        let xml = r#"<?xml version="1.0"?><VanDyke version="3.0"/>"#;
+        let err = parse(xml).unwrap_err();
+        assert!(err.contains("Sessions"));
+    }
+
+    #[test]
+    fn parse_empty_sessions() {
+        let (folders, sessions, warnings) = parse(&wrap("")).unwrap();
+        assert!(folders.is_empty());
+        assert!(sessions.is_empty());
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn parse_ssh_session_minimal() {
+        let xml = wrap(
+            r#"
+            <key name="web1">
+                <dword name="Is Session">1</dword>
+                <string name="Hostname">web1.example.com</string>
+                <string name="Protocol Name">SSH2</string>
+                <dword name="[SSH2] Port">22</dword>
+            </key>"#,
+        );
+        let (folders, sessions, warnings) = parse(&xml).unwrap();
+        assert!(folders.is_empty());
+        assert_eq!(sessions.len(), 1);
+        assert!(warnings.is_empty());
+        let s = &sessions[0];
+        assert_eq!(s.name, "web1");
+        assert_eq!(s.hostname, "web1.example.com");
+        assert_eq!(s.port, 22);
+        assert_eq!(s.protocol, "ssh");
+    }
+
+    #[test]
+    fn parse_telnet_session_uses_telnet_port() {
+        let xml = wrap(
+            r#"
+            <key name="switch">
+                <dword name="Is Session">1</dword>
+                <string name="Hostname">10.0.0.1</string>
+                <string name="Protocol Name">Telnet</string>
+                <dword name="Port">2323</dword>
+            </key>"#,
+        );
+        let (_, sessions, _) = parse(&xml).unwrap();
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].protocol, "telnet");
+        assert_eq!(sessions[0].port, 2323);
+    }
+
+    #[test]
+    fn parse_session_defaults_port() {
+        // Omitted [SSH2] Port defaults to 22; omitted telnet Port defaults to 23.
+        let ssh = wrap(
+            r#"
+            <key name="s">
+                <dword name="Is Session">1</dword>
+                <string name="Hostname">h</string>
+                <string name="Protocol Name">SSH2</string>
+            </key>"#,
+        );
+        assert_eq!(parse(&ssh).unwrap().1[0].port, 22);
+
+        let telnet = wrap(
+            r#"
+            <key name="s">
+                <dword name="Is Session">1</dword>
+                <string name="Hostname">h</string>
+                <string name="Protocol Name">Telnet</string>
+            </key>"#,
+        );
+        assert_eq!(parse(&telnet).unwrap().1[0].port, 23);
+    }
+
+    #[test]
+    fn parse_session_missing_hostname_warns() {
+        let xml = wrap(
+            r#"
+            <key name="broken">
+                <dword name="Is Session">1</dword>
+                <string name="Protocol Name">SSH2</string>
+            </key>"#,
+        );
+        let (_, sessions, warnings) = parse(&xml).unwrap();
+        assert!(sessions.is_empty());
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("no hostname"));
+    }
+
+    #[test]
+    fn parse_unsupported_protocol_warns() {
+        let xml = wrap(
+            r#"
+            <key name="rdp1">
+                <dword name="Is Session">1</dword>
+                <string name="Hostname">srv</string>
+                <string name="Protocol Name">RDP</string>
+            </key>"#,
+        );
+        let (_, sessions, warnings) = parse(&xml).unwrap();
+        assert!(sessions.is_empty());
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].to_lowercase().contains("rdp"));
+    }
+
+    #[test]
+    fn parse_skips_builtin_default_sessions() {
+        // The "Default" key would otherwise look like a real session; it must
+        // be silently dropped so the user's session tree isn't polluted.
+        let xml = wrap(
+            r#"
+            <key name="Default">
+                <dword name="Is Session">1</dword>
+                <string name="Hostname">should-not-appear</string>
+                <string name="Protocol Name">SSH2</string>
+            </key>
+            <key name="real">
+                <dword name="Is Session">1</dword>
+                <string name="Hostname">real.example.com</string>
+                <string name="Protocol Name">SSH2</string>
+            </key>"#,
+        );
+        let (_, sessions, _) = parse(&xml).unwrap();
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].name, "real");
+    }
+
+    #[test]
+    fn parse_nested_folders() {
+        // A `<key>` with child `<key>` elements is a folder, not a session.
+        let xml = wrap(
+            r#"
+            <key name="Production">
+                <key name="EU">
+                    <key name="web1">
+                        <dword name="Is Session">1</dword>
+                        <string name="Hostname">web1.eu</string>
+                        <string name="Protocol Name">SSH2</string>
+                    </key>
+                </key>
+            </key>"#,
+        );
+        let (folders, sessions, _) = parse(&xml).unwrap();
+        assert_eq!(folders.len(), 2);
+        assert_eq!(folders[0].name, "Production");
+        assert_eq!(folders[1].name, "EU");
+        assert_eq!(folders[1].parent_temp_id, Some(folders[0].temp_id));
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].folder_temp_id, folders[1].temp_id);
+    }
+
+    #[test]
+    fn parse_jump_host_via_firewall_name() {
+        // SecureCRT references a jump host via "Firewall Name" = "Session:<name>".
+        let xml = wrap(
+            r#"
+            <key name="bastion">
+                <dword name="Is Session">1</dword>
+                <string name="Hostname">bastion.example.com</string>
+                <string name="Protocol Name">SSH2</string>
+            </key>
+            <key name="target">
+                <dword name="Is Session">1</dword>
+                <string name="Hostname">target.example.com</string>
+                <string name="Protocol Name">SSH2</string>
+                <string name="Firewall Name">Session:bastion</string>
+            </key>"#,
+        );
+        let (_, sessions, _) = parse(&xml).unwrap();
+        let target = sessions.iter().find(|s| s.name == "target").unwrap();
+        assert_eq!(target.jump_host_name.as_deref(), Some("bastion"));
+    }
+
+    #[test]
+    fn parse_rejects_excessive_nesting() {
+        // Build a folder chain deeper than MAX_NESTING_DEPTH (100).
+        let mut inner = String::new();
+        for i in 0..=MAX_NESTING_DEPTH {
+            inner.push_str(&format!(r#"<key name="f{i}">"#));
+        }
+        for _ in 0..=MAX_NESTING_DEPTH {
+            inner.push_str("</key>");
+        }
+        let err = parse(&wrap(&inner)).unwrap_err();
+        assert!(err.contains("nesting"));
+    }
+
+    #[test]
+    fn parse_oversized_dword_does_not_overflow() {
+        // SecureCRT writes large u32 values (e.g. 0xFFFFFFFD for some
+        // settings) — these must not break parsing for the dwords we
+        // actually care about.
+        let xml = wrap(
+            r#"
+            <key name="s">
+                <dword name="Is Session">1</dword>
+                <dword name="Printer Quality">4294967293</dword>
+                <string name="Hostname">h</string>
+                <string name="Protocol Name">SSH2</string>
+            </key>"#,
+        );
+        let (_, sessions, _) = parse(&xml).unwrap();
+        assert_eq!(sessions.len(), 1);
+    }
 }

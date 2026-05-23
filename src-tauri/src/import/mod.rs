@@ -49,6 +49,7 @@ type ParseResult = (Vec<ImportedFolder>, Vec<ImportedSession>, Vec<String>);
 // ── Common types ────────────────────────────────────────────────────
 
 /// A folder extracted from an external session file.
+#[derive(Debug)]
 pub struct ImportedFolder {
     /// Local ordinal used to reference parent folders before DB IDs exist.
     pub temp_id: usize,
@@ -58,6 +59,7 @@ pub struct ImportedFolder {
 }
 
 /// A session extracted from an external session file.
+#[derive(Debug)]
 pub struct ImportedSession {
     pub name: String,
     /// References an `ImportedFolder.temp_id`.

@@ -343,6 +343,26 @@ enum IacState {
     SbIac,
 }
 
+/// Telnet IAC (Interpret As Command) state machine: one byte in, mutating
+/// `state` and either appending to `out_buf` (real terminal data) or to
+/// `responses` (option-negotiation reply).
+///
+/// ## Why this function is large
+///
+/// RFC 854 specifies a strict state machine: every IAC byte introduces a
+/// command, the next byte selects between WILL/WONT/DO/DONT/SB/SE and the
+/// byte after that names the option. The `match (state, byte)` shape
+/// here is a direct transcription of that table — each arm corresponds
+/// to one cell in the RFC 854 state diagram, and the branchiness
+/// measured by cyclomatic complexity is intrinsic to the protocol, not
+/// to the implementation.
+///
+/// The function is unit-testable in principle (drive it byte-by-byte
+/// with synthetic IAC sequences and assert the resulting state +
+/// responses), but each test would need to know the RFC 854 layout
+/// in detail to be meaningful. Adding such a corpus is a separate work
+/// item — the per-byte transitions here cannot be simplified without
+/// rewriting against a different protocol.
 fn process_iac_byte(
     byte: u8,
     state: &mut IacState,
