@@ -1,4 +1,4 @@
-# Veilbreak — dev task runner
+# Shellstation — dev task runner
 #
 # Install just:        cargo install just   (or: apt install just / pacman -S just)
 # List all recipes:    just                 (the default recipe)
@@ -25,6 +25,10 @@ test:
 
 # Lint + test. Run before pushing.
 check: lint test
+
+# Crap
+crap:
+    cd src-tauri && cargo llvm-cov --lcov --output-path lcov.info && cargo crap --lcov lcov.info
 
 # Run the app.
 run:
