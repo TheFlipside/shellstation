@@ -4,8 +4,9 @@ description: |
   Security auditor agent. Scans code for common vulnerabilities: SQL injection,
   XSS, command injection, path traversal, insecure deserialization, SSRF,
   hardcoded secrets, and other OWASP Top 10 issues. Covers Python, C/C++, Bash,
-  Go, Rust, JavaScript/TypeScript, Flutter/Dart, and PHP. Runs on Sonnet for
-  balanced cost/quality — escalates critical findings to the main session.
+  Go, Rust, JavaScript/TypeScript, Flutter/Dart, and PHP.
+  For non-standard libraries or frameworks, use publicly available documentation and known vulnerability patterns to identify equivalent vulnerabilities.
+  Runs on Sonnet for balanced cost/quality — escalates critical findings to the main session.
 model: sonnet
 tools: Read, Bash
 permissionMode: plan
@@ -123,6 +124,17 @@ wrong or the suppressed issue is genuinely exploitable despite the comment.
 - [ ] **`.dockerignore` present** — `.git`, `.env`, credential files, and build artifacts are excluded from build context
 - [ ] **HEALTHCHECK defined** — Container has a health check to avoid running silently broken
 - [ ] **No SUID/SGID binaries** — Final image does not contain unnecessary setuid/setgid binaries (run `find / -perm /6000` to verify)
+
+### Filesystem & Syscall Safety (TOCTOU)
+
+- [ ] **No check-then-act on paths** — If code checks a path property (exists, is file, permissions) and then acts on the same path in a separate call, it is a TOCTOU race. Between the two syscalls an attacker can swap the path for a symlink. Anchor on a file descriptor instead, or use atomic operations (`O_CREAT|O_EXCL`, `create_new(true)`, `openat`, `renameat`)
+- [ ] **Permissions set at creation time** — Files and directories are created with their final permissions in the same syscall (e.g. `open(..., mode)`, `mkdir(..., mode)`, `OpenOptions::mode()`, `os.open(..., flags, mode)`, `os.makedirs(..., mode)`). No pattern of "create then chmod" — the window between creation and permission change is exploitable
+- [ ] **Path identity by inode, not string** — Code does not compare path strings to determine if two paths refer to the same filesystem object. Use `(dev, inode)` pairs (`os.path.samefile`, `fs::metadata` + `dev()`/`ino()`, `stat()`) or canonicalize before comparing
+- [ ] **No symlink following in privileged contexts** — Privileged code (running as root, setuid, or in a chroot) uses `O_NOFOLLOW`, `lstat`, or `*at()` syscalls with `AT_SYMLINK_NOFOLLOW` to avoid following attacker-planted symlinks
+- [ ] **Inputs resolved before trust boundary crossing** — User names, groups, paths, and library lookups are resolved *before* entering a chroot, container, or restricted namespace. After crossing, the attacker controls the resolution
+- [ ] **Byte-correct I/O at system boundaries** — File paths, environment variables, command arguments, and stream contents are handled as raw bytes (`OsStr`, `&[u8]`, `bytes`) at Unix boundaries. No lossy UTF-8 conversion (`from_utf8_lossy`, implicit `.encode()`) that silently corrupts non-UTF-8 data
+- [ ] **No panics / aborts on untrusted input** — Code processing external input does not use unchecked operations (`unwrap`, `expect`, `[]` indexing, unguarded arithmetic) that abort on malformed data. Every such abort is a denial-of-service vector. Use fallible alternatives (`?`, `.get()`, `checked_*`, `try_from`)
+- [ ] **Errors propagated, not discarded** — `Result`/return values from filesystem and I/O operations are not silently swallowed (`.ok()`, `let _ =`, bare `except: pass`). Discarded errors hide partial failures — a tool that exits 0 after failing on half its inputs is a security bug in any script that trusts the exit code
 
 ---
 
