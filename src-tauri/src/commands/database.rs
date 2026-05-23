@@ -239,8 +239,15 @@ pub async fn db_create_database(
     let pool = pool
         .ok_or_else(|| "Connection failed: unable to connect to PostgreSQL server".to_string())?;
 
-    // Use PG's quote_ident equivalent: double-quote the identifier and
-    // escape any embedded double-quotes.
+    // Defense-in-depth quote_ident equivalent: double-quote the identifier
+    // and escape any embedded double-quotes. The character-set allowlist
+    // above already rejects `"`, `\`, NUL, and every other character that
+    // could break out of a double-quoted identifier, so this `replace()` is
+    // a no-op on every input that reaches it today. It stays because if
+    // the allowlist is ever widened (e.g. to permit dots for `schema.db`),
+    // the next reviewer should not have to also remember to re-add the
+    // escaping — it is already here, unconditionally, and the cost is
+    // negligible.
     let quoted = format!("\"{}\"", database.replace('"', "\"\""));
     let sql = format!("CREATE DATABASE {quoted}");
 
