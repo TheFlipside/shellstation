@@ -11,6 +11,7 @@ All notable changes to this project are documented in this file.
 - Pull-parser test fixtures for the mRemoteNG (`confCons.xml`) and SecureCRT XML importers, covering the branch table of each: empty input, single SSH/Telnet session, default-port fallback, missing-hostname warning, unsupported-protocol skip, nested folders with parent tracking, jump-host references, built-in `Default` session skip (SecureCRT), oversized dword handling, and `MAX_NESTING_DEPTH` rejection. mRemoteNG's `parse` went from CRAP 650 → 34.8 (75% line coverage); SecureCRT's `parse_key_block` went from CRAP 930 → 49.3 (72% line coverage).
 - Doc comments at the top of `session_connect`, `db_save_config`, `db_import`, `process_iac_byte`, and both XML parsers explaining why their complexity is essential (IPC orchestration, RFC 854 state machine, ambiguous-grammar look-ahead) and where the right testing point lies (integration harness for the IPC commands, fixtures for the parsers).
 - Overall: functions exceeding `cargo crap`'s threshold of 30 dropped from 107 to 96; test count rose from 15 to 85.
+- Justfile, for easier access to common executed steps.
 
 ### Fixed
 
