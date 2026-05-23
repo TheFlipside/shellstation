@@ -16,6 +16,7 @@ All notable changes to this project are documented in this file.
 
 ### Changed
 
+- Moved `ADMIN_GUIDE.md`, `DESIGN.md`, `DEVELOPMENT.md`, and `RELEASING.md` into a dedicated `docs/` folder. Internal cross-references between these documents continue to use plain filenames because they still share a directory; external references in `README.md`, `CLAUDE.md`, and a comment in `src-tauri/src/db/postgres.rs` were updated to point at `docs/`.
 - Rust backend now passes `clippy::pedantic` clean (`just check`). Most fixes were mechanical (use method references over closures, `map_or`/`let-else` over `match` for one-arm cases, `clone_from` over reassignment, inlined format args, redundant `continue`/`async` removed). Doc comments throughout the backend now backtick identifier-shaped tokens (snake_case, CamelCase, product names like `PostgreSQL`/`SQLite`/`SecureCRT`/`ShellStation`/`ConPTY`, and protocol abbreviations like `NAWS`/`IAC`/`SB`/`SE`). Crate-level allows are documented in `src-tauri/src/lib.rs` for patterns that are deliberate architectural choices (`option_option` for three-state nullable updates, `cast_*` for already-bounded integer ranges, `too_many_lines` for the documented orchestration entry points, `needless_pass_by_value` for Tauri command convention).
 
 ### Fixed

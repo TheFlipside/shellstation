@@ -72,7 +72,7 @@ ShellStation stores its configuration in the platform config directory:
 
 ### PostgreSQL Multi-User Setup
 
-For team deployments with shared session databases, see the [PostgreSQL Administration Guide](ADMIN_GUIDE.md).
+For team deployments with shared session databases, see the [PostgreSQL Administration Guide](docs/ADMIN_GUIDE.md).
 
 ## Development
 
@@ -88,7 +88,7 @@ npx prettier --check "src/**/*.{ts,tsx,css,json}"
 npx tsc --noEmit
 ```
 
-See [DESIGN.md](DESIGN.md) for architecture details, database schema, and the development roadmap.
+See [DESIGN.md](docs/DESIGN.md) for architecture details, database schema, and the development roadmap.
 
 ## Contributing
 

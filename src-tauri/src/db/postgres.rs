@@ -434,7 +434,7 @@ impl DatabaseProvider for PostgresProvider {
         rows.iter().map(row_to_session).collect()
     }
 
-    // RLS enforces access: owner_all + shared_update (DESIGN.md §4.5).
+    // RLS enforces access: owner_all + shared_update (docs/DESIGN.md §4.5).
     async fn update_session(&self, id: Uuid, update: UpdateSession) -> DbResult<()> {
         let mut b = UpdateBuilder::new(Dialect::Postgres);
         b.set_text(SessionColumn::Name, update.name.as_ref());
@@ -593,7 +593,7 @@ impl DatabaseProvider for PostgresProvider {
 
     // ── Reordering ─────────────────────────────────────────────────────
 
-    // RLS enforces access: owner_all + shared_update (DESIGN.md §4.5).
+    // RLS enforces access: owner_all + shared_update (docs/DESIGN.md §4.5).
     async fn reorder_folders(
         &self,
         parent_id: Option<Uuid>,
