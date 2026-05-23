@@ -7,8 +7,8 @@ use serde::{Deserialize, Serialize};
 pub struct AppConfig {
     #[serde(default)]
     pub db_backend: DbBackend,
-    /// Custom SQLite database path. When `None`, the default
-    /// `<config_dir>/sessions.db` is used.
+    /// Custom `SQLite` database path. When `None`, the default
+    /// path `<config_dir>/sessions.db` is used.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sqlite_path: Option<String>,
     #[serde(default)]
@@ -17,9 +17,9 @@ pub struct AppConfig {
     pub logging: LoggingConfig,
     #[serde(default)]
     pub app_logging: AppLoggingConfig,
-    /// User identity for multi-user PostgreSQL mode. Used to key per-user
+    /// User identity for multi-user `PostgreSQL` mode. Used to key per-user
     /// credential mappings in the `session_credentials` table. Prompted on
-    /// first launch in PostgreSQL mode, pre-filled with the OS username.
+    /// first launch in `PostgreSQL` mode, pre-filled with the `OS` username.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub user_ident: Option<String>,
 }
@@ -110,13 +110,13 @@ pub struct PostgresConfig {
     pub database: String,
     #[serde(default)]
     pub username: String,
-    /// Password is stored in the OS keychain, not in config.json.
+    /// Password is stored in the `OS` keychain, not in config.json.
     /// This field is populated at runtime from the keychain and cleared
     /// before writing to disk in `save_config`. It must remain serializable
     /// because Tauri IPC uses serde to return the config to the frontend.
     #[serde(default)]
     pub password: String,
-    /// SSL mode for the PostgreSQL connection.
+    /// `SSL` mode for the `PostgreSQL` connection.
     /// Accepted values: "disable", "prefer" (default), "require".
     #[serde(default = "default_ssl_mode")]
     pub ssl_mode: String,
@@ -144,7 +144,7 @@ impl Default for PostgresConfig {
 }
 
 impl PostgresConfig {
-    /// Build type-safe PostgreSQL connection options.
+    /// Build type-safe `PostgreSQL` connection options.
     ///
     /// Uses `PgConnectOptions` instead of string interpolation to avoid
     /// parameter injection when the password contains special characters
@@ -167,7 +167,7 @@ impl PostgresConfig {
             .ssl_mode(ssl_mode)
     }
 
-    /// Validate the ssl_mode value.
+    /// Validate the `ssl_mode` value.
     pub fn validate_ssl_mode(mode: &str) -> Result<(), String> {
         match mode {
             "disable" | "prefer" | "require" => Ok(()),
@@ -184,12 +184,12 @@ pub struct ConfigState {
     pub config_path: PathBuf,
 }
 
-/// Keychain reference for the PostgreSQL password.
+/// Keychain reference for the `PostgreSQL` password.
 pub const PG_PASSWORD_KEYCHAIN_REF: &str = "postgres-password";
 
 /// Load the application config from `config_dir/config.json`.
 /// Returns `AppConfig::default()` if the file is missing or unreadable.
-/// The PostgreSQL password is loaded from the OS keychain (not from the file).
+/// The `PostgreSQL` password is loaded from the `OS` keychain (not from the file).
 pub fn load_config(config_dir: &Path) -> AppConfig {
     let path = config_dir.join("config.json");
     let mut config = match std::fs::read_to_string(&path) {
@@ -234,7 +234,7 @@ pub fn load_config(config_dir: &Path) -> AppConfig {
                     "Retrieved PostgreSQL password from keychain ({} bytes)",
                     pw.len()
                 );
-                config.postgres.password = (*pw).clone();
+                config.postgres.password.clone_from(&*pw);
             }
             Err(e) => {
                 tracing::error!(

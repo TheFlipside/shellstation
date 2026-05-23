@@ -140,7 +140,7 @@ impl SshManager {
         Ok(())
     }
 
-    /// Get the handle and channel ID for writing to a session.
+    /// Get the handle and channel `ID` for writing to a session.
     /// The caller should drop the manager lock before performing the async write.
     pub fn get_write_handle(
         &self,
@@ -289,13 +289,13 @@ pub async fn establish_ssh_connection(
         // output than to hang the reader indefinitely if the frontend never signals.
         match tokio::time::timeout(std::time::Duration::from_secs(5), ready_rx).await {
             Ok(Ok(())) => {
-                debug!(session_id = %session_id, "Frontend listener ready, starting SSH reader")
+                debug!(session_id = %session_id, "Frontend listener ready, starting SSH reader");
             }
             Ok(Err(_)) => {
-                debug!(session_id = %session_id, "Ready signal sender dropped, starting SSH reader anyway")
+                debug!(session_id = %session_id, "Ready signal sender dropped, starting SSH reader anyway");
             }
             Err(_) => {
-                warn!(session_id = %session_id, "Frontend ready signal timed out after 5s, starting SSH reader anyway")
+                warn!(session_id = %session_id, "Frontend ready signal timed out after 5s, starting SSH reader anyway");
             }
         }
         let mut channel = channel;
@@ -318,8 +318,10 @@ pub async fn establish_ssh_connection(
             tokio::select! {
                 msg = channel.wait() => {
                     match msg {
-                        Some(ChannelMsg::Data { ref data })
-                        | Some(ChannelMsg::ExtendedData { ref data, ext: 1 }) => {
+                        Some(
+                            ChannelMsg::Data { ref data }
+                            | ChannelMsg::ExtendedData { ref data, ext: 1 },
+                        ) => {
                             if let Some(ref lg) = logger {
                                 if let Ok(mut mgr) = lg.lock() {
                                     mgr.write_log(&session_id, data.as_ref());
@@ -379,7 +381,7 @@ pub async fn establish_ssh_connection(
 pub struct SshState {
     pub manager: Arc<Mutex<SshManager>>,
     /// Exposed separately so `ssh_host_verify_response` can resolve a pending
-    /// verification without acquiring the main manager tokio::Mutex (which is
+    /// verification without acquiring the main manager `tokio::Mutex` (which is
     /// held by the `connect()` call waiting for the verification result).
     pub host_verify_senders: HostVerifySenders,
     /// Same pattern for keyboard-interactive auth prompts.
@@ -447,7 +449,7 @@ fn sanitize_ssh_error(raw: &str) -> String {
     }
 }
 
-/// Parse a public key credential string. Format: "key_path" or "key_path\npassphrase".
+/// Parse a public key credential string. Format: "`key_path`" or "`key_path`\npassphrase".
 /// Expands `~` to the user's home directory and validates the path is within it.
 fn parse_key_credential(credential: &str) -> Result<(String, Option<Zeroizing<String>>), String> {
     let (raw_path, passphrase) = match credential.find('\n') {
@@ -533,7 +535,7 @@ fn validate_key_path(path: &str) -> Result<String, String> {
     Ok(canonical.to_string_lossy().to_string())
 }
 
-/// Return the path to the user's known_hosts file.
+/// Return the path to the user's `known_hosts` file.
 fn known_hosts_path() -> Result<PathBuf, String> {
     let home = dirs::home_dir()
         .ok_or_else(|| "Could not determine home directory for known_hosts".to_string())?;
@@ -616,14 +618,13 @@ fn restrict_windows_acl(path: &std::path::Path, is_dir: bool) {
         .output();
 }
 
-/// Remove all existing known_hosts entries for the given host+port,
+/// Remove all existing `known_hosts` entries for the given host+port,
 /// then strip blank lines.  This ensures that `learn_known_hosts_path`
 /// (which only appends) does not create duplicates and that a changed
 /// server key cleanly replaces the old entry.
 fn remove_known_host_entries(path: &std::path::Path, host: &str, port: u16) {
-    let content = match std::fs::read_to_string(path) {
-        Ok(c) => c,
-        Err(_) => return,
+    let Ok(content) = std::fs::read_to_string(path) else {
+        return;
     };
 
     let host_port = if port == 22 {
@@ -656,7 +657,7 @@ fn remove_known_host_entries(path: &std::path::Path, host: &str, port: u16) {
 
 /// Build an SSH client config with the given keepalive parameters.
 ///
-/// TCP_NODELAY is enabled unconditionally: interactive terminal sessions
+/// `TCP_NODELAY` is enabled unconditionally: interactive terminal sessions
 /// send small keystroke-sized packets where Nagle's algorithm adds 40+ms
 /// of latency for no real bandwidth savings. OpenSSH sets this by default.
 ///
@@ -694,11 +695,11 @@ fn log_algorithm_proposal(pref: &russh::Preferred, legacy: bool) {
     }
     debug!(
         legacy,
-        kex = %join_names(pref.kex.iter().map(|n| n.as_ref())),
-        key = %join_names(pref.key.iter().map(|a| a.as_str())),
-        cipher = %join_names(pref.cipher.iter().map(|n| n.as_ref())),
-        mac = %join_names(pref.mac.iter().map(|n| n.as_ref())),
-        compression = %join_names(pref.compression.iter().map(|n| n.as_ref())),
+        kex = %join_names(pref.kex.iter().map(AsRef::as_ref)),
+        key = %join_names(pref.key.iter().map(russh::keys::Algorithm::as_str)),
+        cipher = %join_names(pref.cipher.iter().map(AsRef::as_ref)),
+        mac = %join_names(pref.mac.iter().map(AsRef::as_ref)),
+        compression = %join_names(pref.compression.iter().map(AsRef::as_ref)),
         "SSH algorithm proposal"
     );
 }
@@ -1306,7 +1307,7 @@ async fn authenticate_keyboard_interactive(
                     })?;
 
                 // Await user input with 60-second timeout.
-                let responses = tokio::time::timeout(std::time::Duration::from_secs(60), rx)
+                let responses = tokio::time::timeout(std::time::Duration::from_mins(1), rx)
                     .await
                     .map_err(|_| {
                         cleanup_kbd_interactive_sender(kbd_interactive_senders, session_id);
@@ -1349,6 +1350,7 @@ async fn authenticate_keyboard_interactive_with_password(
     password: &str,
     session_id: &str,
 ) -> Result<(), String> {
+    const MAX_ROUNDS: u8 = 3;
     debug!(session_id = %session_id, "Attempting keyboard-interactive fallback with stored password");
 
     let mut response = handle
@@ -1356,7 +1358,6 @@ async fn authenticate_keyboard_interactive_with_password(
         .await
         .map_err(|e| format!("Keyboard-interactive fallback failed: {e}"))?;
 
-    const MAX_ROUNDS: u8 = 3;
     let mut round = 0u8;
     loop {
         match response {
@@ -1493,8 +1494,8 @@ impl client::Handler for SshHandler {
             guard.take()
         };
 
-        let accepted = match rx {
-            Some(rx) => match tokio::time::timeout(std::time::Duration::from_secs(60), rx).await {
+        let accepted = if let Some(rx) = rx {
+            match tokio::time::timeout(std::time::Duration::from_mins(1), rx).await {
                 Ok(Ok(answer)) => answer,
                 Ok(Err(_)) => {
                     warn!(session_id = %self.session_id, "Host verification channel dropped");
@@ -1504,11 +1505,10 @@ impl client::Handler for SshHandler {
                     warn!(session_id = %self.session_id, "Host verification timed out after 60s");
                     false
                 }
-            },
-            None => {
-                error!(session_id = %self.session_id, "No verification receiver available");
-                false
             }
+        } else {
+            error!(session_id = %self.session_id, "No verification receiver available");
+            false
         };
 
         if accepted {

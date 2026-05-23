@@ -1,6 +1,6 @@
-//! SecureCRT XML session-store parser.
+//! `SecureCRT` `XML` session-store parser.
 //!
-//! SecureCRT stores sessions as a recursive `<key>` tree where a key is
+//! `SecureCRT` stores sessions as a recursive `<key>` tree where a key is
 //! a folder iff it has child `<key>` elements, and a session iff it has
 //! a `<dword name="Is Session">1</dword>` plus a hostname. The same
 //! `<key>` opening tag can be either kind, and the only way to know is
@@ -20,10 +20,10 @@ use quick_xml::Reader;
 use super::{ImportedFolder, ImportedSession, ParseResult};
 
 /// Maximum allowed folder nesting depth to prevent stack exhaustion from
-/// pathologically deep XML structures.
+/// pathologically deep `XML` structures.
 const MAX_NESTING_DEPTH: usize = 100;
 
-/// Names of built-in SecureCRT sessions to skip during import.
+/// Names of built-in `SecureCRT` sessions to skip during import.
 const SKIP_SESSIONS: &[&str] = &[
     "Default",
     "Default_LocalShell",
@@ -31,9 +31,9 @@ const SKIP_SESSIONS: &[&str] = &[
     "Default_Serial",
 ];
 
-/// Parse a SecureCRT XML export into folders and sessions.
+/// Parse a `SecureCRT` `XML` export into folders and sessions.
 ///
-/// SecureCRT uses a nested `<key>` structure under `<key name="Sessions">`.
+/// `SecureCRT` uses a nested `<key>` structure under `<key name="Sessions">`.
 /// Each key is either a folder (contains child keys) or a session
 /// (has `<dword name="Is Session">1</dword>`).
 pub fn parse(xml: &str) -> Result<ParseResult, String> {
@@ -68,8 +68,8 @@ pub fn parse(xml: &str) -> Result<ParseResult, String> {
 /// Advance the reader past `<key name="Sessions">`, leaving it positioned
 /// at the first child element. Returns `false` if the block is not found.
 ///
-/// If the XML contains multiple `<key name="Sessions">` blocks only the
-/// first one is processed; SecureCRT exports are expected to have exactly one.
+/// If the `XML` contains multiple `<key name="Sessions">` blocks only the
+/// first one is processed; `SecureCRT` exports are expected to have exactly one.
 fn find_sessions_key(reader: &mut Reader<&[u8]>) -> Result<bool, String> {
     loop {
         match reader.read_event() {
@@ -109,8 +109,8 @@ fn parse_key_children(
         match reader.read_event() {
             Ok(Event::Start(ref e)) => {
                 if e.local_name().as_ref() == b"key" {
-                    match get_attr(e, "name") {
-                        Some(key_name) => parse_key_block(
+                    if let Some(key_name) = get_attr(e, "name") {
+                        parse_key_block(
                             reader,
                             &key_name,
                             parent_temp_id,
@@ -119,18 +119,17 @@ fn parse_key_children(
                             sessions,
                             warnings,
                             depth,
-                        )?,
-                        None => {
-                            warnings.push("Skipped <key> element without name attribute".into());
-                            skip_through_end(reader, b"key")?;
-                        }
+                        )?;
+                    } else {
+                        warnings.push("Skipped <key> element without name attribute".into());
+                        skip_through_end(reader, b"key")?;
                     }
                 } else {
                     // Non-key element at this level (shouldn't happen, but be safe).
                     skip_through_end(reader, e.local_name().as_ref())?;
                 }
             }
-            Ok(Event::End(_)) | Ok(Event::Eof) => break,
+            Ok(Event::End(_) | Event::Eof) => break,
             Err(e) => {
                 return Err(format!(
                     "XML parse error at position {}: {e}",
@@ -197,8 +196,8 @@ fn parse_key_block(
                             });
                         }
                         has_child_keys = true;
-                        match get_attr(e, "name") {
-                            Some(child_name) => parse_key_block(
+                        if let Some(child_name) = get_attr(e, "name") {
+                            parse_key_block(
                                 reader,
                                 &child_name,
                                 my_temp_id,
@@ -207,13 +206,12 @@ fn parse_key_block(
                                 sessions,
                                 warnings,
                                 depth + 1,
-                            )?,
-                            None => {
-                                warnings.push(format!(
-                                    "In \"{key_name}\": skipped <key> element without name attribute"
-                                ));
-                                skip_through_end(reader, b"key")?;
-                            }
+                            )?;
+                        } else {
+                            warnings.push(format!(
+                                "In \"{key_name}\": skipped <key> element without name attribute"
+                            ));
+                            skip_through_end(reader, b"key")?;
                         }
                     }
                     b"string" => {
@@ -279,7 +277,7 @@ fn parse_key_block(
     Ok(())
 }
 
-/// Collected session properties from SecureCRT XML.
+/// Collected session properties from `SecureCRT` `XML`.
 #[derive(Default)]
 struct SessionProps {
     is_session: bool,
@@ -319,7 +317,7 @@ impl SessionProps {
     }
 }
 
-/// Map SecureCRT protocol names to ShellStation protocols.
+/// Map `SecureCRT` protocol names to `ShellStation` protocols.
 fn map_protocol(protocol: &str) -> Option<&'static str> {
     match protocol {
         "SSH2" | "SSH1" => Some("ssh"),
@@ -334,14 +332,11 @@ fn build_session(
     props: &SessionProps,
     folder_temp_id: usize,
 ) -> Result<ImportedSession, String> {
-    let protocol = match map_protocol(&props.protocol) {
-        Some(p) => p,
-        None => {
-            return Err(format!(
-                "Skipped \"{name}\" — unsupported protocol: {}",
-                props.protocol
-            ));
-        }
+    let Some(protocol) = map_protocol(&props.protocol) else {
+        return Err(format!(
+            "Skipped \"{name}\" — unsupported protocol: {}",
+            props.protocol
+        ));
     };
 
     if props.hostname.is_empty() {
@@ -639,10 +634,11 @@ mod tests {
 
     #[test]
     fn parse_rejects_excessive_nesting() {
+        use std::fmt::Write as _;
         // Build a folder chain deeper than MAX_NESTING_DEPTH (100).
         let mut inner = String::new();
         for i in 0..=MAX_NESTING_DEPTH {
-            inner.push_str(&format!(r#"<key name="f{i}">"#));
+            let _ = write!(inner, r#"<key name="f{i}">"#);
         }
         for _ in 0..=MAX_NESTING_DEPTH {
             inner.push_str("</key>");

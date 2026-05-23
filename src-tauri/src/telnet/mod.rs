@@ -97,7 +97,7 @@ impl TelnetManager {
     }
 
     /// Disconnect a Telnet session.
-    pub async fn disconnect(&mut self, id: &str) -> Result<(), String> {
+    pub fn disconnect(&mut self, id: &str) -> Result<(), String> {
         let session = self
             .sessions
             .remove(id)
@@ -170,13 +170,13 @@ pub async fn establish_telnet_connection(
     let reader_task = tokio::spawn(async move {
         match tokio::time::timeout(std::time::Duration::from_secs(5), ready_rx).await {
             Ok(Ok(())) => {
-                debug!(session_id = %session_id, "Frontend listener ready, starting Telnet reader")
+                debug!(session_id = %session_id, "Frontend listener ready, starting Telnet reader");
             }
             Ok(Err(_)) => {
-                debug!(session_id = %session_id, "Ready signal sender dropped, starting Telnet reader anyway")
+                debug!(session_id = %session_id, "Ready signal sender dropped, starting Telnet reader anyway");
             }
             Err(_) => {
-                warn!(session_id = %session_id, "Frontend ready signal timed out after 5s, starting Telnet reader anyway")
+                warn!(session_id = %session_id, "Frontend ready signal timed out after 5s, starting Telnet reader anyway");
             }
         }
         telnet_io_loop(
@@ -330,7 +330,7 @@ async fn telnet_io_loop(
     }
 }
 
-/// IAC state machine states.
+/// `IAC` state machine states.
 #[derive(Clone, Copy)]
 enum IacState {
     Normal,
@@ -343,13 +343,13 @@ enum IacState {
     SbIac,
 }
 
-/// Telnet IAC (Interpret As Command) state machine: one byte in, mutating
+/// Telnet `IAC` (Interpret As Command) state machine: one byte in, mutating
 /// `state` and either appending to `out_buf` (real terminal data) or to
 /// `responses` (option-negotiation reply).
 ///
 /// ## Why this function is large
 ///
-/// RFC 854 specifies a strict state machine: every IAC byte introduces a
+/// RFC 854 specifies a strict state machine: every `IAC` byte introduces a
 /// command, the next byte selects between WILL/WONT/DO/DONT/SB/SE and the
 /// byte after that names the option. The `match (state, byte)` shape
 /// here is a direct transcription of that table — each arm corresponds
@@ -358,7 +358,7 @@ enum IacState {
 /// to the implementation.
 ///
 /// The function is unit-testable in principle (drive it byte-by-byte
-/// with synthetic IAC sequences and assert the resulting state +
+/// with synthetic `IAC` sequences and assert the resulting state +
 /// responses), but each test would need to know the RFC 854 layout
 /// in detail to be meaningful. Adding such a corpus is a separate work
 /// item — the per-byte transitions here cannot be simplified without
@@ -450,7 +450,7 @@ impl crate::login_sequence::LoginSequenceTransport for TelnetLoginTransport<'_> 
     async fn read(&mut self) -> Option<Vec<u8>> {
         loop {
             match self.reader.read(&mut *self.buf).await {
-                Ok(0) => return None,
+                Ok(0) | Err(_) => return None,
                 Ok(n) => {
                     self.out_buf.clear();
                     let mut responses: Vec<u8> = Vec::new();
@@ -464,7 +464,6 @@ impl crate::login_sequence::LoginSequenceTransport for TelnetLoginTransport<'_> 
                         return Some(self.out_buf.clone());
                     }
                 }
-                Err(_) => return None,
             }
         }
     }
@@ -477,7 +476,7 @@ impl crate::login_sequence::LoginSequenceTransport for TelnetLoginTransport<'_> 
     }
 }
 
-/// Build a NAWS sub-negotiation payload: IAC SB NAWS <w_hi> <w_lo> <h_hi> <h_lo> IAC SE.
+/// Build a `NAWS` sub-negotiation payload: `IAC` `SB` `NAWS` <`w_hi`> <`w_lo`> <`h_hi`> <`h_lo`> `IAC` `SE`.
 /// Any 0xFF bytes in the size values must be doubled (escaped) per RFC 855.
 fn naws_subnegotiation(cols: u16, rows: u16) -> Vec<u8> {
     let mut buf = vec![IAC, SB, OPT_NAWS];

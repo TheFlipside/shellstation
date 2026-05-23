@@ -13,6 +13,10 @@ All notable changes to this project are documented in this file.
 - Overall: functions exceeding `cargo crap`'s threshold of 30 dropped from 107 to 96; test count rose from 15 to 85.
 - Justfile, for easier access to common executed steps.
 
+### Changed
+
+- Rust backend now passes `clippy::pedantic` clean (`just check`). Most fixes were mechanical (use method references over closures, `map_or`/`let-else` over `match` for one-arm cases, `clone_from` over reassignment, inlined format args, redundant `continue`/`async` removed). Doc comments throughout the backend now backtick identifier-shaped tokens (snake_case, CamelCase, product names like `PostgreSQL`/`SQLite`/`SecureCRT`/`ShellStation`/`ConPTY`, and protocol abbreviations like `NAWS`/`IAC`/`SB`/`SE`). Crate-level allows are documented in `src-tauri/src/lib.rs` for patterns that are deliberate architectural choices (`option_option` for three-state nullable updates, `cast_*` for already-bounded integer ranges, `too_many_lines` for the documented orchestration entry points, `needless_pass_by_value` for Tauri command convention).
+
 ### Fixed
 
 ### Security

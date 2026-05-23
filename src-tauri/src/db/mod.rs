@@ -54,13 +54,13 @@ pub struct CredentialDbState(pub Arc<dyn DatabaseProvider>);
 /// Login sequences are always stored locally, same as credentials.
 pub struct LoginSequenceDbState(pub Arc<dyn DatabaseProvider>);
 
-/// Direct access to the PostgreSQL connection pool for operations that
+/// Direct access to the `PostgreSQL` connection pool for operations that
 /// bypass the `DatabaseProvider` trait (e.g. `session_credentials` table).
-/// `None` in SQLite mode.
+/// `None` in `SQLite` mode.
 pub struct PgPoolState(pub Option<sqlx::PgPool>);
 
-/// The PostgreSQL `current_user` at connection time. Used by the frontend
-/// to determine item ownership. `None` in SQLite mode.
+/// The `PostgreSQL` `current_user` at connection time. Used by the frontend
+/// to determine item ownership. `None` in `SQLite` mode.
 #[allow(dead_code)]
 pub struct PgUserState(pub Option<String>);
 
@@ -87,7 +87,7 @@ pub trait DatabaseProvider: Send + Sync {
     // ── Reordering ───────────────────────────────────────────────────────
 
     /// Persist a custom order for sibling folders under the given parent.
-    /// `ordered_ids` contains every folder ID in the desired sequence.
+    /// `ordered_ids` contains every folder `ID` in the desired sequence.
     async fn reorder_folders(
         &self,
         parent_id: Option<Uuid>,
@@ -97,13 +97,13 @@ pub trait DatabaseProvider: Send + Sync {
     /// Persist a custom order for sessions inside the given folder.
     async fn reorder_sessions(&self, folder_id: Uuid, ordered_ids: Vec<Uuid>) -> DbResult<()>;
 
-    /// Reset sort_order for sibling folders so they appear alphabetically.
+    /// Reset `sort_order` for sibling folders so they appear alphabetically.
     async fn sort_folders_alphabetically(&self, parent_id: Option<Uuid>) -> DbResult<()>;
 
-    /// Reset sort_order for sessions inside a folder so they appear alphabetically.
+    /// Reset `sort_order` for sessions inside a folder so they appear alphabetically.
     async fn sort_sessions_alphabetically(&self, folder_id: Uuid) -> DbResult<()>;
 
-    /// Reset sort_order for sessions inside a folder so they appear sorted by
+    /// Reset `sort_order` for sessions inside a folder so they appear sorted by
     /// hostname, with proper numeric ordering for IP addresses.
     async fn sort_sessions_by_hostname(&self, folder_id: Uuid) -> DbResult<()>;
 

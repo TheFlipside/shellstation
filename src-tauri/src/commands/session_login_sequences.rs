@@ -110,48 +110,45 @@ pub async fn bulk_set_session_login_sequences(
         let _ = parse_uuid(sid)?;
     }
 
-    match login_sequence_id {
-        Some(seq_id) => {
-            let result = sqlx::query(
-                "WITH RECURSIVE subtree(id) AS ( \
-                     SELECT id FROM folders WHERE id = $3 \
-                     UNION ALL \
-                     SELECT f.id FROM folders f JOIN subtree s ON f.parent_id = s.id \
-                 ) \
-                 INSERT INTO session_login_sequences (session_id, user_ident, login_sequence_id) \
-                 SELECT s.id, $1, $2 FROM sessions s \
+    if let Some(seq_id) = login_sequence_id {
+        let result = sqlx::query(
+            "WITH RECURSIVE subtree(id) AS ( \
+                 SELECT id FROM folders WHERE id = $3 \
+                 UNION ALL \
+                 SELECT f.id FROM folders f JOIN subtree s ON f.parent_id = s.id \
+             ) \
+             INSERT INTO session_login_sequences (session_id, user_ident, login_sequence_id) \
+             SELECT s.id, $1, $2 FROM sessions s \
+             WHERE s.folder_id IN (SELECT id FROM subtree) \
+             ON CONFLICT (session_id, user_ident) \
+             DO UPDATE SET login_sequence_id = EXCLUDED.login_sequence_id",
+        )
+        .bind(&user_ident)
+        .bind(&seq_id)
+        .bind(&folder_id)
+        .execute(pool)
+        .await
+        .map_err(|e| format!("Failed to bulk set session login sequences: {e}"))?;
+        Ok(result.rows_affected() as u32)
+    } else {
+        let result = sqlx::query(
+            "WITH RECURSIVE subtree(id) AS ( \
+                 SELECT id FROM folders WHERE id = $2 \
+                 UNION ALL \
+                 SELECT f.id FROM folders f JOIN subtree s ON f.parent_id = s.id \
+             ) \
+             DELETE FROM session_login_sequences \
+             WHERE user_ident = $1 AND session_id IN ( \
+                 SELECT s.id FROM sessions s \
                  WHERE s.folder_id IN (SELECT id FROM subtree) \
-                 ON CONFLICT (session_id, user_ident) \
-                 DO UPDATE SET login_sequence_id = EXCLUDED.login_sequence_id",
-            )
-            .bind(&user_ident)
-            .bind(&seq_id)
-            .bind(&folder_id)
-            .execute(pool)
-            .await
-            .map_err(|e| format!("Failed to bulk set session login sequences: {e}"))?;
-            Ok(result.rows_affected() as u32)
-        }
-        None => {
-            let result = sqlx::query(
-                "WITH RECURSIVE subtree(id) AS ( \
-                     SELECT id FROM folders WHERE id = $2 \
-                     UNION ALL \
-                     SELECT f.id FROM folders f JOIN subtree s ON f.parent_id = s.id \
-                 ) \
-                 DELETE FROM session_login_sequences \
-                 WHERE user_ident = $1 AND session_id IN ( \
-                     SELECT s.id FROM sessions s \
-                     WHERE s.folder_id IN (SELECT id FROM subtree) \
-                 )",
-            )
-            .bind(&user_ident)
-            .bind(&folder_id)
-            .execute(pool)
-            .await
-            .map_err(|e| format!("Failed to bulk clear session login sequences: {e}"))?;
-            Ok(result.rows_affected() as u32)
-        }
+             )",
+        )
+        .bind(&user_ident)
+        .bind(&folder_id)
+        .execute(pool)
+        .await
+        .map_err(|e| format!("Failed to bulk clear session login sequences: {e}"))?;
+        Ok(result.rows_affected() as u32)
     }
 }
 

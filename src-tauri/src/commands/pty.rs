@@ -6,7 +6,7 @@ use crate::session_logger::SessionLogState;
 
 use super::{validate_dimensions, TerminalReadyState, MAX_WRITE_SIZE};
 
-/// Spawn a new local PTY session. Returns the session ID.
+/// Spawn a new local PTY session. Returns the session `ID`.
 #[tauri::command]
 pub fn pty_spawn(
     app_handle: AppHandle,

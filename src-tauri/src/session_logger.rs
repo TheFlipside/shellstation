@@ -17,11 +17,11 @@ enum LogEntry {
     Active(File),
 }
 
-/// Per-connection state for the ANSI escape sequence stripper.
+/// Per-connection state for the `ANSI` escape sequence stripper.
 ///
 /// Stored alongside each log entry so that escape sequences split across
 /// consecutive `write_log` calls are handled correctly.  Without this,
-/// Windows ConPTY output — which frequently splits sequences across read
+/// Windows `ConPTY` output — which frequently splits sequences across read
 /// boundaries — causes the parser to lose track of in-progress sequences
 /// and either drop text or emit garbage.
 #[derive(Clone, Copy, Default)]
@@ -41,7 +41,7 @@ impl AnsiStripperState {
 
 /// Manages log file handles for active terminal sessions.
 pub struct SessionLogManager {
-    /// Map of connection_id -> (log entry, ANSI stripper state).
+    /// Map of `connection_id` -> (log entry, `ANSI` stripper state).
     entries: HashMap<String, (LogEntry, AnsiStripperState)>,
     pub enabled: bool,
     pub log_dir: PathBuf,
@@ -190,12 +190,12 @@ impl SessionLogManager {
         }
     }
 
-    /// Write terminal output to the log file, stripping ANSI escape sequences
+    /// Write terminal output to the log file, stripping `ANSI` escape sequences
     /// so the log contains only readable text.
     ///
-    /// Creates the log file on the first call (lazy open).  The ANSI stripper
+    /// Creates the log file on the first call (lazy open).  The `ANSI` stripper
     /// state is preserved across calls so that escape sequences split across
-    /// read boundaries (common with Windows ConPTY) are handled correctly.
+    /// read boundaries (common with Windows `ConPTY`) are handled correctly.
     pub fn write_log(&mut self, connection_id: &str, data: &[u8]) {
         if !self.entries.contains_key(connection_id) {
             return;
@@ -331,7 +331,7 @@ pub struct SessionLogState(pub Arc<Mutex<SessionLogManager>>);
 
 // ── ANSI escape sequence stripping ─────────────────────────────────
 
-/// Parser states for stripping ANSI/VT escape sequences from terminal output.
+/// Parser states for stripping `ANSI`/VT escape sequences from terminal output.
 #[derive(Clone, Copy, Debug, Default)]
 enum StripState {
     /// Normal text — pass through.
@@ -348,11 +348,11 @@ enum StripState {
     OscEscape,
 }
 
-/// Strip ANSI escape sequences using persistent parser state.
+/// Strip `ANSI` escape sequences using persistent parser state.
 ///
 /// The caller-owned [`AnsiStripperState`] preserves the parser position
 /// across calls so that escape sequences split across read boundaries
-/// (common with Windows ConPTY) are handled correctly.
+/// (common with Windows `ConPTY`) are handled correctly.
 ///
 /// Handles:
 /// - CSI sequences: `ESC [` ... final byte
@@ -456,7 +456,7 @@ fn strip_ansi_stateful(ctx: &mut AnsiStripperState, data: &[u8]) -> Vec<u8> {
     out
 }
 
-/// Convenience wrapper that strips ANSI sequences in a single pass (no
+/// Convenience wrapper that strips `ANSI` sequences in a single pass (no
 /// persistent state).  Used only by unit tests.
 #[cfg(test)]
 fn strip_ansi(data: &[u8]) -> Vec<u8> {

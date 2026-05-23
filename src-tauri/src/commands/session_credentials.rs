@@ -109,53 +109,50 @@ pub async fn bulk_set_session_credentials(
         let _ = parse_uuid(pid)?;
     }
 
-    match credential_profile_id {
-        Some(profile_id) => {
-            let result = sqlx::query(
-                "WITH RECURSIVE subtree(id) AS ( \
-                     SELECT id FROM folders WHERE id = $3 \
-                     UNION ALL \
-                     SELECT f.id FROM folders f JOIN subtree s ON f.parent_id = s.id \
-                 ) \
-                 INSERT INTO session_credentials (session_id, user_ident, credential_profile_id) \
-                 SELECT s.id, $1, $2 FROM sessions s \
+    if let Some(profile_id) = credential_profile_id {
+        let result = sqlx::query(
+            "WITH RECURSIVE subtree(id) AS ( \
+                 SELECT id FROM folders WHERE id = $3 \
+                 UNION ALL \
+                 SELECT f.id FROM folders f JOIN subtree s ON f.parent_id = s.id \
+             ) \
+             INSERT INTO session_credentials (session_id, user_ident, credential_profile_id) \
+             SELECT s.id, $1, $2 FROM sessions s \
+             WHERE s.folder_id IN (SELECT id FROM subtree) AND s.protocol != 'telnet' \
+             ON CONFLICT (session_id, user_ident) \
+             DO UPDATE SET credential_profile_id = EXCLUDED.credential_profile_id",
+        )
+        .bind(&user_ident)
+        .bind(&profile_id)
+        .bind(&folder_id)
+        .execute(pool)
+        .await
+        .map_err(|e| format!("Failed to bulk set session credentials: {e}"))?;
+        Ok(result.rows_affected() as u32)
+    } else {
+        let result = sqlx::query(
+            "WITH RECURSIVE subtree(id) AS ( \
+                 SELECT id FROM folders WHERE id = $2 \
+                 UNION ALL \
+                 SELECT f.id FROM folders f JOIN subtree s ON f.parent_id = s.id \
+             ) \
+             DELETE FROM session_credentials \
+             WHERE user_ident = $1 AND session_id IN ( \
+                 SELECT s.id FROM sessions s \
                  WHERE s.folder_id IN (SELECT id FROM subtree) AND s.protocol != 'telnet' \
-                 ON CONFLICT (session_id, user_ident) \
-                 DO UPDATE SET credential_profile_id = EXCLUDED.credential_profile_id",
-            )
-            .bind(&user_ident)
-            .bind(&profile_id)
-            .bind(&folder_id)
-            .execute(pool)
-            .await
-            .map_err(|e| format!("Failed to bulk set session credentials: {e}"))?;
-            Ok(result.rows_affected() as u32)
-        }
-        None => {
-            let result = sqlx::query(
-                "WITH RECURSIVE subtree(id) AS ( \
-                     SELECT id FROM folders WHERE id = $2 \
-                     UNION ALL \
-                     SELECT f.id FROM folders f JOIN subtree s ON f.parent_id = s.id \
-                 ) \
-                 DELETE FROM session_credentials \
-                 WHERE user_ident = $1 AND session_id IN ( \
-                     SELECT s.id FROM sessions s \
-                     WHERE s.folder_id IN (SELECT id FROM subtree) AND s.protocol != 'telnet' \
-                 )",
-            )
-            .bind(&user_ident)
-            .bind(&folder_id)
-            .execute(pool)
-            .await
-            .map_err(|e| format!("Failed to bulk clear session credentials: {e}"))?;
-            Ok(result.rows_affected() as u32)
-        }
+             )",
+        )
+        .bind(&user_ident)
+        .bind(&folder_id)
+        .execute(pool)
+        .await
+        .map_err(|e| format!("Failed to bulk clear session credentials: {e}"))?;
+        Ok(result.rows_affected() as u32)
     }
 }
 
-/// Query the current user's credential profile ID for a session.
-/// Used internally by session_connect for PG-mode credential resolution.
+/// Query the current user's credential profile `ID` for a session.
+/// Used internally by `session_connect` for `PG`-mode credential resolution.
 pub async fn query_user_credential(
     pool: &sqlx::PgPool,
     session_id: &str,

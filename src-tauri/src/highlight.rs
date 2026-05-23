@@ -9,23 +9,23 @@ pub struct HighlightRule {
     pub bold: bool,
 }
 
-/// Parsed result from a SecureCRT keyword highlight INI file.
+/// Parsed result from a `SecureCRT` keyword highlight `INI` file.
 pub struct ParsedHighlightProfile {
     pub name: String,
     pub rules: Vec<HighlightRule>,
 }
 
-/// Maximum size for imported INI files (10 MB).
+/// Maximum size for imported `INI` files (10 MB).
 const MAX_INI_SIZE: usize = 10 * 1024 * 1024;
 
-/// Parse a SecureCRT keyword highlight INI file.
+/// Parse a `SecureCRT` keyword highlight `INI` file.
 ///
 /// The format is:
 /// ```text
 /// D:"Match Case"=00000001
 /// S:"List Name"=Cisco
 /// Z:"Keyword List V2"=00000033
-///  "regex_pattern",BBGGRR,00000001
+///  "`regex_pattern`",BBGGRR,00000001
 /// ```
 pub fn parse_securecrt_highlight_ini(content: &str) -> Result<Vec<ParsedHighlightProfile>, String> {
     if content.len() > MAX_INI_SIZE {
@@ -81,7 +81,6 @@ pub fn parse_securecrt_highlight_ini(content: &str) -> Result<Vec<ParsedHighligh
             if remaining_rules == 0 {
                 in_keyword_list = false;
             }
-            continue;
         }
     }
 
@@ -149,7 +148,7 @@ fn bgr_to_rgb_hex(bgr: &str) -> Option<String> {
         return None;
     }
     // Pad to 8 chars (some values may have leading zeros removed).
-    let padded = format!("{:0>8}", bgr);
+    let padded = format!("{bgr:0>8}");
     // Format is 00BBGGRR (Windows COLORREF).
     let bb = &padded[2..4];
     let gg = &padded[4..6];

@@ -17,7 +17,7 @@ struct PtyHandle {
     shutdown: Arc<AtomicBool>,
 }
 
-/// Manages all active PTY sessions, keyed by session ID.
+/// Manages all active PTY sessions, keyed by session `ID`.
 #[derive(Default)]
 pub struct PtyManager {
     sessions: HashMap<String, PtyHandle>,
@@ -29,7 +29,7 @@ impl PtyManager {
 
     /// Spawn a new PTY session and start streaming output via Tauri events.
     ///
-    /// Returns the session ID on success.
+    /// Returns the session `ID` on success.
     pub fn spawn(
         &mut self,
         id: &str,
@@ -130,9 +130,7 @@ impl PtyManager {
                             break;
                         }
                     }
-                    Err(ref e) if is_timeout_error(e) => {
-                        continue;
-                    }
+                    Err(ref e) if is_timeout_error(e) => {}
                     Err(e) => {
                         if !shutdown_flag.load(Ordering::Relaxed) {
                             error!(session_id = %session_id, error = %e, "PTY read error");

@@ -309,19 +309,22 @@ impl DatabaseProvider for SqliteProvider {
 
     async fn update_session(&self, id: Uuid, update: UpdateSession) -> DbResult<()> {
         let mut b = UpdateBuilder::new(Dialect::Sqlite);
-        b.set_text("name", &update.name);
-        b.set_text("hostname", &update.hostname);
+        b.set_text("name", update.name.as_ref());
+        b.set_text("hostname", update.hostname.as_ref());
         b.set_int("port", update.port);
-        b.set_text("protocol", &update.protocol);
-        b.set_text("username", &update.username);
-        b.set_text("auth_method", &update.auth_method);
-        b.set_optional_uuid("jump_host_id", &update.jump_host_id);
-        b.set_text("tags", &update.tags);
-        b.set_text("icon", &update.icon);
-        b.set_optional_uuid("highlight_profile_id", &update.highlight_profile_id);
-        b.set_optional_uuid("credential_profile_id", &update.credential_profile_id);
+        b.set_text("protocol", update.protocol.as_ref());
+        b.set_text("username", update.username.as_ref());
+        b.set_text("auth_method", update.auth_method.as_ref());
+        b.set_optional_uuid("jump_host_id", update.jump_host_id.as_ref());
+        b.set_text("tags", update.tags.as_ref());
+        b.set_text("icon", update.icon.as_ref());
+        b.set_optional_uuid("highlight_profile_id", update.highlight_profile_id.as_ref());
+        b.set_optional_uuid(
+            "credential_profile_id",
+            update.credential_profile_id.as_ref(),
+        );
         b.set_bool_as_int("legacy_algorithms", update.legacy_algorithms);
-        b.set_optional_uuid("login_sequence_id", &update.login_sequence_id);
+        b.set_optional_uuid("login_sequence_id", update.login_sequence_id.as_ref());
 
         if b.is_empty() {
             return Ok(());
@@ -1103,12 +1106,11 @@ impl DatabaseProvider for SqliteProvider {
     }
 
     async fn update_login_sequence(&self, id: Uuid, update: UpdateLoginSequence) -> DbResult<()> {
-        let mut sets = Vec::new();
-
         enum BindVal {
             Text(String),
             Int(i64),
         }
+        let mut sets = Vec::new();
         let mut values: Vec<BindVal> = Vec::new();
 
         if let Some(ref name) = update.name {

@@ -3,7 +3,7 @@ use zeroize::Zeroizing;
 
 const SERVICE_NAME: &str = "shellstation";
 
-/// Store a secret in the OS keychain.
+/// Store a secret in the `OS` keychain.
 pub fn store(keychain_ref: &str, secret: &str) -> Result<(), String> {
     let entry = Entry::new(SERVICE_NAME, keychain_ref).map_err(|e| {
         tracing::error!(keychain_ref = %keychain_ref, error = %e, "Keychain entry creation failed");
@@ -15,7 +15,7 @@ pub fn store(keychain_ref: &str, secret: &str) -> Result<(), String> {
     })
 }
 
-/// Retrieve a secret from the OS keychain.
+/// Retrieve a secret from the `OS` keychain.
 ///
 /// Returns `Zeroizing<String>` so the secret is wiped from memory on drop.
 pub fn retrieve(keychain_ref: &str) -> Result<Zeroizing<String>, String> {
@@ -29,7 +29,7 @@ pub fn retrieve(keychain_ref: &str) -> Result<Zeroizing<String>, String> {
     })
 }
 
-/// Delete a secret from the OS keychain.
+/// Delete a secret from the `OS` keychain.
 pub fn delete(keychain_ref: &str) -> Result<(), String> {
     let entry = Entry::new(SERVICE_NAME, keychain_ref).map_err(|e| {
         tracing::error!(keychain_ref = %keychain_ref, error = %e, "Keychain entry creation failed");

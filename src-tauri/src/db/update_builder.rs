@@ -14,8 +14,8 @@
 //! `if let Some` branches twice (once to build the `SET` fragment, once
 //! to bind the values), with the only differences being the placeholder
 //! syntax (`?` vs `$N`) and a per-provider WHERE clause. The two copies
-//! drifted: PostgreSQL needed explicit type tags to avoid implicit text
-//! conversion, SQLite didn't, and the bool→int casting lived in only
+//! drifted: `PostgreSQL` needed explicit type tags to avoid implicit text
+//! conversion, `SQLite` didn't, and the bool→int casting lived in only
 //! one. Centralising the construction here:
 //!
 //! - removes the duplication between `postgres.rs` and `sqlite.rs`,
@@ -25,33 +25,33 @@
 
 use uuid::Uuid;
 
-/// A typed bind value. Required because PostgreSQL does not implicitly
-/// convert between TEXT and INTEGER the way SQLite does — a bare
+/// A typed bind value. Required because `PostgreSQL` does not implicitly
+/// convert between `TEXT` and `INTEGER` the way `SQLite` does — a bare
 /// `query.bind(string)` for a `port INT` column rejects with a type
-/// error against Postgres while silently working on SQLite. Keeping the
+/// error against Postgres while silently working on `SQLite`. Keeping the
 /// type explicit on every bind makes the two providers behave the same.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BindVal {
     Text(String),
     Int(i32),
     /// SQL `NULL`. Distinct from `Text(String::new())` — a literal empty
-    /// string is a valid non-null value for nullable TEXT columns.
+    /// string is a valid non-null value for nullable `TEXT` columns.
     Null,
 }
 
 /// Placeholder syntax for the target dialect.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Dialect {
-    /// `$1, $2, …` — PostgreSQL / sqlx Postgres.
+    /// `$1, $2, …` — `PostgreSQL` / sqlx Postgres.
     Postgres,
-    /// `?` — SQLite / sqlx SQLite.
+    /// `?` — `SQLite` / sqlx `SQLite`.
     Sqlite,
 }
 
 /// Builds the `SET col = …, col = …` fragment plus the bind list for a
 /// dynamic `UPDATE`. The caller still owns the surrounding statement
 /// (`UPDATE <table> SET <fragment> WHERE …`) so per-provider WHERE
-/// clauses (e.g. PostgreSQL RLS `AND owner = current_user`) stay local.
+/// clauses (e.g. `PostgreSQL` `RLS` `AND owner = current_user`) stay local.
 pub struct UpdateBuilder {
     dialect: Dialect,
     sets: Vec<String>,
@@ -68,7 +68,7 @@ impl UpdateBuilder {
     }
 
     /// Render the placeholder for the next value to be appended. For
-    /// PostgreSQL the index is 1-based; for SQLite it's always `?`.
+    /// `PostgreSQL` the index is 1-based; for `SQLite` it's always `?`.
     fn next_placeholder(&self) -> String {
         match self.dialect {
             Dialect::Postgres => format!("${}", self.values.len() + 1),
@@ -84,7 +84,7 @@ impl UpdateBuilder {
     }
 
     /// `Some(s)` → set column to `s`. `None` → skip the column entirely.
-    pub fn set_text(&mut self, col: &str, val: &Option<String>) {
+    pub fn set_text(&mut self, col: &str, val: Option<&String>) {
         if let Some(s) = val {
             self.push(col, BindVal::Text(s.clone()));
         }
@@ -112,7 +112,7 @@ impl UpdateBuilder {
     ///
     /// The outer `Option` tells us whether the IPC payload mentioned
     /// this field at all; the inner `Option` tells us what to set it to.
-    pub fn set_optional_uuid(&mut self, col: &str, val: &Option<Option<Uuid>>) {
+    pub fn set_optional_uuid(&mut self, col: &str, val: Option<&Option<Uuid>>) {
         if let Some(inner) = val {
             let placeholder = self.next_placeholder();
             self.sets.push(format!("{col} = {placeholder}"));
@@ -125,7 +125,7 @@ impl UpdateBuilder {
 
     /// True when no `SET` columns have been collected. Callers should
     /// short-circuit on this — an empty `SET` clause is a SQL syntax
-    /// error in both PostgreSQL and SQLite.
+    /// error in both `PostgreSQL` and `SQLite`.
     pub fn is_empty(&self) -> bool {
         self.sets.is_empty()
     }
@@ -165,17 +165,17 @@ mod tests {
     #[test]
     fn skips_none_fields() {
         let mut b = UpdateBuilder::new(Dialect::Sqlite);
-        b.set_text("name", &None);
+        b.set_text("name", None);
         b.set_int("port", None);
         b.set_bool_as_int("legacy_algorithms", None);
-        b.set_optional_uuid("jump_host_id", &None);
+        b.set_optional_uuid("jump_host_id", None);
         assert!(b.is_empty());
     }
 
     #[test]
     fn postgres_placeholders_are_numbered() {
         let mut b = UpdateBuilder::new(Dialect::Postgres);
-        b.set_text("name", &Some("web1".to_string()));
+        b.set_text("name", Some(&"web1".to_string()));
         b.set_int("port", Some(22));
         b.set_bool_as_int("legacy_algorithms", Some(true));
         assert_eq!(
@@ -188,7 +188,7 @@ mod tests {
     #[test]
     fn sqlite_placeholders_are_question_marks() {
         let mut b = UpdateBuilder::new(Dialect::Sqlite);
-        b.set_text("name", &Some("web1".to_string()));
+        b.set_text("name", Some(&"web1".to_string()));
         b.set_int("port", Some(22));
         assert_eq!(b.set_clause(), "name = ?, port = ?");
         assert_eq!(b.where_placeholder(), "?");
@@ -197,7 +197,7 @@ mod tests {
     #[test]
     fn typed_bind_values_preserve_type() {
         let mut b = UpdateBuilder::new(Dialect::Postgres);
-        b.set_text("name", &Some("web1".to_string()));
+        b.set_text("name", Some(&"web1".to_string()));
         b.set_int("port", Some(22));
         b.set_bool_as_int("legacy_algorithms", Some(true));
         b.set_bool_as_int("any_false", Some(false));
@@ -216,19 +216,19 @@ mod tests {
     fn optional_uuid_three_state() {
         // Skip
         let mut b = UpdateBuilder::new(Dialect::Postgres);
-        b.set_optional_uuid("jump_host_id", &None);
+        b.set_optional_uuid("jump_host_id", None);
         assert!(b.is_empty());
 
         // Set to NULL
         let mut b = UpdateBuilder::new(Dialect::Postgres);
-        b.set_optional_uuid("jump_host_id", &Some(None));
+        b.set_optional_uuid("jump_host_id", Some(&None));
         assert_eq!(b.set_clause(), "jump_host_id = $1");
         assert_eq!(b.values(), &[BindVal::Null]);
 
         // Set to a real UUID
         let mut b = UpdateBuilder::new(Dialect::Postgres);
         let u = Uuid::nil();
-        b.set_optional_uuid("jump_host_id", &Some(Some(u)));
+        b.set_optional_uuid("jump_host_id", Some(&Some(u)));
         assert_eq!(b.set_clause(), "jump_host_id = $1");
         assert_eq!(b.values(), &[BindVal::Text(u.to_string())]);
     }
@@ -237,9 +237,9 @@ mod tests {
     fn full_session_update_layout() {
         // Exercise the full happy path: every column type in one query.
         let mut b = UpdateBuilder::new(Dialect::Postgres);
-        b.set_text("name", &Some("web1".to_string()));
+        b.set_text("name", Some(&"web1".to_string()));
         b.set_int("port", Some(22));
-        b.set_optional_uuid("jump_host_id", &Some(None));
+        b.set_optional_uuid("jump_host_id", Some(&None));
         b.set_bool_as_int("legacy_algorithms", Some(true));
 
         assert_eq!(

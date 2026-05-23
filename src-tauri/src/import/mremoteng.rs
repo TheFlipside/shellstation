@@ -1,10 +1,10 @@
-//! mRemoteNG `confCons.xml` parser.
+//! `mRemoteNG` `confCons.xml` parser.
 //!
 //! Implemented as a streaming pull-parser (`quick_xml::Reader`) rather
-//! than a DOM walk: production mRemoteNG files are routinely tens of
+//! than a DOM walk: production `mRemoteNG` files are routinely tens of
 //! megabytes once they accumulate a few thousand sessions, and we cannot
 //! afford to materialise the whole tree in memory. The trade-off is that
-//! each branch in `parse` corresponds to one *transition* in the XML
+//! each branch in `parse` corresponds to one *transition* in the `XML`
 //! event stream — it's flat by construction. Reorganising it into
 //! recursive helpers would just shift the same number of branches into
 //! the helpers without simplifying the protocol they decode.
@@ -21,10 +21,10 @@ use quick_xml::Reader;
 use super::{ImportedFolder, ImportedSession, ParseResult};
 
 /// Maximum allowed folder nesting depth to prevent stack exhaustion from
-/// pathologically deep XML structures.
+/// pathologically deep `XML` structures.
 const MAX_NESTING_DEPTH: usize = 100;
 
-/// Parse an mRemoteNG `confCons.xml` file into folders and sessions.
+/// Parse an `mRemoteNG` `confCons.xml` file into folders and sessions.
 ///
 /// The format uses `<Node>` elements with attributes:
 /// - `Type="Container"` → folder (may nest arbitrarily)
@@ -50,7 +50,7 @@ pub fn parse(xml: &str) -> Result<ParseResult, String> {
                     continue;
                 }
                 let attrs = parse_attributes(e)?;
-                let node_type = attrs.get("Type").map(String::as_str).unwrap_or("");
+                let node_type = attrs.get("Type").map_or("", String::as_str);
                 let name = attrs.get("Name").cloned().unwrap_or_default();
 
                 match node_type {
@@ -89,7 +89,7 @@ pub fn parse(xml: &str) -> Result<ParseResult, String> {
                     continue;
                 }
                 let attrs = parse_attributes(e)?;
-                let node_type = attrs.get("Type").map(String::as_str).unwrap_or("");
+                let node_type = attrs.get("Type").map_or("", String::as_str);
                 let name = attrs.get("Name").cloned().unwrap_or_default();
 
                 match node_type {
@@ -155,7 +155,7 @@ fn skip_to_end(reader: &mut Reader<&[u8]>, tag: &[u8]) -> Result<(), String> {
     }
 }
 
-/// Extract all attributes from a `<Node>` element into a HashMap.
+/// Extract all attributes from a `<Node>` element into a `HashMap`.
 fn parse_attributes(
     e: &quick_xml::events::BytesStart<'_>,
 ) -> Result<HashMap<String, String>, String> {
@@ -172,7 +172,7 @@ fn parse_attributes(
     Ok(map)
 }
 
-/// Map mRemoteNG protocol names to ShellStation protocol strings.
+/// Map `mRemoteNG` protocol names to `ShellStation` protocol strings.
 fn map_protocol(protocol: &str) -> Option<&'static str> {
     match protocol {
         "SSH2" | "SSH1" => Some("ssh"),
@@ -188,15 +188,12 @@ fn build_session(
 ) -> Result<ImportedSession, String> {
     let name = attrs.get("Name").cloned().unwrap_or_default();
     let hostname = attrs.get("Hostname").cloned().unwrap_or_default();
-    let raw_protocol = attrs.get("Protocol").map(String::as_str).unwrap_or("SSH2");
+    let raw_protocol = attrs.get("Protocol").map_or("SSH2", String::as_str);
 
-    let protocol = match map_protocol(raw_protocol) {
-        Some(p) => p,
-        None => {
-            return Err(format!(
-                "Skipped \"{name}\" — unsupported protocol: {raw_protocol}"
-            ));
-        }
+    let Some(protocol) = map_protocol(raw_protocol) else {
+        return Err(format!(
+            "Skipped \"{name}\" — unsupported protocol: {raw_protocol}"
+        ));
     };
 
     if hostname.is_empty() {
@@ -316,10 +313,11 @@ mod tests {
 
     #[test]
     fn parse_rejects_excessive_nesting() {
+        use std::fmt::Write as _;
         // Build a folder chain deeper than MAX_NESTING_DEPTH (100).
         let mut xml = String::from(r#"<?xml version="1.0"?><Confcons>"#);
         for i in 0..=MAX_NESTING_DEPTH {
-            xml.push_str(&format!(r#"<Node Type="Container" Name="f{i}">"#));
+            let _ = write!(xml, r#"<Node Type="Container" Name="f{i}">"#);
         }
         for _ in 0..=MAX_NESTING_DEPTH {
             xml.push_str("</Node>");

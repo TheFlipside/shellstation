@@ -24,8 +24,8 @@ type DedupKey = (String, String, String);
 ///
 /// `sessions_db` is the provider that owns the `sessions` table (and, in
 /// single-DB mode, also owns everything else). `cred_db` is the provider
-/// that owns `credentials` and `credential_profiles` — in PostgreSQL mode
-/// this is the per-user local SQLite.
+/// that owns `credentials` and `credential_profiles` — in `PostgreSQL` mode
+/// this is the per-user local `SQLite`.
 ///
 /// Returns `(profiles_created, sessions_linked)` so the caller can log it.
 pub async fn migrate_legacy_credentials(

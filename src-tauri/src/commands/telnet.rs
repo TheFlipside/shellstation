@@ -6,7 +6,7 @@ use crate::telnet::{establish_telnet_connection, TelnetConnectParams, TelnetStat
 
 use super::{validate_dimensions, TerminalReadyState, MAX_WRITE_SIZE};
 
-/// Connect to a remote host via Telnet. Returns the session ID.
+/// Connect to a remote host via Telnet. Returns the session `ID`.
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 pub async fn telnet_connect(
@@ -115,7 +115,7 @@ pub async fn telnet_write(
         .map_err(|_| "Failed to send data to Telnet session".to_string())
 }
 
-/// Resize the terminal window for a Telnet session (sends NAWS).
+/// Resize the terminal window for a Telnet session (sends `NAWS`).
 #[tauri::command]
 pub async fn telnet_resize(
     state: State<'_, TelnetState>,
@@ -145,7 +145,7 @@ pub async fn telnet_disconnect(
     id: String,
 ) -> Result<(), String> {
     let mut manager = state.0.lock().await;
-    manager.disconnect(&id).await?;
+    manager.disconnect(&id)?;
     if let Ok(mut mgr) = logger_state.0.lock() {
         mgr.close_log(&id);
     }

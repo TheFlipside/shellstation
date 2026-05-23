@@ -350,8 +350,7 @@ pub async fn session_search(
             .char_indices()
             .take_while(|(i, _)| *i < MAX_SEARCH_QUERY_LEN)
             .last()
-            .map(|(i, c)| i + c.len_utf8())
-            .unwrap_or(0)]
+            .map_or(0, |(i, c)| i + c.len_utf8())]
     } else {
         query.as_str()
     };
@@ -368,7 +367,7 @@ pub async fn session_data_fingerprint(
 // ── Visibility (multi-user) ──────────────────────────────────────────
 
 /// Toggle an item's visibility between "personal" and "shared".
-/// Only meaningful in PostgreSQL mode where RLS enforces ownership.
+/// Only meaningful in `PostgreSQL` mode where `RLS` enforces ownership.
 #[tauri::command]
 pub async fn set_visibility(
     pg: State<'_, crate::db::PgPoolState>,
@@ -548,13 +547,13 @@ async fn sort_children_alphabetically(
 
 /// Load a saved session from the database, resolve its credential profile,
 /// walk any jump host chain, and open an SSH (or Telnet) connection.
-/// Returns the live connection ID for use with ssh_write/ssh_resize.
+/// Returns the live connection `ID` for use with `ssh_write` / `ssh_resize`.
 ///
 /// ## Why this function is large
 ///
 /// `session_connect` is intentionally an orchestration boundary: it ties
-/// together state from eight Tauri-managed services (db, cred_db,
-/// login_seq_db, ssh, telnet, terminal-ready, session-log, pg-pool,
+/// together state from eight Tauri-managed services (db, `cred_db`,
+/// `login_seq_db`, ssh, telnet, terminal-ready, session-log, pg-pool,
 /// config) plus per-session settings to produce one side-effecting
 /// connection. The branchiness measured by cyclomatic complexity comes
 /// from coordinating those services — every `?` is a state lookup that
@@ -731,38 +730,36 @@ pub async fn session_connect(
         session.credential_profile_id
     };
 
-    let (username, auth_method, auth_credential) = match effective_credential_id {
-        Some(profile_id) => {
-            debug!(session = %id, profile_id = %profile_id, "Resolving credential profile for session");
-            let profile = cred_db
-                .0
-                .get_credential_profile(profile_id)
-                .await?
-                .ok_or_else(|| {
-                    format!(
-                        "Credential profile for session \"{}\" no longer exists. \
-                         Edit the session and pick a different profile.",
-                        session.name
-                    )
-                })?;
-            debug!(session = %id, auth_type = %profile.auth_type, user = %profile.username, "Credential profile resolved");
-            profile_to_auth(&profile)?
+    let (username, auth_method, auth_credential) = if let Some(profile_id) = effective_credential_id
+    {
+        debug!(session = %id, profile_id = %profile_id, "Resolving credential profile for session");
+        let profile = cred_db
+            .0
+            .get_credential_profile(profile_id)
+            .await?
+            .ok_or_else(|| {
+                format!(
+                    "Credential profile for session \"{}\" no longer exists. \
+                     Edit the session and pick a different profile.",
+                    session.name
+                )
+            })?;
+        debug!(session = %id, auth_type = %profile.auth_type, user = %profile.username, "Credential profile resolved");
+        profile_to_auth(&profile)?
+    } else {
+        debug!(session = %id, user = %session.username, "No credential profile — falling back to keyboard-interactive");
+        if session.username.is_empty() {
+            return Err(
+                "No credential profile assigned and no username configured. \
+                 Edit the session to set a username or assign a credential profile."
+                    .to_string(),
+            );
         }
-        None => {
-            debug!(session = %id, user = %session.username, "No credential profile — falling back to keyboard-interactive");
-            if session.username.is_empty() {
-                return Err(
-                    "No credential profile assigned and no username configured. \
-                     Edit the session to set a username or assign a credential profile."
-                        .to_string(),
-                );
-            }
-            (
-                session.username.clone(),
-                "keyboard-interactive".to_string(),
-                Zeroizing::new(String::new()),
-            )
-        }
+        (
+            session.username.clone(),
+            "keyboard-interactive".to_string(),
+            Zeroizing::new(String::new()),
+        )
     };
 
     // Resolve jump host chain.
@@ -871,7 +868,7 @@ fn parse_uuid(s: &str) -> Result<Uuid, String> {
     Uuid::parse_str(s).map_err(|e| format!("Invalid UUID '{s}': {e}"))
 }
 
-/// Translate a profile into the (username, ssh auth_method, secret) triple
+/// Translate a profile into the (username, ssh `auth_method`, secret) triple
 /// expected by the SSH connection layer.
 fn profile_to_auth(
     profile: &CredentialProfile,
@@ -904,7 +901,7 @@ fn profile_to_auth(
     }
 }
 
-/// Walk the jump_host_id chain in the database to build a list of JumpHop
+/// Walk the `jump_host_id` chain in the database to build a list of `JumpHop`
 /// entries for the SSH connect call. Each hop pulls its own profile.
 async fn resolve_jump_chain(
     db: &State<'_, DbState>,

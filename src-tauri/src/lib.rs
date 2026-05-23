@@ -1,3 +1,32 @@
+// Clippy pedantic is enabled in `just lint`. The lints allowed below are
+// deliberate stylistic / architectural choices in this codebase; the
+// remaining pedantic lints are kept active and addressed at the call site.
+//
+// - too_many_lines: orchestration entry points (session_connect, run,
+//   db_save_config, db_import, …) are documented as essential complexity
+//   in their own headers — splitting them was tried and abandoned.
+// - option_option: `Option<Option<T>>` is the three-state encoding for
+//   nullable-field updates (skip column / set NULL / set value) used by
+//   UpdateBuilder and BulkSessionEdit. Replacing it with a custom enum
+//   would just rename the pattern without removing the three states.
+// - needless_pass_by_value: Tauri command handlers receive owned
+//   parameters by convention (`String`, `Uuid`, …) — taking them by
+//   reference would force every call site to clone.
+// - cast_possible_truncation / cast_possible_wrap / cast_precision_loss /
+//   cast_sign_loss: terminal column/row counts, port numbers, file sizes,
+//   and timestamps stay well within the smaller integer ranges. Per-call
+//   `try_from` would just produce `unreachable!()` arms; the casts are
+//   bounded by validation higher up the stack.
+#![allow(
+    clippy::too_many_lines,
+    clippy::option_option,
+    clippy::needless_pass_by_value,
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_precision_loss,
+    clippy::cast_sign_loss
+)]
+
 mod commands;
 mod config;
 mod credentials;
@@ -93,13 +122,13 @@ fn startup_show_maximized() -> bool {
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::EnvFilter;
 
-/// Initialize the local SQLite pool.
+/// Initialize the local `SQLite` pool.
 ///
-/// When `enforce_fk` is true, foreign keys are enforced (used in SQLite-only
+/// When `enforce_fk` is true, foreign keys are enforced (used in `SQLite`-only
 /// mode where sessions and credentials share the same database).
 ///
-/// When `enforce_fk` is false, foreign keys are NOT enforced (used when
-/// PostgreSQL hosts sessions but local SQLite stores credentials — the FK
+/// When `enforce_fk` is false, foreign keys are `NOT` enforced (used when
+/// `PostgreSQL` hosts sessions but local `SQLite` stores credentials — the `FK`
 /// on `credentials.session_id → sessions.id` would fail because sessions
 /// live in a different database).
 ///
@@ -227,9 +256,9 @@ async fn fix_crlf_migration_checksums(
 
 /// Check whether all compiled migrations are already applied in the database.
 ///
-/// `sqlx::migrate!().run()` unconditionally runs `CREATE TABLE IF NOT EXISTS
+/// `sqlx::migrate!().run()` unconditionally runs `CREATE TABLE IF `NOT` EXISTS
 /// _sqlx_migrations`, which requires `CREATE` privilege on the schema. DML-only
-/// PostgreSQL users (Option A in DESIGN.md §4.5.2) lack that privilege. This
+/// `PostgreSQL` users (Option A in `DESIGN`.md §4.5.2) lack that privilege. This
 /// function lets us skip the migrate call entirely when the admin has already
 /// applied all migrations.
 async fn pg_migrations_up_to_date(pool: &sqlx::PgPool) -> Result<bool, Box<dyn std::error::Error>> {
@@ -256,7 +285,7 @@ async fn pg_migrations_up_to_date(pool: &sqlx::PgPool) -> Result<bool, Box<dyn s
     Ok(applied >= expected)
 }
 
-/// Strip connection URLs and credentials from PostgreSQL error messages
+/// Strip connection `URLs` and credentials from `PostgreSQL` error messages
 /// so they are safe to display in the frontend.
 fn sanitize_pg_error(raw: &str) -> String {
     if raw.contains("password authentication failed") {
@@ -297,10 +326,10 @@ fn sanitize_pg_error(raw: &str) -> String {
     "PostgreSQL initialization failed. See application logs for details.".to_string()
 }
 
-/// Idempotent RLS setup for PostgreSQL multi-user isolation.
+/// Idempotent `RLS` setup for `PostgreSQL` multi-user isolation.
 ///
 /// Called after `sqlx::migrate!()` succeeds. Statements are written so that
-/// running them multiple times is harmless (`IF NOT EXISTS`, etc.).
+/// running them multiple times is harmless (`IF `NOT` EXISTS`, etc.).
 async fn setup_postgres_rls(pool: &sqlx::PgPool) -> Result<(), String> {
     // Fix the placeholder owner from the migration DEFAULT.
     sqlx::query("UPDATE folders SET owner = current_user WHERE owner = 'local'")
@@ -603,6 +632,14 @@ fn init_tracing(
     None
 }
 
+/// Application entry point. Initializes the database, logging, Tauri
+/// builder, and event loop.
+///
+/// # Panics
+///
+/// Panics if Tauri's `Builder::run` cannot start the application — this is
+/// terminal and unrecoverable (typically a webview / windowing failure),
+/// so a panic is the appropriate signal for the `OS` to surface.
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let config_dir = dirs::config_dir()

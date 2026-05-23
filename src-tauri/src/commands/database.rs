@@ -16,7 +16,7 @@ pub struct DbStatus {
     pub backend: String,
     pub healthy: bool,
     pub error: Option<String>,
-    /// PostgreSQL `current_user` — populated only in PostgreSQL mode.
+    /// `PostgreSQL` `current_user` — populated only in `PostgreSQL` mode.
     pub pg_user: Option<String>,
 }
 
@@ -81,7 +81,7 @@ pub async fn set_user_ident(
             "User identity too long (max {MAX_USER_IDENT_LEN} characters)"
         ));
     }
-    if trimmed.chars().any(|c| c.is_control()) {
+    if trimmed.chars().any(char::is_control) {
         return Err("User identity must not contain control characters".to_string());
     }
     let mut config = state
@@ -92,7 +92,7 @@ pub async fn set_user_ident(
     config::save_config(&state.config_path, &config)
 }
 
-/// Return the current OS username for pre-filling the user identity prompt.
+/// Return the current `OS` username for pre-filling the user identity prompt.
 #[tauri::command]
 pub async fn get_os_username() -> Result<String, String> {
     #[cfg(unix)]
@@ -134,47 +134,44 @@ pub async fn db_test_connection(
         .connect_with(pg_opts)
         .await;
 
-    match result {
-        Ok(pool) => {
-            sqlx::query("SELECT 1")
-                .execute(&pool)
-                .await
-                .map_err(|_| "Connection succeeded but test query failed".to_string())?;
-            pool.close().await;
-            Ok("ok".to_string())
-        }
-        Err(_) => {
-            // The target database may not exist yet.  Try well-known
-            // maintenance databases with the same credentials to distinguish
-            // "server unreachable / bad credentials" from "database missing".
-            // Not all servers have "postgres" — some only have "template1" or
-            // default to a database named after the user.
-            let fallback_dbs = ["postgres", "template1", pg_config.username.as_str()];
+    if let Ok(pool) = result {
+        sqlx::query("SELECT 1")
+            .execute(&pool)
+            .await
+            .map_err(|_| "Connection succeeded but test query failed".to_string())?;
+        pool.close().await;
+        Ok("ok".to_string())
+    } else {
+        // The target database may not exist yet.  Try well-known
+        // maintenance databases with the same credentials to distinguish
+        // "server unreachable / bad credentials" from "database missing".
+        // Not all servers have "postgres" — some only have "template1" or
+        // default to a database named after the user.
+        let fallback_dbs = ["postgres", "template1", pg_config.username.as_str()];
 
-            for db_name in fallback_dbs {
-                let fallback_opts = PostgresConfig {
-                    database: db_name.to_string(),
-                    ..pg_config.clone()
-                }
-                .connect_options();
+        for db_name in fallback_dbs {
+            let fallback_opts = PostgresConfig {
+                database: db_name.to_string(),
+                ..pg_config.clone()
+            }
+            .connect_options();
 
-                let fallback = PgPoolOptions::new()
-                    .max_connections(1)
-                    .acquire_timeout(Duration::from_secs(5))
-                    .connect_with(fallback_opts)
-                    .await;
+            let fallback = PgPoolOptions::new()
+                .max_connections(1)
+                .acquire_timeout(Duration::from_secs(5))
+                .connect_with(fallback_opts)
+                .await;
 
-                if let Ok(pool) = fallback {
-                    let query_ok = sqlx::query("SELECT 1").execute(&pool).await.is_ok();
-                    pool.close().await;
-                    if query_ok {
-                        return Ok("db_not_found".to_string());
-                    }
+            if let Ok(pool) = fallback {
+                let query_ok = sqlx::query("SELECT 1").execute(&pool).await.is_ok();
+                pool.close().await;
+                if query_ok {
+                    return Ok("db_not_found".to_string());
                 }
             }
-
-            Err("Connection failed: unable to connect to PostgreSQL server".to_string())
         }
+
+        Err("Connection failed: unable to connect to PostgreSQL server".to_string())
     }
 }
 
@@ -256,17 +253,17 @@ pub async fn db_create_database(
     Ok("ok".to_string())
 }
 
-/// Persist the database configuration and rotate the PostgreSQL password
-/// in the OS keychain.
+/// Persist the database configuration and rotate the `PostgreSQL` password
+/// in the `OS` keychain.
 ///
 /// ## Why this function is large
 ///
 /// This is an IPC command that *must* finish atomically from the user's
 /// perspective: either the new config and the new keychain entry are both
-/// stored, or neither is. The branches are: validate backend / SQLite path
+/// stored, or neither is. The branches are: validate backend / `SQLite` path
 /// → conditionally store password in keychain with round-trip verification
-/// → preserve existing logging + user_ident state under a separate lock →
-/// emit the new AppConfig to disk. Each step is itself simple; the
+/// → preserve existing logging + `user_ident` state under a separate lock →
+/// emit the new `AppConfig` to disk. Each step is itself simple; the
 /// complexity is in *ordering* them so a failure in step N can't leave the
 /// keychain and config file in disagreement.
 ///
@@ -625,7 +622,7 @@ fn validate_import_data(data: &ExportData) -> Result<(), String> {
 /// The complexity is essential: collapsing the six entity loops into a
 /// generic loop requires either a trait-object per-entity dispatch
 /// (which loses sqlx's compile-time query checks) or a macro (which
-/// hides the per-entity divergence in defaults and FK resolution). The
+/// hides the per-entity divergence in defaults and `FK` resolution). The
 /// flat structure here is verbose but each branch is independently
 /// auditable, which matters because import is a frequent source of
 /// support tickets.
@@ -846,10 +843,12 @@ pub async fn db_import(
     );
     let skipped_total = skipped_folders + skipped_sessions + skipped_profiles + skipped_sequences;
     if skipped_total > 0 {
-        summary.push_str(&format!(
+        use std::fmt::Write as _;
+        let _ = write!(
+            summary,
             " (skipped {skipped_folders} duplicate folders, {skipped_sessions} duplicate sessions, \
              {skipped_profiles} duplicate highlight profiles, {skipped_sequences} duplicate login sequences)"
-        ));
+        );
     }
     Ok(summary)
 }

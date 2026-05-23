@@ -67,13 +67,13 @@ pub async fn logging_save_config(
         _ => config_state
             .config_path
             .parent()
-            .map(|p| p.join("logs"))
-            .unwrap_or_else(|| PathBuf::from("logs")),
+            .map_or_else(|| PathBuf::from("logs"), |p| p.join("logs")),
     };
     let mut mgr = logger_state.0.lock().map_err(|e| format!("{e}"))?;
     mgr.enabled = config.logging.enabled;
     mgr.log_dir = log_dir;
-    mgr.filename_format = config.logging.filename_format.clone();
+    mgr.filename_format
+        .clone_from(&config.logging.filename_format);
 
     Ok(())
 }

@@ -11,7 +11,7 @@ use uuid::Uuid;
 use crate::db::models::{NewFolder, NewSession};
 use crate::db::{DatabaseProvider, DbState};
 
-/// Maximum allowed XML file size (100 MB).
+/// Maximum allowed `XML` file size (100 MB).
 const MAX_XML_SIZE: usize = 100 * 1024 * 1024;
 
 /// Maximum length of any imported name (folder or session). Longer values

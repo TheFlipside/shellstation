@@ -7,7 +7,7 @@ use crate::ssh::{establish_ssh_connection, JumpHop, SshConnectParams, SshState};
 
 use super::{validate_dimensions, TerminalReadyState, MAX_JUMP_HOPS, MAX_WRITE_SIZE};
 
-/// Connect to a remote host via SSH. Returns the session ID.
+/// Connect to a remote host via SSH. Returns the session `ID`.
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 pub async fn ssh_connect(
@@ -176,7 +176,7 @@ pub async fn ssh_disconnect(
 /// Respond to a pending keyboard-interactive authentication prompt.
 ///
 /// Same deadlock-avoidance pattern as `ssh_host_verify_response`: uses
-/// `std::sync::Mutex` instead of the manager's tokio::Mutex.
+/// `std::sync::Mutex` instead of the manager's `tokio::Mutex`.
 #[tauri::command]
 pub async fn ssh_kbd_interactive_response(
     state: State<'_, SshState>,
@@ -197,7 +197,7 @@ pub async fn ssh_kbd_interactive_response(
 
 /// Respond to a pending host key verification request.
 ///
-/// This intentionally does NOT acquire the main `SshManager` tokio::Mutex.
+/// This intentionally does `NOT` acquire the main `SshManager` `tokio::Mutex`.
 /// The `connect()` call holds that lock while awaiting the verification
 /// response — if we also locked it here we would deadlock.
 #[tauri::command]

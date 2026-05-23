@@ -94,8 +94,16 @@ pub fn resolve_login_sequence(
 pub use run::*;
 
 mod run {
+    // The submodule re-implements LoginSequenceTransport for the SSH and
+    // Telnet channel adapters, so it needs the trait, the helpers
+    // (expand_response, send_response_segments), the ResponseSegment enum,
+    // and the runtime constants (STEP_TIMEOUT, MATCH_BUFFER_MAX) from the
+    // parent. Enumerating every import would just drift on every change;
+    // the wildcard is the practical fit here.
+    #[allow(clippy::wildcard_imports)]
     use super::*;
     use base64::Engine;
+    use russh::ChannelMsg;
     use tauri::{AppHandle, Emitter};
     use tracing::debug;
 
@@ -256,16 +264,18 @@ mod run {
     #[async_trait::async_trait]
     impl LoginSequenceTransport for SshChannelTransport<'_> {
         async fn read(&mut self) -> Option<Vec<u8>> {
-            use russh::ChannelMsg;
             loop {
                 match self.channel.wait().await {
-                    Some(ChannelMsg::Data { ref data })
-                    | Some(ChannelMsg::ExtendedData { ref data, ext: 1 }) => {
+                    Some(
+                        ChannelMsg::Data { ref data }
+                        | ChannelMsg::ExtendedData { ref data, ext: 1 },
+                    ) => {
                         return Some(data.to_vec());
                     }
-                    Some(ChannelMsg::Eof | ChannelMsg::Close) => return None,
-                    Some(_) => continue,
-                    None => return None,
+                    Some(ChannelMsg::Eof | ChannelMsg::Close) | None => return None,
+                    // Other ChannelMsg variants (Window, Success, …) are not
+                    // login-sequence input; wait for the next message.
+                    Some(_) => {}
                 }
             }
         }

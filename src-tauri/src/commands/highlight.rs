@@ -13,7 +13,7 @@ const MAX_RULES_LEN: usize = 1_048_576;
 /// Maximum number of rules per profile.
 const MAX_RULES_COUNT: usize = 500;
 
-/// Maximum size for imported INI content (10 MB).
+/// Maximum size for imported `INI` content (10 MB).
 const MAX_IMPORT_SIZE: usize = 10 * 1024 * 1024;
 
 fn validate_rules(rules: &str) -> Result<(), String> {
