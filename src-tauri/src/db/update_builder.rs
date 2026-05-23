@@ -22,8 +22,70 @@
 //! - keeps the typed `BindVal` enum in one place so future column
 //!   additions cannot accidentally bind the wrong SQL type,
 //! - makes the per-field logic unit-testable without a live database.
+//!
+//! ## Why column names are an enum, not `&str`
+//!
+//! The set/where fragments embed the column name into the SQL string via
+//! `format!("{col} = {placeholder}")`. If `col` ever became a runtime
+//! string (e.g. from an IPC payload), this would be classic SQL injection
+//! against a table where the only remaining safeguard is `PostgreSQL`
+//! row-level security. `SessionColumn` makes that injection impossible
+//! by construction: the compiler enforces that every column name is one
+//! of the thirteen variants below, each mapped to a hardcoded
+//! `&'static str` in `as_sql()`. Adding a new column is a deliberate
+//! decision — extending the enum — rather than something that can be
+//! introduced accidentally by passing a string somewhere.
+//!
+//! If a future column must be added, extend `SessionColumn` and
+//! `SessionColumn::as_sql`; the call sites in `postgres.rs` and
+//! `sqlite.rs` will fail to compile until the new variant is wired up.
 
 use uuid::Uuid;
+
+/// Columns of the `sessions` table that the session-edit IPC may update.
+///
+/// Every name returned by [`SessionColumn::as_sql`] is a compile-time
+/// `&'static str`. The enum cannot represent any other column name, so
+/// the `format!` calls that embed it into SQL cannot be subverted by
+/// runtime input.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionColumn {
+    Name,
+    Hostname,
+    Port,
+    Protocol,
+    Username,
+    AuthMethod,
+    JumpHostId,
+    Tags,
+    Icon,
+    HighlightProfileId,
+    CredentialProfileId,
+    LegacyAlgorithms,
+    LoginSequenceId,
+}
+
+impl SessionColumn {
+    /// The unquoted SQL column name. Safe to interpolate into SQL via
+    /// `format!`; each variant maps to a hardcoded literal.
+    pub const fn as_sql(self) -> &'static str {
+        match self {
+            Self::Name => "name",
+            Self::Hostname => "hostname",
+            Self::Port => "port",
+            Self::Protocol => "protocol",
+            Self::Username => "username",
+            Self::AuthMethod => "auth_method",
+            Self::JumpHostId => "jump_host_id",
+            Self::Tags => "tags",
+            Self::Icon => "icon",
+            Self::HighlightProfileId => "highlight_profile_id",
+            Self::CredentialProfileId => "credential_profile_id",
+            Self::LegacyAlgorithms => "legacy_algorithms",
+            Self::LoginSequenceId => "login_sequence_id",
+        }
+    }
+}
 
 /// A typed bind value. Required because `PostgreSQL` does not implicitly
 /// convert between `TEXT` and `INTEGER` the way `SQLite` does — a bare
@@ -77,21 +139,21 @@ impl UpdateBuilder {
     }
 
     /// Append `col = <placeholder>` and bind the given value.
-    fn push(&mut self, col: &str, val: BindVal) {
+    fn push(&mut self, col: SessionColumn, val: BindVal) {
         let placeholder = self.next_placeholder();
-        self.sets.push(format!("{col} = {placeholder}"));
+        self.sets.push(format!("{} = {placeholder}", col.as_sql()));
         self.values.push(val);
     }
 
     /// `Some(s)` → set column to `s`. `None` → skip the column entirely.
-    pub fn set_text(&mut self, col: &str, val: Option<&String>) {
+    pub fn set_text(&mut self, col: SessionColumn, val: Option<&String>) {
         if let Some(s) = val {
             self.push(col, BindVal::Text(s.clone()));
         }
     }
 
     /// `Some(n)` → set column to `n`. `None` → skip the column entirely.
-    pub fn set_int(&mut self, col: &str, val: Option<i32>) {
+    pub fn set_int(&mut self, col: SessionColumn, val: Option<i32>) {
         if let Some(n) = val {
             self.push(col, BindVal::Int(n));
         }
@@ -99,7 +161,7 @@ impl UpdateBuilder {
 
     /// `Some(b)` → set column to `1`/`0`. `None` → skip the column.
     /// Used for boolean flags stored as INT in the schema.
-    pub fn set_bool_as_int(&mut self, col: &str, val: Option<bool>) {
+    pub fn set_bool_as_int(&mut self, col: SessionColumn, val: Option<bool>) {
         if let Some(b) = val {
             self.push(col, BindVal::Int(i32::from(b)));
         }
@@ -112,10 +174,10 @@ impl UpdateBuilder {
     ///
     /// The outer `Option` tells us whether the IPC payload mentioned
     /// this field at all; the inner `Option` tells us what to set it to.
-    pub fn set_optional_uuid(&mut self, col: &str, val: Option<&Option<Uuid>>) {
+    pub fn set_optional_uuid(&mut self, col: SessionColumn, val: Option<&Option<Uuid>>) {
         if let Some(inner) = val {
             let placeholder = self.next_placeholder();
-            self.sets.push(format!("{col} = {placeholder}"));
+            self.sets.push(format!("{} = {placeholder}", col.as_sql()));
             self.values.push(match inner {
                 Some(u) => BindVal::Text(u.to_string()),
                 None => BindVal::Null,
@@ -154,6 +216,23 @@ mod tests {
     use super::*;
 
     #[test]
+    fn session_column_names_match_schema() {
+        // Every variant must map to a hardcoded snake_case identifier.
+        // Spot-check the column names so a future variant rename can't
+        // silently desync from the database schema.
+        assert_eq!(SessionColumn::Name.as_sql(), "name");
+        assert_eq!(SessionColumn::JumpHostId.as_sql(), "jump_host_id");
+        assert_eq!(
+            SessionColumn::LegacyAlgorithms.as_sql(),
+            "legacy_algorithms"
+        );
+        assert_eq!(
+            SessionColumn::CredentialProfileId.as_sql(),
+            "credential_profile_id"
+        );
+    }
+
+    #[test]
     fn empty_builder() {
         let b = UpdateBuilder::new(Dialect::Postgres);
         assert!(b.is_empty());
@@ -165,19 +244,19 @@ mod tests {
     #[test]
     fn skips_none_fields() {
         let mut b = UpdateBuilder::new(Dialect::Sqlite);
-        b.set_text("name", None);
-        b.set_int("port", None);
-        b.set_bool_as_int("legacy_algorithms", None);
-        b.set_optional_uuid("jump_host_id", None);
+        b.set_text(SessionColumn::Name, None);
+        b.set_int(SessionColumn::Port, None);
+        b.set_bool_as_int(SessionColumn::LegacyAlgorithms, None);
+        b.set_optional_uuid(SessionColumn::JumpHostId, None);
         assert!(b.is_empty());
     }
 
     #[test]
     fn postgres_placeholders_are_numbered() {
         let mut b = UpdateBuilder::new(Dialect::Postgres);
-        b.set_text("name", Some(&"web1".to_string()));
-        b.set_int("port", Some(22));
-        b.set_bool_as_int("legacy_algorithms", Some(true));
+        b.set_text(SessionColumn::Name, Some(&"web1".to_string()));
+        b.set_int(SessionColumn::Port, Some(22));
+        b.set_bool_as_int(SessionColumn::LegacyAlgorithms, Some(true));
         assert_eq!(
             b.set_clause(),
             "name = $1, port = $2, legacy_algorithms = $3"
@@ -188,8 +267,8 @@ mod tests {
     #[test]
     fn sqlite_placeholders_are_question_marks() {
         let mut b = UpdateBuilder::new(Dialect::Sqlite);
-        b.set_text("name", Some(&"web1".to_string()));
-        b.set_int("port", Some(22));
+        b.set_text(SessionColumn::Name, Some(&"web1".to_string()));
+        b.set_int(SessionColumn::Port, Some(22));
         assert_eq!(b.set_clause(), "name = ?, port = ?");
         assert_eq!(b.where_placeholder(), "?");
     }
@@ -197,10 +276,11 @@ mod tests {
     #[test]
     fn typed_bind_values_preserve_type() {
         let mut b = UpdateBuilder::new(Dialect::Postgres);
-        b.set_text("name", Some(&"web1".to_string()));
-        b.set_int("port", Some(22));
-        b.set_bool_as_int("legacy_algorithms", Some(true));
-        b.set_bool_as_int("any_false", Some(false));
+        b.set_text(SessionColumn::Name, Some(&"web1".to_string()));
+        b.set_int(SessionColumn::Port, Some(22));
+        b.set_bool_as_int(SessionColumn::LegacyAlgorithms, Some(true));
+        // Reuse a column purely to assert that false binds as 0.
+        b.set_bool_as_int(SessionColumn::LegacyAlgorithms, Some(false));
         assert_eq!(
             b.values(),
             &[
@@ -216,19 +296,19 @@ mod tests {
     fn optional_uuid_three_state() {
         // Skip
         let mut b = UpdateBuilder::new(Dialect::Postgres);
-        b.set_optional_uuid("jump_host_id", None);
+        b.set_optional_uuid(SessionColumn::JumpHostId, None);
         assert!(b.is_empty());
 
         // Set to NULL
         let mut b = UpdateBuilder::new(Dialect::Postgres);
-        b.set_optional_uuid("jump_host_id", Some(&None));
+        b.set_optional_uuid(SessionColumn::JumpHostId, Some(&None));
         assert_eq!(b.set_clause(), "jump_host_id = $1");
         assert_eq!(b.values(), &[BindVal::Null]);
 
         // Set to a real UUID
         let mut b = UpdateBuilder::new(Dialect::Postgres);
         let u = Uuid::nil();
-        b.set_optional_uuid("jump_host_id", Some(&Some(u)));
+        b.set_optional_uuid(SessionColumn::JumpHostId, Some(&Some(u)));
         assert_eq!(b.set_clause(), "jump_host_id = $1");
         assert_eq!(b.values(), &[BindVal::Text(u.to_string())]);
     }
@@ -237,10 +317,10 @@ mod tests {
     fn full_session_update_layout() {
         // Exercise the full happy path: every column type in one query.
         let mut b = UpdateBuilder::new(Dialect::Postgres);
-        b.set_text("name", Some(&"web1".to_string()));
-        b.set_int("port", Some(22));
-        b.set_optional_uuid("jump_host_id", Some(&None));
-        b.set_bool_as_int("legacy_algorithms", Some(true));
+        b.set_text(SessionColumn::Name, Some(&"web1".to_string()));
+        b.set_int(SessionColumn::Port, Some(22));
+        b.set_optional_uuid(SessionColumn::JumpHostId, Some(&None));
+        b.set_bool_as_int(SessionColumn::LegacyAlgorithms, Some(true));
 
         assert_eq!(
             b.set_clause(),

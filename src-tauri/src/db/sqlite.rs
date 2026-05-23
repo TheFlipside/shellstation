@@ -12,7 +12,7 @@ use super::models::{
     NewSession, Session, UpdateCredentialProfile, UpdateHighlightProfile, UpdateLoginSequence,
     UpdateSession,
 };
-use super::update_builder::{BindVal, Dialect, UpdateBuilder};
+use super::update_builder::{BindVal, Dialect, SessionColumn, UpdateBuilder};
 use super::{cmp_hostname, BulkSessionEdit, DatabaseProvider, DbResult};
 
 pub struct SqliteProvider {
@@ -307,24 +307,37 @@ impl DatabaseProvider for SqliteProvider {
         rows.iter().map(row_to_session).collect()
     }
 
+    /// `SQLite` `update_session` has no owner guard in its `WHERE` clause —
+    /// only `WHERE id = ?`. This is correct for the single-user `SQLite`
+    /// deployment model: there is no `current_user` concept in `SQLite` and
+    /// every row in `sessions` belongs to the local user by definition.
+    /// If `SQLite` is ever used in a shared / multi-tenant context, this
+    /// function must grow an ownership filter before it can be reused —
+    /// otherwise any caller can overwrite any session by `UUID`.
     async fn update_session(&self, id: Uuid, update: UpdateSession) -> DbResult<()> {
         let mut b = UpdateBuilder::new(Dialect::Sqlite);
-        b.set_text("name", update.name.as_ref());
-        b.set_text("hostname", update.hostname.as_ref());
-        b.set_int("port", update.port);
-        b.set_text("protocol", update.protocol.as_ref());
-        b.set_text("username", update.username.as_ref());
-        b.set_text("auth_method", update.auth_method.as_ref());
-        b.set_optional_uuid("jump_host_id", update.jump_host_id.as_ref());
-        b.set_text("tags", update.tags.as_ref());
-        b.set_text("icon", update.icon.as_ref());
-        b.set_optional_uuid("highlight_profile_id", update.highlight_profile_id.as_ref());
+        b.set_text(SessionColumn::Name, update.name.as_ref());
+        b.set_text(SessionColumn::Hostname, update.hostname.as_ref());
+        b.set_int(SessionColumn::Port, update.port);
+        b.set_text(SessionColumn::Protocol, update.protocol.as_ref());
+        b.set_text(SessionColumn::Username, update.username.as_ref());
+        b.set_text(SessionColumn::AuthMethod, update.auth_method.as_ref());
+        b.set_optional_uuid(SessionColumn::JumpHostId, update.jump_host_id.as_ref());
+        b.set_text(SessionColumn::Tags, update.tags.as_ref());
+        b.set_text(SessionColumn::Icon, update.icon.as_ref());
         b.set_optional_uuid(
-            "credential_profile_id",
+            SessionColumn::HighlightProfileId,
+            update.highlight_profile_id.as_ref(),
+        );
+        b.set_optional_uuid(
+            SessionColumn::CredentialProfileId,
             update.credential_profile_id.as_ref(),
         );
-        b.set_bool_as_int("legacy_algorithms", update.legacy_algorithms);
-        b.set_optional_uuid("login_sequence_id", update.login_sequence_id.as_ref());
+        b.set_bool_as_int(SessionColumn::LegacyAlgorithms, update.legacy_algorithms);
+        b.set_optional_uuid(
+            SessionColumn::LoginSequenceId,
+            update.login_sequence_id.as_ref(),
+        );
 
         if b.is_empty() {
             return Ok(());
