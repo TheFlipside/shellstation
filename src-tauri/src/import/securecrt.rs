@@ -376,8 +376,16 @@ fn read_text(reader: &mut Reader<&[u8]>, end_tag: &[u8]) -> Result<String, Strin
     loop {
         match reader.read_event() {
             Ok(Event::Text(ref e)) => {
+                // SecureCRT exports declare `<?xml version="1.0"?>`, so we apply
+                // XML 1.0 EOL normalization (CR/CRLF -> LF). This is a deliberate
+                // change from quick-xml 0.39.2's `xml_content()`, which was an
+                // alias for the XML 1.1 path that *also* collapses U+0085 (NEL)
+                // and U+2028 (LS) to LF. Those code points have no business in
+                // SecureCRT session text and never appear in real exports; using
+                // XML 1.0 rules matches what the file's own version declaration
+                // says it should be parsed under.
                 text.push_str(
-                    e.xml_content()
+                    e.xml_content(quick_xml::XmlVersion::Implicit1_0)
                         .map_err(|err| format!("Failed to decode text: {err}"))?
                         .as_ref(),
                 );
@@ -424,7 +432,10 @@ fn skip_through_end(reader: &mut Reader<&[u8]>, tag: &[u8]) -> Result<(), String
 fn get_attr(e: &quick_xml::events::BytesStart<'_>, name: &str) -> Option<String> {
     for attr in e.attributes().flatten() {
         if attr.key.as_ref() == name.as_bytes() {
-            return attr.unescape_value().ok().map(|v| v.to_string());
+            return attr
+                .normalized_value(quick_xml::XmlVersion::Implicit1_0)
+                .ok()
+                .map(|v| v.to_string());
         }
     }
     None

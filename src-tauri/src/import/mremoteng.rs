@@ -164,7 +164,7 @@ fn parse_attributes(
         let attr = attr.map_err(|err| format!("Failed to parse XML attribute: {err}"))?;
         let key = String::from_utf8_lossy(attr.key.as_ref()).to_string();
         let value = attr
-            .unescape_value()
+            .normalized_value(quick_xml::XmlVersion::Implicit1_0)
             .map_err(|err| format!("Failed to decode attribute '{key}': {err}"))?
             .to_string();
         map.insert(key, value);
