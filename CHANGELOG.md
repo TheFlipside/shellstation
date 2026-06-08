@@ -8,6 +8,11 @@ All notable changes to this project are documented in this file.
 
 ### Changed
 
+- Refreshed Rust dependency lockfile: `russh` 0.61.1 → 0.61.2 (broadens `russh::keys::load_secret_key` to accept SEC1 EC private keys that carry full explicit domain parameters in addition to named-curve OIDs — purely additive at the existing `ssh/mod.rs:1199` call site — plus an `AgentClient` `Send` fix that does not affect this codebase since no SSH-agent forwarding is implemented), `uuid` 1.23.1 → 1.23.2, `chrono` 0.4.44 → 0.4.45. All three are pure patch bumps with no source changes; the existing `^constraint` versions in `Cargo.toml` already permitted them.
+- Refreshed npm dependency lockfile: `i18next` 26.0.8 → 26.3.1 (includes the 26.0.6 security fix for interpolation/log-forging), `react` + `react-dom` 19.2.5 → 19.2.7, `react-i18next` 17.0.4 → 17.0.8, `zustand` 5.0.12 → 5.0.14, `@tauri-apps/cli` 2.11.1 → 2.11.2 (realigns JS CLI with the Rust `tauri` 2.11.2 crate), `@types/node` 25.6.0 → 25.9.2, `@types/react` + `@types/react-dom` 19.2.14 → 19.2.17, `@vitejs/plugin-react` 6.0.1 → 6.0.2, `eslint-plugin-prettier` 5.5.5 → 5.5.6, `typescript-eslint` 8.59.0 → 8.60.1, `vite` 8.0.10 → 8.0.16 (Rolldown 1.0.0-rc.17 → 1.0.3 stable, launch-editor-middleware path-traversal hardening), `vitest` 4.1.5 → 4.1.8. All within existing `^constraint` ranges; no `package.json` edits required.
+- `eslint.config.js`: migrated from the deprecated `tseslint.config()` helper to ESLint core's `defineConfig()` (typescript-eslint 8.x deprecation). Added a targeted `eslint-disable-next-line` for the `securityPlugin.configs.recommended` line because `eslint-plugin-security` 4.0.0 ships no `.d.ts` and is therefore `any`-typed upstream, which typescript-eslint's `no-unsafe-argument` / `no-unsafe-member-access` rules legitimately cannot verify.
+- `tsconfig.node.json`: now also includes `eslint.config.js` (with `allowJs: true`) so typescript-eslint's projectService type-checks it under a real tsconfig where `@types/node` is in scope. Without this, `import.meta.dirname` resolved as `error`-typed under the inferred default project and triggered `no-unsafe-assignment` after the typescript-eslint bump.
+
 ### Fixed
 
 ### Security
