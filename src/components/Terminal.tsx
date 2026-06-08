@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState, useCallback } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import i18n from "../i18n";
 import { Terminal as XTerm } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
@@ -179,19 +179,6 @@ export function Terminal({
         ? "telnet_resize"
         : "pty_resize";
 
-  const handleResize = useCallback(() => {
-    const fit = fitAddonRef.current;
-    const term = termRef.current;
-    if (!fit || !term) return;
-
-    fit.fit();
-    invoke(resizeCmd, {
-      id: sessionId,
-      cols: term.cols,
-      rows: term.rows,
-    }).catch(noop);
-  }, [sessionId, resizeCmd]);
-
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
@@ -219,6 +206,14 @@ export function Terminal({
     } catch {
       // WebGL not available — canvas fallback is automatic.
     }
+
+    // Push every cols/rows change to the backend, regardless of source —
+    // container resize, font-size change (zoom), or visibility flip all
+    // route through fit() and surface here. Registered before the first
+    // fit() so the initial sizing also propagates.
+    const onResizeDisposable = term.onResize(({ cols, rows }) => {
+      invoke(resizeCmd, { id: sessionId, cols, rows }).catch(noop);
+    });
 
     fitAddon.fit();
 
@@ -395,18 +390,14 @@ export function Terminal({
       .then(() => invoke("terminal_ready", { id: sessionId }))
       .catch(noop);
 
-    // Handle window resize.  Skip when the container is hidden
+    // Handle container resize.  Skip when the container is hidden
     // (display: none → 0×0) to prevent xterm.js from reflowing
-    // content to a tiny column count and mangling the display.
+    // content to a tiny column count and mangling the display. The
+    // backend IPC is pushed by the term.onResize listener above.
     const resizeObserver = new ResizeObserver((entries) => {
       const { width, height } = entries[0].contentRect;
       if (width === 0 || height === 0) return;
       fitAddon.fit();
-      invoke(resizeCmd, {
-        id: sessionId,
-        cols: term.cols,
-        rows: term.rows,
-      }).catch(noop);
     });
     resizeObserver.observe(container);
 
@@ -414,6 +405,7 @@ export function Terminal({
       resizeObserver.disconnect();
       onDataDisposable.dispose();
       onSelectionDisposable.dispose();
+      onResizeDisposable.dispose();
       container.removeEventListener("mousedown", handleRightClick, true);
       container.removeEventListener("paste", handleNativePaste, true);
       if (outputUnlisten) outputUnlisten();
@@ -423,7 +415,7 @@ export function Terminal({
       termRef.current = null;
       fitAddonRef.current = null;
     };
-  }, [sessionId, sessionType, writeCmd, resizeCmd, handleResize]);
+  }, [sessionId, sessionType, writeCmd, resizeCmd]);
 
   // Apply font family, font size, and theme changes to a live terminal.
   useEffect(() => {

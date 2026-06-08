@@ -15,6 +15,8 @@ All notable changes to this project are documented in this file.
 
 ### Fixed
 
+- Terminal zoom (Ctrl+/Ctrl-/Ctrl+0) no longer leaves the remote PTY thinking the terminal still has its old cols/rows. Symptom was vim drawing its bottom-right line/column position indicator (and other status content) at the now-out-of-bounds old coordinates after zooming in, with resetting the zoom only moving the artifacts rather than clearing them. Root cause: `effectiveFontSize` changes called `FitAddon.fit()` to recompute the xterm.js grid, but only the container `ResizeObserver` path invoked `ssh_resize`/`telnet_resize`/`pty_resize` — and the container's box dimensions don't change when only the font size changes. Fix: attach a `term.onResize()` listener as the single canonical signal for cols/rows propagation, so any source of `fit()` (container resize, zoom, visibility flip) automatically reaches the backend. Removes a dead `handleResize` `useCallback` that was clearly intended for this wiring but never connected.
+
 ### Security
 
 ### Changed
