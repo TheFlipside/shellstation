@@ -6,6 +6,8 @@ All notable changes to this project are documented in this file.
 
 ### Added
 
+- Two new settings under **Settings → Terminal**: **Background color** and **Text color**. Each is an HTML color picker that, when set, overrides the corresponding xterm.js theme field (`background` / `foreground`) for every terminal session. The remaining palette (ANSI colors, cursor, selection) still tracks the active app theme. A **Reset** button next to each picker (visible only when an override is set) clears the override and reverts to the active theme's default. Stored in `useSettingsStore` as `terminalBackgroundColor` / `terminalForegroundColor` (`string | null`, hex `#RRGGBB` validated; `null` = use theme default), persisted across reloads, and sanitized on rehydrate against the hex regex. The Terminal font preview swatch now also reflects the chosen colors so the user can see the effect without opening a session. Translated into all 13 non-English locales.
+
 ### Changed
 
 - Refreshed Rust dependency lockfile: `russh` 0.61.1 → 0.61.2 (broadens `russh::keys::load_secret_key` to accept SEC1 EC private keys that carry full explicit domain parameters in addition to named-curve OIDs — purely additive at the existing `ssh/mod.rs:1199` call site — plus an `AgentClient` `Send` fix that does not affect this codebase since no SSH-agent forwarding is implemented), `uuid` 1.23.1 → 1.23.2, `chrono` 0.4.44 → 0.4.45. All three are pure patch bumps with no source changes; the existing `^constraint` versions in `Cargo.toml` already permitted them.

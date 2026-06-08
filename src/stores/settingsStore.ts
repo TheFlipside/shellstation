@@ -74,6 +74,10 @@ interface SettingsState {
   confirmOnCloseTab: boolean;
   terminalFontFamily: string;
   terminalFontSize: number;
+  /** Hex `#RRGGBB`, or `null` to use the active app theme's default. */
+  terminalBackgroundColor: string | null;
+  /** Hex `#RRGGBB`, or `null` to use the active app theme's default. */
+  terminalForegroundColor: string | null;
   copyOnSelect: boolean;
   pasteOnRightClick: boolean;
   confirmMultilinePaste: boolean;
@@ -100,6 +104,8 @@ interface SettingsState {
   setConfirmOnCloseTab: (value: boolean) => void;
   setTerminalFontFamily: (family: string) => void;
   setTerminalFontSize: (size: number) => void;
+  setTerminalBackgroundColor: (color: string | null) => void;
+  setTerminalForegroundColor: (color: string | null) => void;
   setCopyOnSelect: (value: boolean) => void;
   setPasteOnRightClick: (value: boolean) => void;
   setConfirmMultilinePaste: (value: boolean) => void;
@@ -125,6 +131,8 @@ export const useSettingsStore = create<SettingsState>()(
       confirmOnCloseTab: true,
       terminalFontFamily: "JetBrains Mono",
       terminalFontSize: 14,
+      terminalBackgroundColor: null,
+      terminalForegroundColor: null,
       copyOnSelect: false,
       pasteOnRightClick: false,
       confirmMultilinePaste: false,
@@ -227,6 +235,16 @@ export const useSettingsStore = create<SettingsState>()(
       setTerminalFontSize: (size: number) => {
         if (Number.isFinite(size) && size >= 6 && size <= 72) {
           set({ terminalFontSize: size });
+        }
+      },
+      setTerminalBackgroundColor: (color: string | null) => {
+        if (color === null || HEX_COLOR_RE.test(color)) {
+          set({ terminalBackgroundColor: color });
+        }
+      },
+      setTerminalForegroundColor: (color: string | null) => {
+        if (color === null || HEX_COLOR_RE.test(color)) {
+          set({ terminalForegroundColor: color });
         }
       },
       setCopyOnSelect: (value: boolean) => {
@@ -349,6 +367,25 @@ export const useSettingsStore = create<SettingsState>()(
           // Sanitize persisted font family against the allowlist.
           if (!ALLOWED_TERMINAL_FONTS_SET.has(state.terminalFontFamily)) {
             state.terminalFontFamily = "JetBrains Mono";
+          }
+          // Sanitize persisted terminal color overrides — null means "use
+          // theme default", otherwise must be a `#RRGGBB` hex string. The
+          // explicit typeof guard handles older app versions where the
+          // field was absent (undefined) and matches the style used for
+          // every other field in this sanitizer.
+          if (
+            state.terminalBackgroundColor !== null &&
+            (typeof state.terminalBackgroundColor !== "string" ||
+              !HEX_COLOR_RE.test(state.terminalBackgroundColor))
+          ) {
+            state.terminalBackgroundColor = null;
+          }
+          if (
+            state.terminalForegroundColor !== null &&
+            (typeof state.terminalForegroundColor !== "string" ||
+              !HEX_COLOR_RE.test(state.terminalForegroundColor))
+          ) {
+            state.terminalForegroundColor = null;
           }
         };
       },

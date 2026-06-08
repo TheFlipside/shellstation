@@ -48,7 +48,7 @@ function buildFontFamily(font: string): string {
 }
 
 /** xterm.js color themes keyed by resolved theme name. */
-const XTERM_THEMES: Record<ResolvedTheme, Record<string, string>> = {
+export const XTERM_THEMES: Record<ResolvedTheme, Record<string, string>> = {
   dark: {
     background: "#1e1e2e",
     foreground: "#cdd6f4",
@@ -95,6 +95,24 @@ const XTERM_THEMES: Record<ResolvedTheme, Record<string, string>> = {
   },
 };
 
+/**
+ * Apply the user's per-session color overrides (if any) on top of the
+ * active app-theme palette. `null` for either field means "use the
+ * theme's default", so the override is fully optional.
+ */
+function resolveTerminalTheme(
+  base: ResolvedTheme,
+  bgOverride: string | null,
+  fgOverride: string | null,
+): Record<string, string> {
+  if (bgOverride === null && fgOverride === null) return XTERM_THEMES[base];
+  return {
+    ...XTERM_THEMES[base],
+    ...(bgOverride !== null && { background: bgOverride }),
+    ...(fgOverride !== null && { foreground: fgOverride }),
+  };
+}
+
 // eslint-disable-next-line @typescript-eslint/no-empty-function
 const noop = (): void => {};
 
@@ -124,6 +142,8 @@ export function Terminal({
   const {
     terminalFontFamily,
     terminalFontSize,
+    terminalBackgroundColor,
+    terminalForegroundColor,
     copyOnSelect,
     pasteOnRightClick,
     confirmMultilinePaste,
@@ -187,7 +207,7 @@ export function Terminal({
       cursorBlink: true,
       fontSize: terminalFontSize,
       fontFamily: buildFontFamily(terminalFontFamily),
-      theme: XTERM_THEMES[resolvedTheme],
+      theme: resolveTerminalTheme(resolvedTheme, terminalBackgroundColor, terminalForegroundColor),
     });
 
     const fitAddon = new FitAddon();
@@ -423,9 +443,19 @@ export function Terminal({
     if (!term) return;
     term.options.fontFamily = buildFontFamily(terminalFontFamily);
     term.options.fontSize = effectiveFontSize;
-    term.options.theme = XTERM_THEMES[resolvedTheme];
+    term.options.theme = resolveTerminalTheme(
+      resolvedTheme,
+      terminalBackgroundColor,
+      terminalForegroundColor,
+    );
     fitAddonRef.current?.fit();
-  }, [terminalFontFamily, effectiveFontSize, resolvedTheme]);
+  }, [
+    terminalFontFamily,
+    effectiveFontSize,
+    resolvedTheme,
+    terminalBackgroundColor,
+    terminalForegroundColor,
+  ]);
 
   // Re-fit and focus when visibility changes.
   useEffect(() => {

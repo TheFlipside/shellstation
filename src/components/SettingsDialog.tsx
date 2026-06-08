@@ -7,6 +7,8 @@ import { useEscapeKey } from "../hooks/useEscapeKey";
 import { useAppStore } from "../stores/appStore";
 import { useSessionStore } from "../stores/sessionStore";
 import { useSettingsStore, ALLOWED_TERMINAL_FONTS } from "../stores/settingsStore";
+import { XTERM_THEMES } from "./Terminal";
+import { useTheme } from "../hooks/useTheme";
 import {
   useHighlightStore,
   type HighlightProfile,
@@ -134,6 +136,10 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
     setTerminalFontFamily,
     terminalFontSize,
     setTerminalFontSize,
+    terminalBackgroundColor,
+    setTerminalBackgroundColor,
+    terminalForegroundColor,
+    setTerminalForegroundColor,
     copyOnSelect,
     setCopyOnSelect,
     pasteOnRightClick,
@@ -157,6 +163,14 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
   } = useSettingsStore();
 
   const currentLang = language !== "" ? language : (i18n.resolvedLanguage ?? "en");
+
+  // Active app theme — used to source the default background/foreground
+  // colors shown in the picker swatches when the user hasn't set an
+  // override. Lets a "Reset to theme default" click snap the picker back
+  // to the visible color for the current theme.
+  const resolvedTheme = useTheme();
+  const themeDefaultBg = XTERM_THEMES[resolvedTheme].background;
+  const themeDefaultFg = XTERM_THEMES[resolvedTheme].foreground;
 
   // Database config — local state, loaded from backend
   const [dbBackend, setDbBackend] = useState<"sqlite" | "postgres">("sqlite");
@@ -878,9 +892,57 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
               ? `"${terminalFontFamily}", monospace`
               : "monospace",
             fontSize: `${String(terminalFontSize)}px`,
+            background: terminalBackgroundColor ?? themeDefaultBg,
+            color: terminalForegroundColor ?? themeDefaultFg,
           }}
         >
           {t("settings.fontPreview")}
+        </div>
+        <div className="dialog-field dialog-field-row">
+          <label htmlFor="settings-terminal-bg">{t("settings.terminalBackgroundLabel")}</label>
+          <input
+            type="color"
+            id="settings-terminal-bg"
+            value={terminalBackgroundColor ?? themeDefaultBg}
+            onChange={(e) => {
+              setTerminalBackgroundColor(e.target.value);
+            }}
+          />
+          {terminalBackgroundColor !== null && (
+            <button
+              type="button"
+              className="settings-color-reset"
+              onClick={() => {
+                setTerminalBackgroundColor(null);
+              }}
+              title={t("settings.terminalColorResetHint")}
+            >
+              {t("settings.terminalColorReset")}
+            </button>
+          )}
+        </div>
+        <div className="dialog-field dialog-field-row">
+          <label htmlFor="settings-terminal-fg">{t("settings.terminalForegroundLabel")}</label>
+          <input
+            type="color"
+            id="settings-terminal-fg"
+            value={terminalForegroundColor ?? themeDefaultFg}
+            onChange={(e) => {
+              setTerminalForegroundColor(e.target.value);
+            }}
+          />
+          {terminalForegroundColor !== null && (
+            <button
+              type="button"
+              className="settings-color-reset"
+              onClick={() => {
+                setTerminalForegroundColor(null);
+              }}
+              title={t("settings.terminalColorResetHint")}
+            >
+              {t("settings.terminalColorReset")}
+            </button>
+          )}
         </div>
         <div className="dialog-field dialog-field-row">
           <input
