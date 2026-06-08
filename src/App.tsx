@@ -9,6 +9,7 @@ import { SessionSidebar } from "./components/SessionSidebar";
 import { SettingsDialog } from "./components/SettingsDialog";
 import { TerminalTabs } from "./components/TerminalTabs";
 import { ToastContainer } from "./components/ToastContainer";
+import { UpdateDialog } from "./components/UpdateDialog";
 import { UserIdentDialog } from "./components/UserIdentDialog";
 import { useTheme } from "./hooks/useTheme";
 import { useAppStore } from "./stores/appStore";
@@ -153,6 +154,7 @@ function App(): React.JSX.Element {
   return (
     <div className="app" style={{ "--ui-zoom": uiScale / 100 } as React.CSSProperties}>
       <ToastContainer />
+      <UpdateDialog />
       {dbStatus !== null && !dbStatus.healthy && dbStatus.error !== null && (
         <DatabaseStatusBanner
           error={dbStatus.error}

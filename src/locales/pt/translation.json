@@ -184,7 +184,24 @@
     "move": "Mover",
     "moveTo": "Mover para…",
     "targetFolder": "Pasta destino",
-    "root": "(Raiz)"
+    "root": "(Raiz)",
+    "close": "Fechar"
+  },
+  "updates": {
+    "availableTitle": "Atualização disponível",
+    "availableMessage": "ShellStation {{next}} está disponível. Você está na versão {{current}}. Atualize agora para obter as últimas correções e recursos.",
+    "releaseNotes": "Notas da versão",
+    "installAndRestart": "Instalar e reiniciar",
+    "later": "Mais tarde",
+    "downloadingTitle": "Baixando atualização",
+    "downloadingProgress": "{{downloaded}} de {{total}}",
+    "downloadingIndeterminate": "Baixando…",
+    "readyTitle": "Atualização pronta",
+    "readyMessage": "ShellStation será reiniciado para concluir a atualização.",
+    "errorTitle": "Falha na atualização",
+    "errorUnknown": "Ocorreu um erro desconhecido ao verificar atualizações.",
+    "upToDateToast": "Você está atualizado.",
+    "checkFailedToast": "Não foi possível verificar atualizações."
   },
   "pasteConfirm": {
     "title": "Confirmar colagem",
@@ -293,6 +310,8 @@
     "toastAutoDismissHint": "Quando ativado, as notificações toast são ocultadas automaticamente após um número definido de segundos. Quando desativado, as notificações permanecem visíveis até serem fechadas manualmente.",
     "toastDismissSecondsLabel": "Ocultar após",
     "confirmOnQuitHint": "Quando ativado, um diálogo de confirmação é exibido antes de sair se houver abas de terminal abertas. Quando desativado, a aplicação fecha imediatamente com Ctrl+Q / Cmd+Q.",
+    "autoCheckUpdatesLabel": "Verificar atualizações ao iniciar",
+    "autoCheckUpdatesHint": "Quando ativado, o aplicativo verifica silenciosamente se há uma versão mais recente toda vez que é iniciado e mostra um diálogo se houver uma disponível. Você sempre pode verificar manualmente em Ajuda → Verificar atualizações…",
     "quitConfirmMessage": "Há {{count}} sessão(ões) aberta(s). Tem certeza de que deseja sair?",
     "quitConfirmTitle": "Sair do ShellStation",
     "quit": "Sair",

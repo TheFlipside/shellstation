@@ -184,7 +184,24 @@
     "move": "Déplacer",
     "moveTo": "Déplacer vers…",
     "targetFolder": "Dossier cible",
-    "root": "(Racine)"
+    "root": "(Racine)",
+    "close": "Fermer"
+  },
+  "updates": {
+    "availableTitle": "Mise à jour disponible",
+    "availableMessage": "ShellStation {{next}} est disponible. Vous utilisez {{current}}. Mettez à jour maintenant pour obtenir les derniers correctifs et fonctionnalités.",
+    "releaseNotes": "Notes de version",
+    "installAndRestart": "Installer et redémarrer",
+    "later": "Plus tard",
+    "downloadingTitle": "Téléchargement de la mise à jour",
+    "downloadingProgress": "{{downloaded}} sur {{total}}",
+    "downloadingIndeterminate": "Téléchargement…",
+    "readyTitle": "Mise à jour prête",
+    "readyMessage": "ShellStation va redémarrer pour terminer la mise à jour.",
+    "errorTitle": "Échec de la mise à jour",
+    "errorUnknown": "Une erreur inconnue s'est produite lors de la recherche de mises à jour.",
+    "upToDateToast": "Vous êtes à jour.",
+    "checkFailedToast": "Impossible de rechercher des mises à jour."
   },
   "pasteConfirm": {
     "title": "Confirmer le collage",
@@ -293,6 +310,8 @@
     "toastAutoDismissHint": "Lorsqu'activé, les notifications toast sont automatiquement masquées après un nombre défini de secondes. Lorsque désactivé, les notifications restent visibles jusqu'à fermeture manuelle.",
     "toastDismissSecondsLabel": "Masquer après",
     "confirmOnQuitHint": "Lorsqu'activé, une boîte de dialogue de confirmation s'affiche avant de quitter si des onglets de terminal sont ouverts. Lorsque désactivé, l'application se ferme immédiatement avec Ctrl+Q / Cmd+Q.",
+    "autoCheckUpdatesLabel": "Rechercher des mises à jour au démarrage",
+    "autoCheckUpdatesHint": "Si activé, l'application vérifie silencieusement la disponibilité d'une nouvelle version à chaque démarrage et affiche une boîte de dialogue si une mise à jour est disponible. Vous pouvez toujours vérifier manuellement via Aide → Rechercher des mises à jour…",
     "quitConfirmMessage": "Il y a {{count}} session(s) ouverte(s). Êtes-vous sûr de vouloir quitter ?",
     "quitConfirmTitle": "Quitter ShellStation",
     "quit": "Quitter",

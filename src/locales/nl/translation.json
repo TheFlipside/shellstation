@@ -184,7 +184,24 @@
     "move": "Verplaatsen",
     "moveTo": "Verplaatsen naar…",
     "targetFolder": "Doelmap",
-    "root": "(Hoofdmap)"
+    "root": "(Hoofdmap)",
+    "close": "Sluiten"
+  },
+  "updates": {
+    "availableTitle": "Update beschikbaar",
+    "availableMessage": "ShellStation {{next}} is beschikbaar. Je gebruikt {{current}}. Werk nu bij om de nieuwste verbeteringen en functies te krijgen.",
+    "releaseNotes": "Release-opmerkingen",
+    "installAndRestart": "Installeren en opnieuw starten",
+    "later": "Later",
+    "downloadingTitle": "Update downloaden",
+    "downloadingProgress": "{{downloaded}} van {{total}}",
+    "downloadingIndeterminate": "Downloaden…",
+    "readyTitle": "Update klaar",
+    "readyMessage": "ShellStation start opnieuw op om de update te voltooien.",
+    "errorTitle": "Update mislukt",
+    "errorUnknown": "Er is een onbekende fout opgetreden bij het zoeken naar updates.",
+    "upToDateToast": "Je bent up-to-date.",
+    "checkFailedToast": "Kon niet controleren op updates."
   },
   "pasteConfirm": {
     "title": "Plakken bevestigen",
@@ -293,6 +310,8 @@
     "toastAutoDismissHint": "Indien ingeschakeld worden toastmeldingen automatisch verborgen na een ingesteld aantal seconden.",
     "toastDismissSecondsLabel": "Verbergen na",
     "confirmOnQuitHint": "Indien ingeschakeld wordt een bevestigingsdialoog getoond voordat u afsluit als er terminaltabbladen open zijn. Indien uitgeschakeld sluit de applicatie direct met Ctrl+Q / Cmd+Q.",
+    "autoCheckUpdatesLabel": "Bij opstarten controleren op updates",
+    "autoCheckUpdatesHint": "Indien ingeschakeld controleert de app bij elke start stil op een nieuwere versie en toont een dialoog als er één beschikbaar is. Je kunt altijd handmatig controleren via Help → Controleren op updates…",
     "quitConfirmMessage": "Er zijn {{count}} open sessie(s). Weet u zeker dat u wilt afsluiten?",
     "quitConfirmTitle": "ShellStation afsluiten",
     "quit": "Afsluiten",

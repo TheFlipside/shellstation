@@ -2,6 +2,38 @@
 
 End-to-end checklist for cutting a new release.
 
+## 0. One-time setup: updater signing keys
+
+The updater plugin (added in 0.21.0) requires a minisign-style Ed25519
+keypair. Generate it **once**, store the private key in CI secrets, and
+embed the public key in `src-tauri/tauri.conf.json`.
+
+```bash
+# Generate the keypair. You'll be prompted for a password — keep it.
+npx tauri signer generate -w ~/.tauri/shellstation_updater.key
+
+# Read the PUBLIC key (small) — copy into tauri.conf.json:
+cat ~/.tauri/shellstation_updater.key.pub
+```
+
+In `src-tauri/tauri.conf.json` replace `REPLACE_WITH_BASE64_PUBLIC_KEY`
+under `plugins.updater.pubkey` with the value you just printed.
+
+In your Forgejo Actions runner secrets (`Settings → Secrets and Variables`):
+
+| Secret name                            | Value                                                |
+| -------------------------------------- | ---------------------------------------------------- |
+| `TAURI_SIGNING_PRIVATE_KEY`            | Contents of `~/.tauri/shellstation_updater.key`      |
+| `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`   | The password you chose at generation time            |
+
+**Never commit the private key.** Treat the password the same — both end up
+on a CI runner only.
+
+If you ever need to rotate: generate a new keypair, update `pubkey` in
+`tauri.conf.json` AND ship that new app version first. Then update the CI
+secrets. Old installs will only accept updates signed by the embedded
+public key, so a key rotation needs at least one transition release.
+
 ## 1. Pre-flight
 
 - [ ] All target features merged to `main`
@@ -49,27 +81,42 @@ git push origin vX.Y.Z
 
 This fires `.forgejo/workflows/release.yml`, which:
 
-1. Builds Linux `.deb` + `.AppImage` on the Linux runner
-2. Builds Windows `.msi` + `.exe` (NSIS) on the Windows runner
-3. Creates a Forgejo release at `vX.Y.Z` and uploads all artifacts
+1. Builds Linux `.deb` + `.AppImage` (+ `.AppImage.sig`) on the Linux runner
+2. Builds Windows `.msi` + `.exe` (NSIS) + `.exe.sig` on the Windows runner
+3. Builds macOS `.dmg` + `.app.tar.gz` + `.app.tar.gz.sig` on the macOS runners (x64 + arm64)
+4. Generates `latest.json` — the updater manifest — from the collected `.sig` files
+5. Creates a Forgejo release at `vX.Y.Z` and uploads all artifacts
+6. Creates / updates the GitHub mirror release with the same artifacts
+
+The updater plugin in the app fetches `latest.json` from the GitHub
+release; if the build was unsigned (missing `TAURI_SIGNING_PRIVATE_KEY`
+secret) the manifest will have an empty `platforms` object and the
+plugin will treat the release as having no compatible update.
 
 Watch progress at <https://git.fiedler.live/tux/shellstation/actions>.
 
-## 4. Build macOS manually
+## 4. (Historical) Build macOS manually
 
-The pipeline does not build macOS. On the MacBook:
+The macOS build is now part of the pipeline (see `build-macos-x64` and
+`build-macos-arm64` jobs). The manual fallback below is kept for the case
+where the macOS runner is offline.
 
 ```bash
 git fetch --tags
 git checkout vX.Y.Z
 npm ci
+# `app` bundle is needed in addition to `dmg` so the updater can produce
+# the .app.tar.gz artifact. Signing env vars must be exported for the
+# updater plugin to embed the signature.
+export TAURI_SIGNING_PRIVATE_KEY="$(cat ~/.tauri/shellstation_updater.key)"
+export TAURI_SIGNING_PRIVATE_KEY_PASSWORD="<your password>"
 npm run tauri build -- --bundles dmg,app
 ```
 
-Output lands in `src-tauri/target/release/bundle/dmg/`. Upload the `.dmg`
-to the Forgejo release page manually:
-
-<https://git.fiedler.live/tux/shellstation/releases/tag/vX.Y.Z>
+Output lands in `src-tauri/target/release/bundle/dmg/` (the `.dmg` is the
+first-install artifact) and `src-tauri/target/release/bundle/macos/`
+(the `.app.tar.gz` + `.sig` is the updater artifact). Upload both to the
+GitHub release manually if the pipeline didn't.
 
 > **Note:** Unsigned macOS builds trigger Gatekeeper. End users must
 > right-click the `.app` and choose **Open** the first time, or run

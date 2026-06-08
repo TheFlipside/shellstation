@@ -184,7 +184,24 @@
     "move": "Verschieben",
     "moveTo": "Verschieben nach…",
     "targetFolder": "Zielordner",
-    "root": "(Stammverzeichnis)"
+    "root": "(Stammverzeichnis)",
+    "close": "Schließen"
+  },
+  "updates": {
+    "availableTitle": "Update verfügbar",
+    "availableMessage": "ShellStation {{next}} ist verfügbar. Du verwendest {{current}}. Jetzt aktualisieren, um die neuesten Korrekturen und Funktionen zu erhalten.",
+    "releaseNotes": "Versionshinweise",
+    "installAndRestart": "Installieren und neu starten",
+    "later": "Später",
+    "downloadingTitle": "Update wird heruntergeladen",
+    "downloadingProgress": "{{downloaded}} von {{total}}",
+    "downloadingIndeterminate": "Wird heruntergeladen…",
+    "readyTitle": "Update bereit",
+    "readyMessage": "ShellStation startet neu, um das Update abzuschließen.",
+    "errorTitle": "Update fehlgeschlagen",
+    "errorUnknown": "Beim Suchen nach Updates ist ein unbekannter Fehler aufgetreten.",
+    "upToDateToast": "Du verwendest die neueste Version.",
+    "checkFailedToast": "Konnte nicht nach Updates suchen."
   },
   "pasteConfirm": {
     "title": "Einfügen bestätigen",
@@ -293,6 +310,8 @@
     "toastDismissSecondsLabel": "Ausblenden nach",
     "confirmOnQuitLabel": "Bestätigung vor dem Beenden bei offenen Sitzungen",
     "confirmOnQuitHint": "Wenn aktiviert, wird vor dem Beenden eine Bestätigung angezeigt, falls Terminal-Tabs geöffnet sind. Wenn deaktiviert, wird die Anwendung bei Strg+Q / Cmd+Q sofort geschlossen.",
+    "autoCheckUpdatesLabel": "Beim Start nach Updates suchen",
+    "autoCheckUpdatesHint": "Wenn aktiviert, prüft die App bei jedem Start im Hintergrund auf eine neuere Version und zeigt einen Dialog, falls eine verfügbar ist. Du kannst jederzeit manuell über Hilfe → Auf Updates prüfen… nachsehen.",
     "quitConfirmMessage": "Es sind {{count}} Sitzung(en) geöffnet. Möchten Sie wirklich beenden?",
     "quitConfirmTitle": "ShellStation beenden",
     "quit": "Beenden",

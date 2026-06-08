@@ -184,7 +184,24 @@
     "move": "Flytta",
     "moveTo": "Flytta till…",
     "targetFolder": "Målmapp",
-    "root": "(Rot)"
+    "root": "(Rot)",
+    "close": "Stäng"
+  },
+  "updates": {
+    "availableTitle": "Uppdatering tillgänglig",
+    "availableMessage": "ShellStation {{next}} är tillgänglig. Du använder {{current}}. Uppdatera nu för att få de senaste fixarna och funktionerna.",
+    "releaseNotes": "Versionsinformation",
+    "installAndRestart": "Installera och starta om",
+    "later": "Senare",
+    "downloadingTitle": "Laddar ned uppdatering",
+    "downloadingProgress": "{{downloaded}} av {{total}}",
+    "downloadingIndeterminate": "Laddar ned…",
+    "readyTitle": "Uppdatering klar",
+    "readyMessage": "ShellStation startar om för att slutföra uppdateringen.",
+    "errorTitle": "Uppdateringen misslyckades",
+    "errorUnknown": "Ett okänt fel inträffade vid sökning efter uppdateringar.",
+    "upToDateToast": "Du har den senaste versionen.",
+    "checkFailedToast": "Det gick inte att söka efter uppdateringar."
   },
   "pasteConfirm": {
     "title": "Bekräfta inklistring",
@@ -293,6 +310,8 @@
     "toastAutoDismissHint": "När aktiverat döljs toast-aviseringar automatiskt efter ett inställt antal sekunder.",
     "toastDismissSecondsLabel": "Dölj efter",
     "confirmOnQuitHint": "När aktiverat visas en bekräftelsedialog innan du avslutar om terminalflikar är öppna. När inaktiverat stängs programmet direkt med Ctrl+Q / Cmd+Q.",
+    "autoCheckUpdatesLabel": "Sök efter uppdateringar vid start",
+    "autoCheckUpdatesHint": "När det är aktiverat söker appen tyst efter en nyare version vid varje start och visar en dialog om en finns tillgänglig. Du kan alltid söka manuellt via Hjälp → Sök efter uppdateringar…",
     "quitConfirmMessage": "Det finns {{count}} öppna session(er). Är du säker på att du vill avsluta?",
     "quitConfirmTitle": "Avsluta ShellStation",
     "quit": "Avsluta",

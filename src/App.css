@@ -641,6 +641,53 @@ body,
   background: var(--color-maroon);
 }
 
+.dialog-update {
+  max-width: 520px;
+  width: min(520px, 90vw);
+}
+
+.dialog-update-notes {
+  margin: 12px 0;
+  max-height: 200px;
+  overflow-y: auto;
+  border: 1px solid var(--color-surface0);
+  border-radius: 4px;
+  padding: 10px 12px;
+  background: var(--color-mantle);
+}
+
+.dialog-update-notes h4 {
+  margin: 0 0 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-overlay1);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.dialog-update-notes pre {
+  margin: 0;
+  font-family: var(--font-mono), monospace;
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--color-text);
+}
+
+.dialog-update-progress {
+  height: 8px;
+  background: var(--color-surface0);
+  border-radius: 4px;
+  overflow: hidden;
+  margin-top: 12px;
+}
+
+.dialog-update-progress-bar {
+  height: 100%;
+  background: var(--color-blue);
+  transition: width 120ms ease-out;
+}
+
 .dialog-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;

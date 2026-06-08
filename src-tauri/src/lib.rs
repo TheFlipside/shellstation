@@ -55,7 +55,7 @@ use sqlx::sqlite::SqliteConnectOptions;
 use sqlx::SqlitePool;
 use ssh::SshState;
 use tauri::menu::{Menu, MenuItemBuilder, PredefinedMenuItem, Submenu};
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 use tauri_plugin_opener::OpenerExt;
 use telnet::TelnetState;
 use tracing_appender::non_blocking::WorkerGuard;
@@ -669,6 +669,8 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .setup(move |app| {
             // Build custom menu: replicate Tauri defaults but with a
             // functional Help submenu that links to our project pages.
@@ -692,6 +694,9 @@ pub fn run() {
                 MenuItemBuilder::with_id("help_docs", "ShellStation Help").build(app_handle)?;
             let help_issues =
                 MenuItemBuilder::with_id("help_issues", "Report an Issue").build(app_handle)?;
+            let help_updates =
+                MenuItemBuilder::with_id("help_check_updates", "Check for Updates\u{2026}")
+                    .build(app_handle)?;
             let help_menu = Submenu::with_items(
                 app_handle,
                 "Help",
@@ -700,6 +705,8 @@ pub fn run() {
                     &help_docs,
                     &PredefinedMenuItem::separator(app_handle)?,
                     &help_issues,
+                    &PredefinedMenuItem::separator(app_handle)?,
+                    &help_updates,
                     // On macOS, About lives in the app submenu; everywhere else
                     // add it at the bottom of the Help menu.
                     #[cfg(not(target_os = "macos"))]
@@ -728,6 +735,12 @@ pub fn run() {
                             "https://git.fiedler.live/tux/shellstation/issues",
                             None::<&str>,
                         );
+                    }
+                    "help_check_updates" => {
+                        // Tell the frontend to run a manual update check.
+                        // The webview owns the dialog UI, signature verification
+                        // happens in the plugin itself.
+                        let _ = handle.emit("updater:check-requested", ());
                     }
                     _ => {}
                 }

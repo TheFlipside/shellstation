@@ -89,6 +89,8 @@ interface SettingsState {
   sidebarWidth: number;
   toastAutoDismiss: boolean;
   toastDismissSeconds: number;
+  /** Check for app updates automatically on launch. Default `true`. */
+  autoCheckForUpdates: boolean;
   commandButtons: CommandButton[];
   addCommandButton: (button: CommandButton) => void;
   updateCommandButton: (id: string, button: Partial<Omit<CommandButton, "id">>) => void;
@@ -117,6 +119,7 @@ interface SettingsState {
   setSidebarWidth: (width: number) => void;
   setToastAutoDismiss: (value: boolean) => void;
   setToastDismissSeconds: (seconds: number) => void;
+  setAutoCheckForUpdates: (value: boolean) => void;
 }
 
 export const useSettingsStore = create<SettingsState>()(
@@ -144,6 +147,7 @@ export const useSettingsStore = create<SettingsState>()(
       sidebarWidth: 260,
       toastAutoDismiss: true,
       toastDismissSeconds: 5,
+      autoCheckForUpdates: true,
       commandButtons: [],
       addCommandButton: (button: CommandButton) => {
         if (typeof button.id !== "string" || !UUID_RE.test(button.id)) return;
@@ -295,6 +299,9 @@ export const useSettingsStore = create<SettingsState>()(
           set({ toastDismissSeconds: seconds });
         }
       },
+      setAutoCheckForUpdates: (value: boolean) => {
+        set({ autoCheckForUpdates: value });
+      },
     }),
     {
       name: "shellstation-settings",
@@ -386,6 +393,12 @@ export const useSettingsStore = create<SettingsState>()(
               !HEX_COLOR_RE.test(state.terminalForegroundColor))
           ) {
             state.terminalForegroundColor = null;
+          }
+          // Older app versions didn't have this field; default to on (the
+          // documented user-friendly behavior described in the changelog
+          // for the updater feature).
+          if (typeof state.autoCheckForUpdates !== "boolean") {
+            state.autoCheckForUpdates = true;
           }
         };
       },

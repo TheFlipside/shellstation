@@ -184,7 +184,24 @@
     "move": "移動",
     "moveTo": "移動先…",
     "targetFolder": "移動先フォルダー",
-    "root": "（ルート）"
+    "root": "（ルート）",
+    "close": "閉じる"
+  },
+  "updates": {
+    "availableTitle": "アップデートが利用可能です",
+    "availableMessage": "ShellStation {{next}} が利用可能です。現在のバージョンは {{current}} です。最新の修正と機能を取得するには、今すぐ更新してください。",
+    "releaseNotes": "リリースノート",
+    "installAndRestart": "インストールして再起動",
+    "later": "後で",
+    "downloadingTitle": "アップデートをダウンロードしています",
+    "downloadingProgress": "{{total}} 中 {{downloaded}}",
+    "downloadingIndeterminate": "ダウンロード中…",
+    "readyTitle": "アップデートの準備ができました",
+    "readyMessage": "アップデートを完了するため ShellStation を再起動します。",
+    "errorTitle": "アップデートに失敗しました",
+    "errorUnknown": "アップデートの確認中に不明なエラーが発生しました。",
+    "upToDateToast": "最新の状態です。",
+    "checkFailedToast": "アップデートを確認できませんでした。"
   },
   "pasteConfirm": {
     "title": "貼り付けの確認",
@@ -293,6 +310,8 @@
     "toastAutoDismissHint": "有効にすると、トースト通知は設定された秒数後に自動的に非表示になります。無効にすると、手動で閉じるまで通知は表示されたままになります。",
     "toastDismissSecondsLabel": "非表示までの秒数",
     "confirmOnQuitHint": "有効にすると、ターミナルタブが開いている場合、終了前に確認ダイアログが表示されます。無効にすると、Ctrl+Q / Cmd+Qですぐに終了します。",
+    "autoCheckUpdatesLabel": "起動時に更新を確認",
+    "autoCheckUpdatesHint": "有効にすると、アプリは起動するたびに新しいバージョンを静かに確認し、利用可能な場合はダイアログを表示します。ヘルプ → 更新を確認… からいつでも手動で確認できます。",
     "quitConfirmMessage": "{{count}}件のセッションが開いています。本当に終了しますか？",
     "quitConfirmTitle": "ShellStationを終了",
     "quit": "終了",

@@ -184,7 +184,24 @@
     "move": "Przenieś",
     "moveTo": "Przenieś do…",
     "targetFolder": "Folder docelowy",
-    "root": "(Katalog główny)"
+    "root": "(Katalog główny)",
+    "close": "Zamknij"
+  },
+  "updates": {
+    "availableTitle": "Aktualizacja dostępna",
+    "availableMessage": "Dostępna jest wersja ShellStation {{next}}. Używasz {{current}}. Zaktualizuj teraz, aby uzyskać najnowsze poprawki i funkcje.",
+    "releaseNotes": "Informacje o wydaniu",
+    "installAndRestart": "Zainstaluj i uruchom ponownie",
+    "later": "Później",
+    "downloadingTitle": "Pobieranie aktualizacji",
+    "downloadingProgress": "{{downloaded}} z {{total}}",
+    "downloadingIndeterminate": "Pobieranie…",
+    "readyTitle": "Aktualizacja gotowa",
+    "readyMessage": "ShellStation zostanie uruchomiony ponownie, aby zakończyć aktualizację.",
+    "errorTitle": "Aktualizacja nie powiodła się",
+    "errorUnknown": "Wystąpił nieznany błąd podczas sprawdzania aktualizacji.",
+    "upToDateToast": "Masz najnowszą wersję.",
+    "checkFailedToast": "Nie udało się sprawdzić aktualizacji."
   },
   "pasteConfirm": {
     "title": "Potwierdź wklejanie",
@@ -293,6 +310,8 @@
     "toastAutoDismissHint": "Po włączeniu powiadomienia toast są automatycznie ukrywane po określonej liczbie sekund. Po wyłączeniu powiadomienia pozostają widoczne do ręcznego zamknięcia.",
     "toastDismissSecondsLabel": "Ukryj po",
     "confirmOnQuitHint": "Po włączeniu przed wyjściem wyświetlane jest okno potwierdzenia, jeśli są otwarte karty terminala. Po wyłączeniu aplikacja zamyka się natychmiast po Ctrl+Q / Cmd+Q.",
+    "autoCheckUpdatesLabel": "Sprawdź aktualizacje przy uruchomieniu",
+    "autoCheckUpdatesHint": "Po włączeniu aplikacja przy każdym uruchomieniu po cichu sprawdza dostępność nowszej wersji i wyświetla okno dialogowe, jeśli jest dostępna. Zawsze możesz sprawdzić ręcznie przez Pomoc → Sprawdź aktualizacje…",
     "quitConfirmMessage": "Otwartych jest {{count}} sesja(-e). Czy na pewno chcesz wyjść?",
     "quitConfirmTitle": "Zamknij ShellStation",
     "quit": "Zamknij",

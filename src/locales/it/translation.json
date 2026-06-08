@@ -184,7 +184,24 @@
     "move": "Sposta",
     "moveTo": "Sposta in…",
     "targetFolder": "Cartella di destinazione",
-    "root": "(Radice)"
+    "root": "(Radice)",
+    "close": "Chiudi"
+  },
+  "updates": {
+    "availableTitle": "Aggiornamento disponibile",
+    "availableMessage": "ShellStation {{next}} è disponibile. Stai usando {{current}}. Aggiorna ora per ottenere le ultime correzioni e funzionalità.",
+    "releaseNotes": "Note di rilascio",
+    "installAndRestart": "Installa e riavvia",
+    "later": "Più tardi",
+    "downloadingTitle": "Download dell'aggiornamento",
+    "downloadingProgress": "{{downloaded}} di {{total}}",
+    "downloadingIndeterminate": "Download in corso…",
+    "readyTitle": "Aggiornamento pronto",
+    "readyMessage": "ShellStation si riavvierà per completare l'aggiornamento.",
+    "errorTitle": "Aggiornamento non riuscito",
+    "errorUnknown": "Si è verificato un errore sconosciuto durante la ricerca di aggiornamenti.",
+    "upToDateToast": "Sei aggiornato.",
+    "checkFailedToast": "Impossibile cercare aggiornamenti."
   },
   "pasteConfirm": {
     "title": "Conferma incolla",
@@ -293,6 +310,8 @@
     "toastAutoDismissHint": "Quando attivato, le notifiche toast vengono nascoste automaticamente dopo un numero di secondi. Quando disattivato, le notifiche rimangono visibili fino alla chiusura manuale.",
     "toastDismissSecondsLabel": "Nascondi dopo",
     "confirmOnQuitHint": "Quando attivato, viene mostrata una finestra di conferma prima di uscire se ci sono schede terminale aperte. Quando disattivato, l'applicazione si chiude immediatamente con Ctrl+Q / Cmd+Q.",
+    "autoCheckUpdatesLabel": "Cerca aggiornamenti all'avvio",
+    "autoCheckUpdatesHint": "Se attivato, l'app verifica silenziosamente la presenza di una versione più recente a ogni avvio e mostra una finestra di dialogo se ne è disponibile una. Puoi sempre verificare manualmente da Aiuto → Cerca aggiornamenti…",
     "quitConfirmMessage": "Ci sono {{count}} sessione/i aperta/e. Sei sicuro di voler uscire?",
     "quitConfirmTitle": "Esci da ShellStation",
     "quit": "Esci",

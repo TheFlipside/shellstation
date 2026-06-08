@@ -184,7 +184,24 @@
     "move": "Mover",
     "moveTo": "Mover a…",
     "targetFolder": "Carpeta destino",
-    "root": "(Raíz)"
+    "root": "(Raíz)",
+    "close": "Cerrar"
+  },
+  "updates": {
+    "availableTitle": "Actualización disponible",
+    "availableMessage": "ShellStation {{next}} está disponible. Estás en {{current}}. Actualiza ahora para obtener las últimas correcciones y funciones.",
+    "releaseNotes": "Notas de la versión",
+    "installAndRestart": "Instalar y reiniciar",
+    "later": "Más tarde",
+    "downloadingTitle": "Descargando actualización",
+    "downloadingProgress": "{{downloaded}} de {{total}}",
+    "downloadingIndeterminate": "Descargando…",
+    "readyTitle": "Actualización lista",
+    "readyMessage": "ShellStation se reiniciará para finalizar la actualización.",
+    "errorTitle": "Error en la actualización",
+    "errorUnknown": "Ocurrió un error desconocido al buscar actualizaciones.",
+    "upToDateToast": "Estás al día.",
+    "checkFailedToast": "No se pudieron buscar actualizaciones."
   },
   "pasteConfirm": {
     "title": "Confirmar pegado",
@@ -293,6 +310,8 @@
     "toastAutoDismissHint": "Cuando está activado, las notificaciones toast se ocultan automáticamente después de un número de segundos. Cuando está desactivado, las notificaciones permanecen visibles hasta que se cierren manualmente.",
     "toastDismissSecondsLabel": "Ocultar después de",
     "confirmOnQuitHint": "Cuando está activado, se muestra un diálogo de confirmación antes de salir si hay pestañas de terminal abiertas. Cuando está desactivado, la aplicación se cierra inmediatamente con Ctrl+Q / Cmd+Q.",
+    "autoCheckUpdatesLabel": "Buscar actualizaciones al inicio",
+    "autoCheckUpdatesHint": "Si está habilitado, la aplicación comprueba silenciosamente si hay una nueva versión cada vez que se inicia y muestra un diálogo si la hay. Siempre puedes comprobarlo manualmente en Ayuda → Buscar actualizaciones…",
     "quitConfirmMessage": "Hay {{count}} sesión(es) abierta(s). ¿Estás seguro de que deseas salir?",
     "quitConfirmTitle": "Salir de ShellStation",
     "quit": "Salir",

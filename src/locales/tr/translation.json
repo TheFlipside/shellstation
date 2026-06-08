@@ -184,7 +184,24 @@
     "move": "Taşı",
     "moveTo": "Taşı…",
     "targetFolder": "Hedef klasör",
-    "root": "(Kök)"
+    "root": "(Kök)",
+    "close": "Kapat"
+  },
+  "updates": {
+    "availableTitle": "Güncelleme mevcut",
+    "availableMessage": "ShellStation {{next}} mevcut. Şu anda {{current}} kullanıyorsunuz. En son düzeltmeleri ve özellikleri almak için şimdi güncelleyin.",
+    "releaseNotes": "Sürüm notları",
+    "installAndRestart": "Yükle ve yeniden başlat",
+    "later": "Daha sonra",
+    "downloadingTitle": "Güncelleme indiriliyor",
+    "downloadingProgress": "{{total}} üzerinden {{downloaded}}",
+    "downloadingIndeterminate": "İndiriliyor…",
+    "readyTitle": "Güncelleme hazır",
+    "readyMessage": "Güncellemeyi tamamlamak için ShellStation yeniden başlatılacak.",
+    "errorTitle": "Güncelleme başarısız",
+    "errorUnknown": "Güncellemeler denetlenirken bilinmeyen bir hata oluştu.",
+    "upToDateToast": "Güncelsiniz.",
+    "checkFailedToast": "Güncellemeler denetlenemedi."
   },
   "pasteConfirm": {
     "title": "Yapıştırmayı onayla",
@@ -293,6 +310,8 @@
     "toastAutoDismissHint": "Etkinleştirildiğinde toast bildirimleri belirlenen saniye sonra otomatik olarak gizlenir.",
     "toastDismissSecondsLabel": "Gizleme süresi",
     "confirmOnQuitHint": "Etkinleştirildiğinde terminal sekmeleri açıkken çıkmadan önce onay gösterilir. Devre dışı bırakıldığında Ctrl+Q / Cmd+Q ile hemen kapatılır.",
+    "autoCheckUpdatesLabel": "Başlangıçta güncellemeleri denetle",
+    "autoCheckUpdatesHint": "Etkinleştirildiğinde, uygulama her başlatıldığında sessizce yeni bir sürüm olup olmadığını kontrol eder ve varsa bir iletişim kutusu gösterir. Her zaman Yardım → Güncellemeleri Denetle… aracılığıyla manuel olarak kontrol edebilirsiniz.",
     "quitConfirmMessage": "{{count}} açık oturum var. Çıkmak istediğinizden emin misiniz?",
     "quitConfirmTitle": "ShellStation’dan Çık",
     "quit": "Çık",

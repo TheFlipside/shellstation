@@ -184,7 +184,24 @@
     "move": "移动",
     "moveTo": "移动到…",
     "targetFolder": "目标文件夹",
-    "root": "（根目录）"
+    "root": "（根目录）",
+    "close": "关闭"
+  },
+  "updates": {
+    "availableTitle": "有可用更新",
+    "availableMessage": "ShellStation {{next}} 可用。您当前使用的是 {{current}}。立即更新以获取最新的修复和功能。",
+    "releaseNotes": "发行说明",
+    "installAndRestart": "安装并重新启动",
+    "later": "稍后",
+    "downloadingTitle": "正在下载更新",
+    "downloadingProgress": "{{total}} 中的 {{downloaded}}",
+    "downloadingIndeterminate": "正在下载…",
+    "readyTitle": "更新就绪",
+    "readyMessage": "ShellStation 将重新启动以完成更新。",
+    "errorTitle": "更新失败",
+    "errorUnknown": "检查更新时发生未知错误。",
+    "upToDateToast": "您已是最新版本。",
+    "checkFailedToast": "无法检查更新。"
   },
   "pasteConfirm": {
     "title": "确认粘贴",
@@ -293,6 +310,8 @@
     "toastAutoDismissHint": "启用后，通知会在设定的秒数后自动隐藏。禁用后，通知会保持可见直到手动关闭。",
     "toastDismissSecondsLabel": "隐藏延迟",
     "confirmOnQuitHint": "启用后，如果有打开的终端标签页，退出前会显示确认对话框。禁用后，按 Ctrl+Q / Cmd+Q 会立即关闭应用程序。",
+    "autoCheckUpdatesLabel": "启动时检查更新",
+    "autoCheckUpdatesHint": "启用后，应用程序每次启动时都会静默检查是否有新版本，如果有可用更新，将显示对话框。您可以随时通过 帮助 → 检查更新… 手动检查。",
     "quitConfirmMessage": "有 {{count}} 个开放的会话。确定要退出吗？",
     "quitConfirmTitle": "退出 ShellStation",
     "quit": "退出",

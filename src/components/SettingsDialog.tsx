@@ -160,6 +160,8 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
     setToastAutoDismiss,
     toastDismissSeconds,
     setToastDismissSeconds,
+    autoCheckForUpdates,
+    setAutoCheckForUpdates,
   } = useSettingsStore();
 
   const currentLang = language !== "" ? language : (i18n.resolvedLanguage ?? "en");
@@ -727,6 +729,20 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
           />
           <label htmlFor="settings-confirm-on-quit">{t("settings.confirmOnQuitLabel")}</label>
           <span className="settings-help" title={t("settings.confirmOnQuitHint")}>
+            ?
+          </span>
+        </div>
+        <div className="dialog-field dialog-field-row">
+          <input
+            type="checkbox"
+            id="settings-auto-check-updates"
+            checked={autoCheckForUpdates}
+            onChange={(e) => {
+              setAutoCheckForUpdates(e.target.checked);
+            }}
+          />
+          <label htmlFor="settings-auto-check-updates">{t("settings.autoCheckUpdatesLabel")}</label>
+          <span className="settings-help" title={t("settings.autoCheckUpdatesHint")}>
             ?
           </span>
         </div>
