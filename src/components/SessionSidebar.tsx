@@ -134,6 +134,19 @@ export function SessionSidebar(): React.JSX.Element {
   const reordering = useRef(false);
   const treeRef = useRef<HTMLDivElement>(null);
 
+  // One-shot scroll target. Set by handlers that mutate the tree (delete,
+  // create, search-clear) when the target element doesn't exist in the DOM
+  // yet. The effect below consumes it on the *next* render — by then the
+  // store has flushed and the new tree is committed, so scrollIntoView
+  // resolves correctly. Replaces a less reliable `requestAnimationFrame`
+  // pattern that could fire before React's render finished.
+  const [pendingScrollId, setPendingScrollId] = useState<string | null>(null);
+  // Initial capture is intentional. Refs survive StrictMode's mount/remount,
+  // so the double-effect run is idempotent: the second run sees the same
+  // `searchResults` and short-circuits the `wasFiltered && !isFiltered`
+  // condition. Do NOT reset to null here.
+  const prevSearchResultsRef = useRef(searchResults);
+
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
     useSensor(KeyboardSensor),
@@ -246,6 +259,34 @@ export function SessionSidebar(): React.JSX.Element {
     el?.scrollIntoView({ block: "nearest" });
   }, []);
 
+  // Consume a pending scroll request after the tree has rendered. Used by
+  // delete/create handlers and the search-clear restore: when those flows
+  // set `pendingScrollId`, this effect fires on the resulting render and
+  // scrolls the target into view once the DOM matches.
+  // Dep array deliberately omits `folders`/`sessions`/`searchResults` —
+  // setPendingScrollId is always called in the same microtask as the store
+  // mutation it pairs with, so the underlying data is already committed by
+  // the time this effect runs. Adding those deps would cause spurious
+  // re-fires (cheap no-ops, but noise).
+  useEffect(() => {
+    if (!pendingScrollId) return;
+    scrollItemIntoView(pendingScrollId);
+    setPendingScrollId(null);
+  }, [pendingScrollId, scrollItemIntoView]);
+
+  // When the search input is cleared, the tree (which had been replaced by
+  // the flat search-results list) remounts at scroll-top zero. Restore the
+  // previously-selected item to its visible position so the user doesn't
+  // lose their place.
+  useEffect(() => {
+    const wasFiltered = prevSearchResultsRef.current !== null;
+    const isFiltered = searchResults !== null;
+    prevSearchResultsRef.current = searchResults;
+    if (wasFiltered && !isFiltered && selectedItemId) {
+      setPendingScrollId(selectedItemId);
+    }
+  }, [searchResults, selectedItemId]);
+
   // Arrow-key and Enter navigation within the session tree.
   const handleTreeKeyDown = useCallback(
     (e: React.KeyboardEvent): void => {
@@ -326,9 +367,7 @@ export function SessionSidebar(): React.JSX.Element {
                 .then(() => {
                   if (parentId) {
                     selectItem(parentId, "folder");
-                    requestAnimationFrame(() => {
-                      scrollItemIntoView(parentId);
-                    });
+                    setPendingScrollId(parentId);
                   } else {
                     clearSelection();
                   }
@@ -348,9 +387,7 @@ export function SessionSidebar(): React.JSX.Element {
                 .then(() => {
                   if (parentFolderId) {
                     selectItem(parentFolderId, "folder");
-                    requestAnimationFrame(() => {
-                      scrollItemIntoView(parentFolderId);
-                    });
+                    setPendingScrollId(parentFolderId);
                   } else {
                     clearSelection();
                   }
@@ -653,9 +690,7 @@ export function SessionSidebar(): React.JSX.Element {
                         .then(() => {
                           if (parentId) {
                             selectItem(parentId, "folder");
-                            requestAnimationFrame(() => {
-                              scrollItemIntoView(parentId);
-                            });
+                            setPendingScrollId(parentId);
                           } else {
                             clearSelection();
                           }
@@ -761,9 +796,7 @@ export function SessionSidebar(): React.JSX.Element {
                       .then(() => {
                         if (parentFolderId) {
                           selectItem(parentFolderId, "folder");
-                          requestAnimationFrame(() => {
-                            scrollItemIntoView(parentFolderId);
-                          });
+                          setPendingScrollId(parentFolderId);
                         } else {
                           clearSelection();
                         }
@@ -788,7 +821,6 @@ export function SessionSidebar(): React.JSX.Element {
     loadAll,
     cloneSession,
     handleSessionDoubleClick,
-    scrollItemIntoView,
     selectItem,
     clearSelection,
     deleteFolder,
@@ -804,9 +836,7 @@ export function SessionSidebar(): React.JSX.Element {
           .then(() => {
             if (parentId) {
               selectItem(parentId, "folder");
-              requestAnimationFrame(() => {
-                scrollItemIntoView(parentId);
-              });
+              setPendingScrollId(parentId);
             }
           })
           .catch(noop);
@@ -816,7 +846,7 @@ export function SessionSidebar(): React.JSX.Element {
       setFolderDialog(null);
       treeRef.current?.focus();
     },
-    [folderDialog, createFolder, renameFolder, selectItem, scrollItemIntoView],
+    [folderDialog, createFolder, renameFolder, selectItem],
   );
 
   const handleSessionSubmit = useCallback(
@@ -849,9 +879,7 @@ export function SessionSidebar(): React.JSX.Element {
         })
           .then(() => {
             selectItem(data.folderId, "folder");
-            requestAnimationFrame(() => {
-              scrollItemIntoView(data.folderId);
-            });
+            setPendingScrollId(data.folderId);
           })
           .catch(noop);
       } else if (sessionDialog.sessionId) {
@@ -881,7 +909,7 @@ export function SessionSidebar(): React.JSX.Element {
       setSessionDialog(null);
       treeRef.current?.focus();
     },
-    [sessionDialog, createSession, updateSession, moveSession, selectItem, scrollItemIntoView],
+    [sessionDialog, createSession, updateSession, moveSession, selectItem],
   );
 
   const handleMoveSubmit = (targetFolderId: string): void => {
