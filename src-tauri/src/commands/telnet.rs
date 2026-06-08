@@ -1,5 +1,4 @@
 use tauri::{AppHandle, State};
-use tokio::sync::mpsc::error::TrySendError;
 use uuid::Uuid;
 
 use crate::session_logger::SessionLogState;
@@ -148,15 +147,11 @@ pub async fn telnet_resize(
         let manager = state.0.lock().await;
         manager.get_resize_sender(&id)?
     };
-    // try_send (never block) — keeps a misbehaving frontend (resize flood,
-    // CSS-animation feedback loop, etc.) from parking Tauri command workers
-    // on a full queue. See ssh_resize for the full rationale.
-    if let Err(TrySendError::Closed(_)) = resize_tx.try_send(crate::ssh::ResizeRequest {
+    // See ssh_resize for the watch + send_replace rationale.
+    resize_tx.send_replace(Some(crate::ssh::ResizeRequest {
         cols: u32::from(cols),
         rows: u32::from(rows),
-    }) {
-        return Err("Resize channel closed".to_string());
-    }
+    }));
     Ok(())
 }
 

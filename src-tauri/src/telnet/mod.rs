@@ -5,7 +5,7 @@ use base64::Engine;
 use tauri::{AppHandle, Emitter};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
-use tokio::sync::{mpsc, Mutex, Semaphore};
+use tokio::sync::{mpsc, watch, Mutex, Semaphore};
 use tokio::task::JoinHandle;
 use tracing::{debug, info, warn};
 
@@ -47,7 +47,12 @@ pub struct TelnetConnectParams {
 pub(crate) struct TelnetSession {
     reader_task: JoinHandle<()>,
     write_tx: mpsc::Sender<Vec<u8>>,
-    resize_tx: mpsc::Sender<ResizeRequest>,
+    /// Watch channel carrying the latest pending resize. `None` is the
+    /// initial sentinel — the initial NAWS is sent during connection setup
+    /// in `telnet_io_loop`, so the reader does not need to fire one at
+    /// startup. Latest-wins semantics make intermediate resize values
+    /// during a burst safely discardable.
+    resize_tx: watch::Sender<Option<ResizeRequest>>,
     /// Bounds the number of in-flight write tasks per session. Prevents a
     /// runaway frontend from spawning unbounded tasks (each holding up to
     /// `MAX_WRITE_SIZE` bytes) when the writer task is slow to drain the
@@ -93,7 +98,10 @@ impl TelnetManager {
     }
 
     /// Get the resize sender for a session.
-    pub fn get_resize_sender(&self, id: &str) -> Result<mpsc::Sender<ResizeRequest>, String> {
+    pub fn get_resize_sender(
+        &self,
+        id: &str,
+    ) -> Result<watch::Sender<Option<ResizeRequest>>, String> {
         let session = self
             .sessions
             .get(id)
@@ -174,7 +182,10 @@ pub async fn establish_telnet_connection(
     // Channel for sending data to the writer task.
     let (write_tx, write_rx) = mpsc::channel::<Vec<u8>>(64);
     // Channel for resize requests.
-    let (resize_tx, resize_rx) = mpsc::channel::<ResizeRequest>(4);
+    // Watch channel for resize requests. `None` initial state means the
+    // reader task does not fire a redundant NAWS at startup — the initial
+    // NAWS is already sent during the option negotiation in `telnet_io_loop`.
+    let (resize_tx, resize_rx) = watch::channel::<Option<ResizeRequest>>(None);
 
     let event_name = format!("terminal-output-{id}");
     let exit_event = format!("terminal-exit-{id}");
@@ -216,7 +227,7 @@ pub async fn establish_telnet_connection(
         reader_task,
         write_tx,
         resize_tx,
-        write_semaphore: Arc::new(Semaphore::new(crate::commands::MAX_INFLIGHT_WRITES)),
+        write_semaphore: Arc::new(Semaphore::new(crate::limits::MAX_INFLIGHT_WRITES)),
     })
 }
 
@@ -229,7 +240,7 @@ async fn telnet_io_loop(
     mut reader: tokio::net::tcp::OwnedReadHalf,
     mut writer: tokio::net::tcp::OwnedWriteHalf,
     mut write_rx: mpsc::Receiver<Vec<u8>>,
-    mut resize_rx: mpsc::Receiver<ResizeRequest>,
+    mut resize_rx: watch::Receiver<Option<ResizeRequest>>,
     initial_cols: u16,
     initial_rows: u16,
     event_name: &str,
@@ -335,10 +346,13 @@ async fn telnet_io_loop(
                     break;
                 }
             }
-            Some(req) = resize_rx.recv() => {
-                let naws = naws_subnegotiation(req.cols as u16, req.rows as u16);
-                if writer.write_all(&naws).await.is_err() {
-                    warn!(session_id = %session_id, "Failed to send NAWS resize");
+            Ok(()) = resize_rx.changed() => {
+                let pending = *resize_rx.borrow_and_update();
+                if let Some(req) = pending {
+                    let naws = naws_subnegotiation(req.cols as u16, req.rows as u16);
+                    if writer.write_all(&naws).await.is_err() {
+                        warn!(session_id = %session_id, "Failed to send NAWS resize");
+                    }
                 }
             }
         }

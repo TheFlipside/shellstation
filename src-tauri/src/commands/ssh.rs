@@ -1,5 +1,4 @@
 use tauri::{AppHandle, State};
-use tokio::sync::mpsc::error::TrySendError;
 use uuid::Uuid;
 use zeroize::Zeroizing;
 
@@ -161,17 +160,15 @@ pub async fn ssh_resize(
         let manager = state.manager.lock().await;
         manager.get_resize_sender(&id)?
     };
-    // try_send (never block) — keeps a misbehaving frontend (resize flood,
-    // CSS-animation feedback loop, etc.) from parking Tauri command workers
-    // on a full queue. The mpsc capacity is 4; if it fills, drop this
-    // request. The reader task drains in microseconds under normal use, so
-    // the *user's* final intended size still reaches the backend.
-    if let Err(TrySendError::Closed(_)) = resize_tx.try_send(crate::ssh::ResizeRequest {
+    // Watch channel: send_replace is infallible and overwrites any pending
+    // un-consumed value. Under a resize burst the reader picks up the most
+    // recent dimensions on its next iteration — intermediate values are
+    // correctly discarded, including the newest one (which the previous
+    // try_send approach could lose if the queue was already full).
+    resize_tx.send_replace(Some(crate::ssh::ResizeRequest {
         cols: u32::from(cols),
         rows: u32::from(rows),
-    }) {
-        return Err("Resize channel closed".to_string());
-    }
+    }));
     Ok(())
 }
 

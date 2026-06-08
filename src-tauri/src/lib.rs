@@ -33,6 +33,7 @@ mod credentials;
 mod db;
 mod highlight;
 mod import;
+mod limits;
 mod login_sequence;
 mod migrate_legacy;
 mod pty;

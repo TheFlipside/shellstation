@@ -9,7 +9,7 @@ use russh::keys::{PrivateKeyWithHashAlg, PublicKey};
 use russh::{client, ChannelMsg, Disconnect};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
-use tokio::sync::{mpsc, oneshot, Mutex, Semaphore};
+use tokio::sync::{oneshot, watch, Mutex, Semaphore};
 use tokio::task::JoinHandle;
 use tracing::{debug, error, info, trace, warn};
 use zeroize::Zeroizing;
@@ -54,6 +54,7 @@ pub struct KbdInteractivePrompt {
 }
 
 /// Resize request sent to the reader task which owns the channel.
+#[derive(Clone, Copy)]
 pub struct ResizeRequest {
     pub cols: u32,
     pub rows: u32,
@@ -64,7 +65,12 @@ pub(crate) struct SshSession {
     handle: Arc<client::Handle<SshHandler>>,
     channel_id: russh::ChannelId,
     reader_task: JoinHandle<()>,
-    resize_tx: mpsc::Sender<ResizeRequest>,
+    /// Watch channel carrying the latest pending resize. `None` is the
+    /// initial sentinel — see `establish_ssh_connection` for the rationale.
+    /// A watch (latest-wins) is the right primitive here: intermediate
+    /// resize values during a burst are safe to discard, and the reader
+    /// task only ever needs the most recent dimensions.
+    resize_tx: watch::Sender<Option<ResizeRequest>>,
     /// Bounds the number of in-flight write tasks per session. Prevents a
     /// runaway frontend from spawning unbounded tasks (each holding up to
     /// `MAX_WRITE_SIZE` bytes) when the SSH socket is congested and russh's
@@ -165,7 +171,10 @@ impl SshManager {
 
     /// Get the resize sender for a session.
     /// The caller should drop the manager lock before sending.
-    pub fn get_resize_sender(&self, id: &str) -> Result<mpsc::Sender<ResizeRequest>, String> {
+    pub fn get_resize_sender(
+        &self,
+        id: &str,
+    ) -> Result<watch::Sender<Option<ResizeRequest>>, String> {
         let session = self
             .sessions
             .get(id)
@@ -293,8 +302,13 @@ pub async fn establish_ssh_connection(
 
     let channel_id = channel.id();
 
-    // Create a channel for sending resize requests to the reader task.
-    let (resize_tx, mut resize_rx) = mpsc::channel::<ResizeRequest>(4);
+    // Watch channel for resize requests. `None` initial state means the
+    // reader task does not fire a redundant `window_change` at startup —
+    // the PTY was already requested with the connect-time cols/rows above.
+    // Latest-wins semantics: under a resize burst the reader picks up only
+    // the most recent dimensions on its next iteration; intermediate values
+    // are correctly discarded by the watch primitive itself.
+    let (resize_tx, mut resize_rx) = watch::channel::<Option<ResizeRequest>>(None);
 
     // Spawn a reader task that owns the channel exclusively.
     // It streams output to the frontend and handles resize requests.
@@ -377,9 +391,14 @@ pub async fn establish_ssh_connection(
                         }
                     }
                 }
-                Some(req) = resize_rx.recv() => {
-                    if let Err(e) = channel.window_change(req.cols, req.rows, 0, 0).await {
-                        warn!(session_id = %session_id, error = %e, "Failed to resize SSH PTY");
+                Ok(()) = resize_rx.changed() => {
+                    // borrow_and_update marks the change consumed; subsequent
+                    // .changed() calls will only fire on the next overwrite.
+                    let pending = *resize_rx.borrow_and_update();
+                    if let Some(req) = pending {
+                        if let Err(e) = channel.window_change(req.cols, req.rows, 0, 0).await {
+                            warn!(session_id = %session_id, error = %e, "Failed to resize SSH PTY");
+                        }
                     }
                 }
             }
@@ -393,7 +412,7 @@ pub async fn establish_ssh_connection(
         channel_id,
         reader_task,
         resize_tx,
-        write_semaphore: Arc::new(Semaphore::new(crate::commands::MAX_INFLIGHT_WRITES)),
+        write_semaphore: Arc::new(Semaphore::new(crate::limits::MAX_INFLIGHT_WRITES)),
         bastion_handles,
     })
 }
