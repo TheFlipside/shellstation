@@ -1,4 +1,5 @@
 use tauri::{AppHandle, State};
+use tokio::sync::mpsc::error::TrySendError;
 use uuid::Uuid;
 use zeroize::Zeroizing;
 
@@ -124,11 +125,22 @@ pub async fn ssh_write(state: State<'_, SshState>, id: String, data: String) -> 
     if data.len() > MAX_WRITE_SIZE {
         return Err("Write data exceeds maximum size".to_string());
     }
-    let (handle, channel_id) = {
+    let (handle, channel_id, write_sem) = {
         let manager = state.manager.lock().await;
-        manager.get_write_handle(&id)?
+        let (h, cid) = manager.get_write_handle(&id)?;
+        (h, cid, manager.get_write_semaphore(&id)?)
+    };
+    // Bound the number of in-flight write tasks. russh's `handle.data` posts
+    // onto an internal bounded channel; if the SSH socket is stalled and that
+    // channel back-pressures, a sustained IPC flood would otherwise spawn an
+    // unbounded number of parked tasks each owning up to `MAX_WRITE_SIZE`
+    // bytes — turning a worker-stall DoS into a heap-exhaustion DoS. Reject
+    // when too many are already pending; the frontend should back off.
+    let Ok(permit) = write_sem.try_acquire_owned() else {
+        return Err("Too many pending writes for this session".to_string());
     };
     tokio::spawn(async move {
+        let _permit = permit; // released when the task ends
         if let Err(e) = handle.data(channel_id, data.into_bytes()).await {
             tracing::warn!("ssh_write: failed to send data: {e:?}");
         }
@@ -149,13 +161,18 @@ pub async fn ssh_resize(
         let manager = state.manager.lock().await;
         manager.get_resize_sender(&id)?
     };
-    resize_tx
-        .send(crate::ssh::ResizeRequest {
-            cols: u32::from(cols),
-            rows: u32::from(rows),
-        })
-        .await
-        .map_err(|_| "Failed to send resize request".to_string())
+    // try_send (never block) — keeps a misbehaving frontend (resize flood,
+    // CSS-animation feedback loop, etc.) from parking Tauri command workers
+    // on a full queue. The mpsc capacity is 4; if it fills, drop this
+    // request. The reader task drains in microseconds under normal use, so
+    // the *user's* final intended size still reaches the backend.
+    if let Err(TrySendError::Closed(_)) = resize_tx.try_send(crate::ssh::ResizeRequest {
+        cols: u32::from(cols),
+        rows: u32::from(rows),
+    }) {
+        return Err("Resize channel closed".to_string());
+    }
+    Ok(())
 }
 
 /// Disconnect an SSH session.

@@ -64,6 +64,15 @@ const MAX_ROWS: u16 = 500;
 /// Maximum bytes per single write call.
 const MAX_WRITE_SIZE: usize = 65536;
 
+/// Maximum spawned, not-yet-completed write tasks per session. Bounds the
+/// memory a misbehaving or runaway frontend can pin by issuing IPC writes
+/// faster than the writer task can drain. Two independent worst-case windows
+/// stack: up to `MAX_INFLIGHT_WRITES` spawned tasks each owning up to
+/// `MAX_WRITE_SIZE` bytes (= 4 MiB), plus up to a full bounded write channel
+/// (64 slots × 64 KiB = another 4 MiB). Theoretical maximum per session is
+/// therefore ~8 MiB; across the `MAX_SESSIONS` cap of 100, ~800 MiB.
+pub const MAX_INFLIGHT_WRITES: usize = 64;
+
 /// Maximum number of jump host hops.
 const MAX_JUMP_HOPS: usize = 10;
 

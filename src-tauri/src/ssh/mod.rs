@@ -9,7 +9,7 @@ use russh::keys::{PrivateKeyWithHashAlg, PublicKey};
 use russh::{client, ChannelMsg, Disconnect};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
-use tokio::sync::{mpsc, oneshot, Mutex};
+use tokio::sync::{mpsc, oneshot, Mutex, Semaphore};
 use tokio::task::JoinHandle;
 use tracing::{debug, error, info, trace, warn};
 use zeroize::Zeroizing;
@@ -65,6 +65,11 @@ pub(crate) struct SshSession {
     channel_id: russh::ChannelId,
     reader_task: JoinHandle<()>,
     resize_tx: mpsc::Sender<ResizeRequest>,
+    /// Bounds the number of in-flight write tasks per session. Prevents a
+    /// runaway frontend from spawning unbounded tasks (each holding up to
+    /// `MAX_WRITE_SIZE` bytes) when the SSH socket is congested and russh's
+    /// internal channel back-pressures into our spawned tasks.
+    write_semaphore: Arc<Semaphore>,
     /// Bastion handles kept alive for jump host chains. Must be retained for
     /// their Drop impl, which closes each hop's connection in reverse order
     /// when the session ends.
@@ -166,6 +171,16 @@ impl SshManager {
             .get(id)
             .ok_or_else(|| format!("SSH session {id} not found"))?;
         Ok(session.resize_tx.clone())
+    }
+
+    /// Get the inflight-writes semaphore for a session.
+    /// The caller should drop the manager lock before acquiring a permit.
+    pub fn get_write_semaphore(&self, id: &str) -> Result<Arc<Semaphore>, String> {
+        let session = self
+            .sessions
+            .get(id)
+            .ok_or_else(|| format!("SSH session {id} not found"))?;
+        Ok(Arc::clone(&session.write_semaphore))
     }
 
     /// Disconnect an SSH session and clean up resources.
@@ -378,6 +393,7 @@ pub async fn establish_ssh_connection(
         channel_id,
         reader_task,
         resize_tx,
+        write_semaphore: Arc::new(Semaphore::new(crate::commands::MAX_INFLIGHT_WRITES)),
         bastion_handles,
     })
 }

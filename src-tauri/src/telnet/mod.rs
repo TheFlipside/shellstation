@@ -5,7 +5,7 @@ use base64::Engine;
 use tauri::{AppHandle, Emitter};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{mpsc, Mutex, Semaphore};
 use tokio::task::JoinHandle;
 use tracing::{debug, info, warn};
 
@@ -48,6 +48,11 @@ pub(crate) struct TelnetSession {
     reader_task: JoinHandle<()>,
     write_tx: mpsc::Sender<Vec<u8>>,
     resize_tx: mpsc::Sender<ResizeRequest>,
+    /// Bounds the number of in-flight write tasks per session. Prevents a
+    /// runaway frontend from spawning unbounded tasks (each holding up to
+    /// `MAX_WRITE_SIZE` bytes) when the writer task is slow to drain the
+    /// write channel (e.g. a stalled remote network).
+    write_semaphore: Arc<Semaphore>,
 }
 
 /// Manages all active Telnet sessions.
@@ -94,6 +99,15 @@ impl TelnetManager {
             .get(id)
             .ok_or_else(|| format!("Telnet session {id} not found"))?;
         Ok(session.resize_tx.clone())
+    }
+
+    /// Get the inflight-writes semaphore for a session.
+    pub fn get_write_semaphore(&self, id: &str) -> Result<Arc<Semaphore>, String> {
+        let session = self
+            .sessions
+            .get(id)
+            .ok_or_else(|| format!("Telnet session {id} not found"))?;
+        Ok(Arc::clone(&session.write_semaphore))
     }
 
     /// Disconnect a Telnet session.
@@ -202,6 +216,7 @@ pub async fn establish_telnet_connection(
         reader_task,
         write_tx,
         resize_tx,
+        write_semaphore: Arc::new(Semaphore::new(crate::commands::MAX_INFLIGHT_WRITES)),
     })
 }
 

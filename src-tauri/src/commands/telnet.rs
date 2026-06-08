@@ -1,4 +1,5 @@
 use tauri::{AppHandle, State};
+use tokio::sync::mpsc::error::TrySendError;
 use uuid::Uuid;
 
 use crate::session_logger::SessionLogState;
@@ -105,14 +106,33 @@ pub async fn telnet_write(
     if data.len() > MAX_WRITE_SIZE {
         return Err("Write data exceeds maximum size".to_string());
     }
-    let write_tx = {
+    let (write_tx, write_sem) = {
         let manager = state.0.lock().await;
-        manager.get_write_sender(&id)?
+        (
+            manager.get_write_sender(&id)?,
+            manager.get_write_semaphore(&id)?,
+        )
     };
-    write_tx
-        .send(data.into_bytes())
-        .await
-        .map_err(|_| "Failed to send data to Telnet session".to_string())
+    // Mirror ssh_write: dispatch the channel send on a detached task so the
+    // Tauri command worker returns immediately. The write channel has a
+    // bounded capacity, so a synchronous `.send().await` here could park the
+    // worker if the writer task is slow to drain (e.g. stalled network).
+    // Keystrokes are too important to drop, so this is preferred over
+    // try_send: the spawned task can await without holding the worker.
+    // The semaphore caps in-flight tasks so an IPC flood cannot exhaust
+    // process memory through unbounded task accumulation — see ssh_write
+    // for the full rationale.
+    let Ok(permit) = write_sem.try_acquire_owned() else {
+        return Err("Too many pending writes for this session".to_string());
+    };
+    let bytes = data.into_bytes();
+    tokio::spawn(async move {
+        let _permit = permit; // released when the task ends
+        if write_tx.send(bytes).await.is_err() {
+            tracing::warn!("telnet_write: write channel closed");
+        }
+    });
+    Ok(())
 }
 
 /// Resize the terminal window for a Telnet session (sends `NAWS`).
@@ -128,13 +148,16 @@ pub async fn telnet_resize(
         let manager = state.0.lock().await;
         manager.get_resize_sender(&id)?
     };
-    resize_tx
-        .send(crate::ssh::ResizeRequest {
-            cols: u32::from(cols),
-            rows: u32::from(rows),
-        })
-        .await
-        .map_err(|_| "Failed to send resize request".to_string())
+    // try_send (never block) — keeps a misbehaving frontend (resize flood,
+    // CSS-animation feedback loop, etc.) from parking Tauri command workers
+    // on a full queue. See ssh_resize for the full rationale.
+    if let Err(TrySendError::Closed(_)) = resize_tx.try_send(crate::ssh::ResizeRequest {
+        cols: u32::from(cols),
+        rows: u32::from(rows),
+    }) {
+        return Err("Resize channel closed".to_string());
+    }
+    Ok(())
 }
 
 /// Disconnect a Telnet session.
