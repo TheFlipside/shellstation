@@ -15,6 +15,7 @@
 4. [Application Architecture](#4-application-architecture)
    - [4.5 PostgreSQL Multi-User Setup (RLS)](#45-postgresql-multi-user-setup-row-level-security)
    - [4.6 PostgreSQL Administration Guide](ADMIN_GUIDE.md)
+   - [4.7 App Updater](#47-app-updater)
 5. [Feature Specifications](#5-feature-specifications)
 6. [Project Structure](#6-project-structure)
 7. [Development Roadmap](#7-development-roadmap)
@@ -199,6 +200,93 @@ The trade-off: every user has the privileges to modify or drop tables, not just 
 ### 4.6 PostgreSQL Administration Guide
 
 For step-by-step instructions on deploying ShellStation with a shared PostgreSQL backend — including database setup, user management, updates, and backups — see the dedicated **[PostgreSQL Administration Guide](ADMIN_GUIDE.md)**.
+
+### 4.7 App Updater
+
+ShellStation ships its own in-app updater built on `tauri-plugin-updater`. The goal is to make the upgrade path a single click for end users without sacrificing transport-level or supply-chain safety. The model has three trust anchors and a clear failure isolation policy.
+
+#### 4.7.1 Trust model
+
+| Anchor                          | Location                                                                       | Owner                                                 |
+| ------------------------------- | ------------------------------------------------------------------------------ | ----------------------------------------------------- |
+| Ed25519 **public key**          | Compiled into the app binary via `tauri.conf.json` → `plugins.updater.pubkey`. | Embedded at build time; cannot be changed at runtime. |
+| Ed25519 **private key**         | `TAURI_SIGNING_PRIVATE_KEY` secret on the CI runner.                           | Project maintainer only.                              |
+| Update manifest (`latest.json`) | Published on the GitHub Releases page next to each signed artifact.            | Anyone with push access to the release.               |
+
+Every artifact the updater installs must validate against the embedded public key. A signed manifest is **not** required — the manifest is just a directory; what matters is that the artifact URL it points at carries a valid `.sig` produced by the held private key. An attacker who can replace `latest.json` (e.g. by compromising the GitHub release) cannot make the updater install anything unless they also hold the private key.
+
+#### 4.7.2 Endpoint and manifest
+
+The plugin is configured with a single endpoint:
+
+```
+https://github.com/TheFlipside/shellstation/releases/latest/download/latest.json
+```
+
+GitHub's `/releases/latest/download/<file>` URL is a 302 to whichever release is tagged "Latest". Re-tagging a previous release as "Latest" is therefore the rollback procedure.
+
+`latest.json` has the format defined by `tauri-plugin-updater` 2.x:
+
+```json
+{
+  "version": "0.21.0",
+  "notes": "See https://github.com/.../releases/tag/v0.21.0 for release notes",
+  "pub_date": "2026-06-15T12:00:00Z",
+  "platforms": {
+    "linux-x86_64": { "signature": "<minisign blob>", "url": "<artifact url>" },
+    "windows-x86_64": { "signature": "<minisign blob>", "url": "<artifact url>" },
+    "darwin-x86_64": { "signature": "<minisign blob>", "url": "<artifact url>" },
+    "darwin-aarch64": { "signature": "<minisign blob>", "url": "<artifact url>" }
+  }
+}
+```
+
+A platform entry is **omitted entirely** when its build was unsigned (signing secret missing on a dev push). The plugin treats a missing platform as "no compatible update" rather than an error.
+
+#### 4.7.3 Per-platform artifacts and install strategy
+
+| Platform               | First-install bundle | Updater bundle                                      | Install mode                                                                                                   |
+| ---------------------- | -------------------- | --------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| Linux x86_64           | `.deb`               | `.AppImage` (the AppImage replaces itself in place) | Direct file replacement, then `relaunch()`.                                                                    |
+| Windows x86_64         | `.msi` / NSIS `.exe` | NSIS `.exe`                                         | `installMode: passive` — installer runs without user interaction, then exits and the new binary is relaunched. |
+| macOS x86_64 / aarch64 | `.dmg`               | `.app.tar.gz`                                       | The `.app` bundle at the running path is replaced atomically; `relaunch()` swaps the running process.          |
+
+The DMG is only the first-install path on macOS — the updater never downloads a DMG. Conversely, AppImage and NSIS `.exe` serve double duty as both first-install and updater artifacts because they are self-contained.
+
+#### 4.7.4 Auto-check and manual triggers
+
+The frontend mounts `UpdateDialog.tsx` once at the app root. On mount it runs a background check if the `autoCheckForUpdates` setting is on (default `true`); a single `useRef` guard ensures the check fires at most once per app session, including under React StrictMode's double-mount. The native Help menu's "Check for Updates…" item fires a Tauri event (`updater:check-requested`) that the dialog listens for to run a manual check; the difference between the two flows is purely UX:
+
+- **Auto-check** that fails (offline, transient DNS, unsigned dev release) logs to the devtools console and goes silent.
+- **Manual check** that fails shows a toast and a generic error dialog; the raw plugin error is never rendered to the user because it can leak the endpoint URL or resolver hostnames.
+
+#### 4.7.5 IPC surface
+
+The webview is granted only two `updater:*` permissions: `allow-check` and `allow-download-and-install`. The standalone `allow-download` and `allow-install` are intentionally excluded — they expose a download-without-immediate-install flow that has no UX in this app and would increase the IPC surface area for a hypothetical future webview-side attacker. The `process:*` grant is similarly narrowed to `allow-restart` only; `allow-exit` is not needed and is not granted.
+
+The `check` IPC accepts an optional `proxy` parameter from the webview. The shipping JS never passes one. A future XSS in the webview could theoretically use this to redirect update checks through an attacker-controlled proxy (SSRF / fingerprinting). The mitigation today is that ShellStation has no HTML-rendering surface: terminal output goes through xterm.js's canvas/WebGL renderer (not HTML), the CSP is tight (`script-src 'self'`), and translation strings are rendered as React text nodes. If a future feature ever introduces an HTML sink for untrusted content, the proxy SSRF should be closed by wrapping `check()` in a Rust-side IPC command that doesn't forward the proxy parameter.
+
+#### 4.7.6 CI integration
+
+The release pipeline (`.forgejo/workflows/release.yml`) carries the practical infrastructure:
+
+- A `preflight` job grep-checks `tauri.conf.json` for the placeholder pubkey string and aborts the entire release if the developer forgot to replace it. This prevents a release shipping with a pubkey that can't verify any signature, which would surface as a confusing "Update failed" error on every check.
+- Each build job (`build-linux`, `build-windows`, `build-macos-x64`, `build-macos-arm64`) receives the signing secrets as environment variables. Tauri's bundler emits `.sig` files alongside each platform's updater bundle.
+- The `publish-release` job runs `.forgejo/scripts/generate_latest_json.py`, which composes `latest.json` from the collected `.sig` files: missing signatures skip their platform block instead of failing the whole step.
+- The manifest is uploaded to both the Forgejo and the GitHub release; only the GitHub one is what the running app sees.
+
+#### 4.7.7 Failure isolation
+
+| Failure                                   | What happens                                                                                            |
+| ----------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| Manifest URL unreachable                  | Auto-check: silent log. Manual: error toast.                                                            |
+| Manifest fetched but no platform match    | Plugin returns `Err(TargetNotFound)`. Auto-check: silent log. Manual: error toast.                      |
+| Artifact downloaded but signature invalid | Plugin returns `Err`. Install is aborted; running binary is untouched.                                  |
+| Download interrupted mid-stream           | Plugin returns `Err` from `downloadAndInstall`. Same outcome as above; partial files are discarded.     |
+| Plugin error contains URL / hostname      | Never surfaced in UI; user sees the generic `updates.errorUnknown` string. Detail goes to console only. |
+| Placeholder pubkey shipped (regression)   | `preflight` CI job rejects the tag push; no release artifacts are built or uploaded.                    |
+
+For one-time setup, key generation, and rotation procedures, see **[DEVELOPMENT.md — App updater signing keys](DEVELOPMENT.md#app-updater-signing-keys)**.
 
 ---
 

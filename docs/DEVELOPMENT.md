@@ -361,24 +361,19 @@ Add these to your workspace `.vscode/settings.json` to align with ShellStation's
 
 ```json
 {
-    "editor.formatOnSave": true,
-    "editor.defaultFormatter": "esbenp.prettier-vscode",
-    "[rust]": {
-        "editor.defaultFormatter": "rust-lang.rust-analyzer",
-        "editor.formatOnSave": true
-    },
-    "rust-analyzer.check.command": "clippy",
-    "rust-analyzer.check.extraArgs": ["--", "-D", "warnings"],
-    "eslint.validate": [
-        "javascript",
-        "javascriptreact",
-        "typescript",
-        "typescriptreact"
-    ],
-    "typescript.tsdk": "node_modules/typescript/lib",
-    "editor.codeActionsOnSave": {
-        "source.fixAll.eslint": "explicit"
-    }
+  "editor.formatOnSave": true,
+  "editor.defaultFormatter": "esbenp.prettier-vscode",
+  "[rust]": {
+    "editor.defaultFormatter": "rust-lang.rust-analyzer",
+    "editor.formatOnSave": true
+  },
+  "rust-analyzer.check.command": "clippy",
+  "rust-analyzer.check.extraArgs": ["--", "-D", "warnings"],
+  "eslint.validate": ["javascript", "javascriptreact", "typescript", "typescriptreact"],
+  "typescript.tsdk": "node_modules/typescript/lib",
+  "editor.codeActionsOnSave": {
+    "source.fixAll.eslint": "explicit"
+  }
 }
 ```
 
@@ -1179,11 +1174,11 @@ This command:
 
 ### Output artifacts by platform
 
-| Platform | Artifacts | Location |
-| --- | --- | --- |
-| Windows | `.msi` installer, `.exe` (NSIS installer) | `src-tauri/target/release/bundle/msi/` and `nsis/` |
-| macOS | `.dmg` disk image, `.app` bundle | `src-tauri/target/release/bundle/dmg/` and `macos/` |
-| Linux | `.deb` package, `.AppImage` | `src-tauri/target/release/bundle/deb/` and `appimage/` |
+| Platform | Artifacts                                 | Location                                               |
+| -------- | ----------------------------------------- | ------------------------------------------------------ |
+| Windows  | `.msi` installer, `.exe` (NSIS installer) | `src-tauri/target/release/bundle/msi/` and `nsis/`     |
+| macOS    | `.dmg` disk image, `.app` bundle          | `src-tauri/target/release/bundle/dmg/` and `macos/`    |
+| Linux    | `.deb` package, `.AppImage`               | `src-tauri/target/release/bundle/deb/` and `appimage/` |
 
 ### Configuring bundle targets
 
@@ -1209,13 +1204,13 @@ ShellStation is built and released via Forgejo Actions on a self-hosted runner s
 
 ### Pipeline overview
 
-| Job                | Runner label | Outputs                            |
-| ------------------ | ------------ | ---------------------------------- |
-| `build-linux`      | `linux`      | `.deb`, `.AppImage`                |
-| `build-windows`    | `windows`    | `.msi`, `.exe` (NSIS)              |
-| `build-macos-x64`  | `macos`      | `.dmg` (Intel)                     |
-| `build-macos-arm64`| `macos`      | `.dmg` (Apple Silicon)             |
-| `publish-release`  | `linux`      | Forgejo release with all artifacts |
+| Job                 | Runner label | Outputs                            |
+| ------------------- | ------------ | ---------------------------------- |
+| `build-linux`       | `linux`      | `.deb`, `.AppImage`                |
+| `build-windows`     | `windows`    | `.msi`, `.exe` (NSIS)              |
+| `build-macos-x64`   | `macos`      | `.dmg` (Intel)                     |
+| `build-macos-arm64` | `macos`      | `.dmg` (Apple Silicon)             |
+| `publish-release`   | `linux`      | Forgejo release with all artifacts |
 
 The macOS jobs run on an Apple Silicon runner and cross-compile for Intel via `--target x86_64-apple-darwin`. Both architectures produce a `.dmg` named `ShellStation-macos-{x64,arm64}-<version>.dmg`.
 
@@ -1230,15 +1225,99 @@ git push origin v0.9.0
 
 ### Required repository secrets
 
-| Secret name     | Purpose                                                                                                                            |
-| --------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
-| `RELEASE_TOKEN` | Forgejo access token with `write:repository` scope. Used by the `publish-release` job to create the release and upload artifacts. |
+| Secret name                          | Purpose                                                                                                                           |
+| ------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------- |
+| `RELEASE_TOKEN`                      | Forgejo access token with `write:repository` scope. Used by the `publish-release` job to create the release and upload artifacts. |
+| `GH_RELEASE_TOKEN`                   | GitHub personal access token with `Contents: write` on the mirror repo. Used to mirror the release to GitHub.                     |
+| `TAURI_SIGNING_PRIVATE_KEY`          | Contents of `~/.tauri/shellstation_updater.key` (the Ed25519 private key used to sign updater artifacts). See §23.x below.        |
+| `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | Password chosen at key-generation time. Required by `tauri build` when the private key is encrypted (which it should always be).  |
 
-Generate the token at <https://git.fiedler.live/user/settings/applications> and add it under repo **Settings → Actions → Secrets**.
+Generate the Forgejo token at <https://git.fiedler.live/user/settings/applications>, the GitHub token at <https://github.com/settings/tokens>, and add them under repo **Settings → Actions → Secrets**.
 
 ### Code signing
 
-Releases are currently **unsigned**. Windows users see a SmartScreen "Unknown publisher" warning on first launch; macOS users must right-click the `.app` and choose **Open** (or run `xattr -d com.apple.quarantine ShellStation.app`). This is acceptable for early releases. If signing becomes a requirement later, the recommended path is [SignPath.io's free OSS program](https://signpath.org/foundation) for Windows and Apple's Developer ID for macOS (requires an Apple Developer account).
+**First-install bundles** (the `.deb`, `.dmg`, `.msi`, NSIS `.exe`) are currently **unsigned**. Windows users see a SmartScreen "Unknown publisher" warning on first launch; macOS users must right-click the `.app` and choose **Open** (or run `xattr -d com.apple.quarantine ShellStation.app`). This is acceptable for early releases. If first-install code signing becomes a requirement later, the recommended path is [SignPath.io's free OSS program](https://signpath.org/foundation) for Windows and Apple's Developer ID for macOS (requires an Apple Developer account).
+
+**Updater artifacts** are signed independently via the Tauri updater's Ed25519 keypair — this is a different signing scheme from OS-level code signing and is mandatory for the in-app update flow to work. See §23.x below for the one-time setup, and [DESIGN.md §4.7](DESIGN.md#47-app-updater) for the architectural overview.
+
+### App updater signing keys
+
+The in-app updater verifies every downloaded artifact against a public key compiled into the binary. The matching private key lives only on the CI runner (as the `TAURI_SIGNING_PRIVATE_KEY` secret) and on whichever developer machine generated it. **Without this keypair in place, the updater cannot ship — every check would fail signature verification with a confusing error.** A CI `preflight` job rejects releases that still carry the placeholder pubkey.
+
+#### One-time setup
+
+Run these once per repo, on the maintainer's machine:
+
+```bash
+# Generate the Ed25519 keypair. You'll be prompted for a password — pick
+# a strong one and store it somewhere safe; you'll need it for the CI
+# secret below. The private key is written encrypted with this password.
+npx tauri signer generate -w ~/.tauri/shellstation_updater.key
+
+# Display the PUBLIC key (small, ~120 chars of base64). Copy this value.
+cat ~/.tauri/shellstation_updater.key.pub
+```
+
+Put the public key into `src-tauri/tauri.conf.json` under `plugins.updater.pubkey`, replacing whatever was there. Commit and push:
+
+```bash
+git add src-tauri/tauri.conf.json
+git commit -m "Set updater public key"
+```
+
+Add the matching secrets to **both** Forgejo Actions and (if mirroring) GitHub Actions:
+
+| Where                                                                          | Field                                | Value                                                |
+| ------------------------------------------------------------------------------ | ------------------------------------ | ---------------------------------------------------- |
+| Forgejo: `Settings → Actions → Secrets` on `git.fiedler.live/tux/shellstation` | `TAURI_SIGNING_PRIVATE_KEY`          | Full contents of `~/.tauri/shellstation_updater.key` |
+| Forgejo: same page                                                             | `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | The password you chose at generation time            |
+
+**Never commit the private key, and never paste it into chat with an assistant.** The file is encrypted at rest with your password, but a copy outside the secret store is one breach away from full updater takeover (an attacker who holds the key can sign arbitrary "updates" that the running app will trust).
+
+#### Verifying the setup
+
+After pushing the public key change, push a throwaway tag like `v0.0.0-test` to confirm the pipeline produces signed artifacts:
+
+```bash
+git tag v0.0.0-test
+git push origin v0.0.0-test
+```
+
+In the Forgejo workflow log:
+
+- The `preflight` job should pass (no placeholder pubkey).
+- Each build job should print `Signing <path>.AppImage (or .exe, or .app.tar.gz)` during `tauri build`.
+- The `Generate latest.json (updater manifest)` step should print a non-empty `platforms:` list. If the list is empty, the secrets are not reaching the build step (check spelling, runner scope, etc.).
+
+Delete the throwaway release and tag afterwards:
+
+```bash
+git tag -d v0.0.0-test
+git push origin :refs/tags/v0.0.0-test
+# also delete the Forgejo + GitHub releases through the web UI
+```
+
+#### Rotation
+
+Every install carries the embedded public key forever. To rotate, you need a **transition release** signed by the _old_ private key whose binary contains the _new_ public key. Procedure:
+
+1. Generate a new keypair (do not overwrite the old one yet).
+2. In a new commit, replace `plugins.updater.pubkey` with the new public key.
+3. Ship that commit as a release _using the old `TAURI_SIGNING_PRIVATE_KEY` secret_. Users update via the existing flow; the running binary now contains the new public key.
+4. Update the CI secret to the new private key.
+5. The next release will be signed with the new private key, which existing installs trust because they took the transition release in step 3.
+
+Skipping the transition release leaves existing installs stranded — they can never accept any update again. Users would have to download a fresh first-install bundle manually.
+
+#### Local development
+
+`cargo tauri dev` does not exercise the updater unless you explicitly trigger a check. The auto-check on app launch runs in production-style builds and against the configured endpoint (the GitHub Releases URL), which always returns the latest _real_ release manifest. If you want to test the updater UI against a fake manifest:
+
+1. Spin up a local HTTPS server with a self-signed cert and serve a hand-crafted `latest.json` plus a signed artifact.
+2. Temporarily change `plugins.updater.endpoints[0]` in `tauri.conf.json` to your local URL.
+3. **Do not commit either change.** Revert before pushing.
+
+Easier alternative for UI work: stub out the dialog by setting `phase` to `"available"` directly in `UpdateDialog.tsx` and reloading. This skips the network/signature path entirely and lets you iterate on the dialog presentation without infrastructure.
 
 ---
 

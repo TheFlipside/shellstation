@@ -21,10 +21,10 @@ under `plugins.updater.pubkey` with the value you just printed.
 
 In your Forgejo Actions runner secrets (`Settings → Secrets and Variables`):
 
-| Secret name                            | Value                                                |
-| -------------------------------------- | ---------------------------------------------------- |
-| `TAURI_SIGNING_PRIVATE_KEY`            | Contents of `~/.tauri/shellstation_updater.key`      |
-| `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`   | The password you chose at generation time            |
+| Secret name                          | Value                                           |
+| ------------------------------------ | ----------------------------------------------- |
+| `TAURI_SIGNING_PRIVATE_KEY`          | Contents of `~/.tauri/shellstation_updater.key` |
+| `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | The password you chose at generation time       |
 
 **Never commit the private key.** Treat the password the same — both end up
 on a CI runner only.
@@ -49,12 +49,12 @@ public key, so a key rotation needs at least one transition release.
 
 Update the version in **all four** locations to the new `X.Y.Z`:
 
-| File                          | Field                  |
-| ----------------------------- | ---------------------- |
-| `src-tauri/Cargo.toml`        | `[package].version`    |
-| `src-tauri/tauri.conf.json`   | `version`              |
-| `package.json`                | `version`              |
-| `package-lock.json`           | both top-level entries |
+| File                        | Field                  |
+| --------------------------- | ---------------------- |
+| `src-tauri/Cargo.toml`      | `[package].version`    |
+| `src-tauri/tauri.conf.json` | `version`              |
+| `package.json`              | `version`              |
+| `package-lock.json`         | both top-level entries |
 
 Refresh the lock files so they pick up the new version:
 
