@@ -7,7 +7,7 @@ import { DialogKeys } from "./DialogKeys";
 import { useAppStore } from "../stores/appStore";
 import { useSessionStore } from "../stores/sessionStore";
 import { useSettingsStore, ALLOWED_TERMINAL_FONTS } from "../stores/settingsStore";
-import { XTERM_THEMES } from "./Terminal";
+import { XTERM_THEMES, resolveTerminalTheme } from "../terminalTheme";
 import { useTheme } from "../hooks/useTheme";
 import {
   useHighlightStore,
@@ -173,6 +173,23 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
   const resolvedTheme = useTheme();
   const themeDefaultBg = XTERM_THEMES[resolvedTheme].background;
   const themeDefaultFg = XTERM_THEMES[resolvedTheme].foreground;
+
+  // The preview swatch renders through the same derivation a live terminal
+  // uses, so it cannot drift from what a session actually looks like.
+  const previewTheme = resolveTerminalTheme(
+    resolvedTheme,
+    terminalBackgroundColor,
+    terminalForegroundColor,
+  );
+  // Split the preview line so its last word can be drawn as a selection.
+  // `lastIndexOf` returning -1 puts the whole string in the selected half,
+  // which is the sensible reading of a single-word preview. Trailing space is
+  // trimmed first, or a translation carrying one would select the empty
+  // string and the demo would silently vanish.
+  const previewText = t("settings.fontPreview").trimEnd();
+  const previewSplitAt = previewText.lastIndexOf(" ") + 1;
+  const previewHead = previewText.slice(0, previewSplitAt);
+  const previewSelectedWord = previewText.slice(previewSplitAt);
 
   // Database config — local state, loaded from backend
   const [dbBackend, setDbBackend] = useState<"sqlite" | "postgres">("sqlite");
@@ -907,11 +924,24 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
               ? `"${terminalFontFamily}", monospace`
               : "monospace",
             fontSize: `${String(terminalFontSize)}px`,
-            background: terminalBackgroundColor ?? themeDefaultBg,
-            color: terminalForegroundColor ?? themeDefaultFg,
+            background: previewTheme.background,
+            color: previewTheme.foreground,
           }}
         >
-          {t("settings.fontPreview")}
+          {previewHead}
+          {/* Trailing word shown selected, so the swatch also answers "what
+              does a selection look like against these colors?". Reusing the
+              preview's own text keeps this free of new translation keys. */}
+          <span
+            style={{
+              background: previewTheme.selectionBackground,
+              color: previewTheme.selectionForeground,
+            }}
+          >
+            {previewSelectedWord}
+          </span>
+          {/* Block cursor, the other color that follows the override. */}
+          <span style={{ background: previewTheme.cursor }}>&nbsp;</span>
         </div>
         <div className="dialog-field dialog-field-row">
           <label htmlFor="settings-terminal-bg">{t("settings.terminalBackgroundLabel")}</label>
