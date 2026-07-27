@@ -9,6 +9,7 @@
 import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { useSettingsStore } from "../stores/settingsStore";
+import { scrollTerminalToBottom } from "../terminalRegistry";
 import { Terminal } from "./Terminal";
 
 /** The subset of the xterm.js API that Terminal.tsx actually touches. */
@@ -22,6 +23,7 @@ interface FakeTerminal {
   getSelection: Mock;
   paste: Mock;
   focus: Mock;
+  scrollToBottom: Mock;
   write: Mock;
   dispose: Mock;
   options: Record<string, unknown>;
@@ -47,6 +49,7 @@ vi.mock("@xterm/xterm", () => {
         getSelection: vi.fn(() => ""),
         paste: vi.fn(),
         focus: vi.fn(),
+        scrollToBottom: vi.fn(),
         write: vi.fn(),
         dispose: vi.fn(),
         options: {},
@@ -176,6 +179,26 @@ describe("Terminal paste confirmation", () => {
     // the whole point of this assertion.
     const preview = document.querySelector(".dialog-paste-preview");
     expect(preview?.textContent).toBe(MULTILINE);
+  });
+});
+
+describe("Terminal registry lifecycle", () => {
+  it("registers its terminal so external senders can scroll it", () => {
+    renderTerminal();
+
+    scrollTerminalToBottom("session-1");
+
+    expect(latestTerminal().scrollToBottom).toHaveBeenCalledTimes(1);
+  });
+
+  it("unregisters its terminal on unmount", () => {
+    const { unmount } = renderTerminal();
+    const term = latestTerminal();
+
+    unmount();
+    scrollTerminalToBottom("session-1");
+
+    expect(term.scrollToBottom).not.toHaveBeenCalled();
   });
 });
 

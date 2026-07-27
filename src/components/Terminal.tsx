@@ -14,6 +14,7 @@ import { useHighlightStore } from "../stores/highlightStore";
 import { HighlightEngine } from "../highlightEngine";
 import { useTheme, type ResolvedTheme } from "../hooks/useTheme";
 import { PasteConfirmDialog } from "./PasteConfirmDialog";
+import { registerTerminal, unregisterTerminal } from "../terminalRegistry";
 
 interface TerminalProps {
   sessionId: string;
@@ -239,6 +240,9 @@ export function Terminal({
 
     termRef.current = term;
     fitAddonRef.current = fitAddon;
+    // Let senders outside this component (command buttons, command bar)
+    // reach this instance — see terminalRegistry.
+    registerTerminal(sessionId, term);
 
     // Forward user input to the backend.
     const onDataDisposable = term.onData((data: string) => {
@@ -431,6 +435,7 @@ export function Terminal({
       if (outputUnlisten) outputUnlisten();
       if (exitUnlisten) exitUnlisten();
       setPendingPaste(null);
+      unregisterTerminal(sessionId, term);
       term.dispose();
       termRef.current = null;
       fitAddonRef.current = null;

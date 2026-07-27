@@ -11,6 +11,7 @@ import {
 } from "./CommandButtonDialog";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
+import { scrollTerminalToBottom } from "../terminalRegistry";
 
 // eslint-disable-next-line @typescript-eslint/no-empty-function
 const noop = (): void => {};
@@ -106,6 +107,14 @@ async function executeCommand(
 ): Promise<void> {
   const { segments } = parseEscapes(command);
   const cmd = writeCmd(sessionType);
+
+  // Sending a command is a user input action, so mirror what xterm.js does
+  // for typed input (scrollOnUserInput) and jump the viewport back to the
+  // live prompt. Without this, a user who had scrolled up into the
+  // scrollback sees nothing happen and has to scroll down manually. Done
+  // before the first write so the echoed output lands in view; later output
+  // keeps the viewport pinned because it is already at the bottom.
+  scrollTerminalToBottom(sessionId);
 
   for (const seg of segments) {
     if (seg.type === "text") {
