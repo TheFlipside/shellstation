@@ -471,6 +471,22 @@ export function Terminal({
     return undefined;
   }, [visible]);
 
+  // Restore focus to the terminal once the paste confirmation dialog closes.
+  // The dialog focuses its Cancel button on mount; when it unmounts, focus
+  // falls back to <body> and the user would have to click into the terminal
+  // before typing again. Runs on both Confirm and Cancel.
+  const pasteDialogWasOpen = useRef(false);
+  useEffect(() => {
+    if (pendingPaste !== null) {
+      pasteDialogWasOpen.current = true;
+    } else if (pasteDialogWasOpen.current) {
+      pasteDialogWasOpen.current = false;
+      if (visible) {
+        termRef.current?.focus();
+      }
+    }
+  }, [pendingPaste, visible]);
+
   return (
     <>
       <div
