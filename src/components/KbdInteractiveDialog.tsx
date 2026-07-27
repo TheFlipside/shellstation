@@ -1,6 +1,6 @@
 import React, { useCallback, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { useEscapeKey } from "../hooks/useEscapeKey";
+import { DialogKeys } from "./DialogKeys";
 
 export interface KbdInteractivePrompt {
   prompt: string;
@@ -31,8 +31,6 @@ export function KbdInteractiveDialog({
     onRespond(request.sessionId, []);
   }, [onRespond, request.sessionId]);
 
-  useEscapeKey(handleCancel);
-
   const handleSubmit = useCallback(
     (e: React.SyntheticEvent) => {
       e.preventDefault();
@@ -51,6 +49,7 @@ export function KbdInteractiveDialog({
 
   return (
     <div className="dialog-overlay" role="presentation">
+      <DialogKeys onEscape={handleCancel} />
       <div className="dialog" role="dialog" aria-modal="true" aria-labelledby="kbd-title">
         <h3 className="dialog-title" id="kbd-title">
           {request.name || t("kbdInteractive.title")}

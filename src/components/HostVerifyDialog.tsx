@@ -1,7 +1,6 @@
 import React, { useCallback } from "react";
 import { Trans, useTranslation } from "react-i18next";
-import { useEnterKey } from "../hooks/useEnterKey";
-import { useEscapeKey } from "../hooks/useEscapeKey";
+import { DialogKeys } from "./DialogKeys";
 
 export interface HostVerifyRequest {
   sessionId: string;
@@ -21,14 +20,13 @@ export function HostVerifyDialog({ request, onRespond }: HostVerifyDialogProps):
   const handleReject = useCallback(() => {
     onRespond(request.sessionId, false);
   }, [onRespond, request.sessionId]);
-  useEscapeKey(handleReject);
   const handleAccept = useCallback(() => {
     onRespond(request.sessionId, true);
   }, [onRespond, request.sessionId]);
-  useEnterKey(handleAccept);
 
   return (
     <div className="dialog-overlay" role="presentation">
+      <DialogKeys onEscape={handleReject} onEnter={handleAccept} />
       <div className="dialog" role="dialog" aria-modal="true" aria-labelledby="hv-title">
         <h3 className="dialog-title" id="hv-title">
           {t("hostVerify.title")}

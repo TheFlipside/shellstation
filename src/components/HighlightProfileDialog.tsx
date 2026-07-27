@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { useEscapeKey } from "../hooks/useEscapeKey";
+import { DialogKeys } from "./DialogKeys";
 import type { HighlightRule } from "../stores/highlightStore";
 
 interface HighlightProfileDialogProps {
@@ -26,7 +26,6 @@ export function HighlightProfileDialog({
   onCancel,
 }: HighlightProfileDialogProps): React.JSX.Element {
   const { t } = useTranslation();
-  useEscapeKey(onCancel);
   const [name, setName] = useState(initialName);
   const [rules, setRules] = useState(
     initialRules.length > 0 ? initialRules : [{ ...DEFAULT_RULE }],
@@ -53,6 +52,7 @@ export function HighlightProfileDialog({
 
   return (
     <div className="dialog-overlay" role="presentation">
+      <DialogKeys onEscape={onCancel} />
       <div className="dialog dialog-wide" role="dialog">
         <h3>{title}</h3>
         <form onSubmit={handleSubmit}>

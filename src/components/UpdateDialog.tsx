@@ -4,7 +4,7 @@ import { useTranslation } from "react-i18next";
 import { listen } from "@tauri-apps/api/event";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
-import { useEscapeKey } from "../hooks/useEscapeKey";
+import { DialogKeys } from "./DialogKeys";
 import { useSettingsStore } from "../stores/settingsStore";
 import { useToastStore } from "../stores/toastStore";
 
@@ -103,10 +103,6 @@ export function UpdateDialog(): React.JSX.Element | null {
     setProgress({ downloaded: 0, total: null });
   };
 
-  useEscapeKey(() => {
-    if (phase !== "downloading") dismiss();
-  });
-
   const install = async (): Promise<void> => {
     if (!pending) return;
     setPhase("downloading");
@@ -136,10 +132,18 @@ export function UpdateDialog(): React.JSX.Element | null {
     }
   };
 
+  // Nothing to show until a check finds an update. Escape is claimed by the
+  // DialogKeys element below, which only exists in this branch — an idle
+  // updater sitting at the app root cannot hold the key away from terminals.
   if (phase === "idle" || phase === "checking") return null;
 
   return ReactDOM.createPortal(
     <div className="dialog-overlay" role="presentation">
+      <DialogKeys
+        onEscape={() => {
+          if (phase !== "downloading") dismiss();
+        }}
+      />
       <div className="dialog dialog-update" role="dialog" aria-modal="true">
         {phase === "available" && pending && (
           <>

@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open, save } from "@tauri-apps/plugin-dialog";
-import { useEscapeKey } from "../hooks/useEscapeKey";
+import { DialogKeys } from "./DialogKeys";
 import { useAppStore } from "../stores/appStore";
 import { useSessionStore } from "../stores/sessionStore";
 import { useSettingsStore, ALLOWED_TERMINAL_FONTS } from "../stores/settingsStore";
@@ -594,10 +594,9 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
     };
   }, []);
 
-  useEscapeKey(onClose);
-
   return (
     <div className="dialog-overlay" role="presentation">
+      <DialogKeys onEscape={onClose} />
       {importProgress && (
         <div className="dialog-overlay" style={{ zIndex: 10000 }} role="presentation">
           <div className="dialog" style={{ minWidth: 320, textAlign: "center" }}>

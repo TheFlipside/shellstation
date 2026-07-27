@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { useEscapeKey } from "../hooks/useEscapeKey";
+import { DialogKeys } from "./DialogKeys";
 import type { Session, BulkSessionEdit } from "../stores/sessionStore";
 import { sessionHasTag } from "../stores/sessionStore";
 import { useHighlightStore } from "../stores/highlightStore";
@@ -22,7 +22,6 @@ export function BulkEditDialog({
   onCancel,
 }: BulkEditDialogProps): React.JSX.Element {
   const { t } = useTranslation();
-  useEscapeKey(onCancel);
   const highlightProfiles = useHighlightStore((s) => s.profiles);
   const loginSequences = useLoginSequenceStore((s) => s.sequences);
 
@@ -49,6 +48,7 @@ export function BulkEditDialog({
 
   return (
     <div className="dialog-overlay" role="presentation">
+      <DialogKeys onEscape={onCancel} />
       <div
         className="dialog dialog-wide"
         role="dialog"

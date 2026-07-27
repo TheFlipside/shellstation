@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { useEscapeKey } from "../hooks/useEscapeKey";
+import { DialogKeys } from "./DialogKeys";
 import { useLoginSequenceStore } from "../stores/loginSequenceStore";
 import { CustomSelect } from "./CustomSelect";
 
@@ -18,7 +18,6 @@ export function FolderLoginSequenceDialog({
   onManageSequences,
 }: FolderLoginSequenceDialogProps): React.JSX.Element {
   const { t } = useTranslation();
-  useEscapeKey(onCancel);
   const [sequenceId, setSequenceId] = useState("");
   const sequences = useLoginSequenceStore((s) => s.sequences);
 
@@ -29,6 +28,7 @@ export function FolderLoginSequenceDialog({
 
   return (
     <div className="dialog-overlay" role="presentation">
+      <DialogKeys onEscape={onCancel} />
       <div
         className="dialog dialog-wide"
         role="dialog"

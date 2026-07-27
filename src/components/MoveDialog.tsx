@@ -1,7 +1,6 @@
 import React, { useCallback, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { useEnterKey } from "../hooks/useEnterKey";
-import { useEscapeKey } from "../hooks/useEscapeKey";
+import { DialogKeys } from "./DialogKeys";
 import type { Folder } from "../stores/sessionStore";
 import { CustomSelect } from "./CustomSelect";
 
@@ -21,7 +20,6 @@ export function MoveDialog({
   onCancel,
 }: MoveDialogProps): React.JSX.Element {
   const { t } = useTranslation();
-  useEscapeKey(onCancel);
   const options = useMemo(() => {
     const opts = folders
       .filter((f) => f.id !== excludeId)
@@ -33,10 +31,10 @@ export function MoveDialog({
   const handleSubmit = useCallback(() => {
     if (selected) onSubmit(selected);
   }, [onSubmit, selected]);
-  useEnterKey(handleSubmit);
 
   return (
     <div className="dialog-overlay" role="presentation">
+      <DialogKeys onEscape={onCancel} onEnter={handleSubmit} />
       <div className="dialog" role="dialog" aria-modal="true" aria-labelledby="mv-title">
         <h3 className="dialog-title" id="mv-title">
           {t("dialog.moveTo")}

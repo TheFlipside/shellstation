@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { useEscapeKey } from "../hooks/useEscapeKey";
+import { DialogKeys } from "./DialogKeys";
 import { useCredentialProfilesStore } from "../stores/credentialProfilesStore";
 import { CustomSelect } from "./CustomSelect";
 
@@ -18,7 +18,6 @@ export function FolderCredentialDialog({
   onManageCredentials,
 }: FolderCredentialDialogProps): React.JSX.Element {
   const { t } = useTranslation();
-  useEscapeKey(onCancel);
   const [profileId, setProfileId] = useState("");
   const credentialProfiles = useCredentialProfilesStore((s) => s.profiles);
 
@@ -29,6 +28,7 @@ export function FolderCredentialDialog({
 
   return (
     <div className="dialog-overlay" role="presentation">
+      <DialogKeys onEscape={onCancel} />
       <div
         className="dialog dialog-wide"
         role="dialog"

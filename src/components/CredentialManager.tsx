@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { open } from "@tauri-apps/plugin-dialog";
-import { useEscapeKey } from "../hooks/useEscapeKey";
+import { DialogKeys } from "./DialogKeys";
 import {
   useCredentialProfilesStore,
   type CredentialProfile,
@@ -57,7 +57,6 @@ export function CredentialManager({ onClose }: CredentialManagerProps): React.JS
     }
     onClose();
   }, [edit, confirmDelete, onClose]);
-  useEscapeKey(handleEscape);
 
   useEffect(() => {
     loadAll().catch((err: unknown) => {
@@ -144,6 +143,7 @@ export function CredentialManager({ onClose }: CredentialManagerProps): React.JS
 
   return (
     <div className="dialog-overlay" onClick={onClose} role="presentation">
+      <DialogKeys onEscape={handleEscape} />
       <div
         className="dialog dialog-wide"
         onClick={(e) => {

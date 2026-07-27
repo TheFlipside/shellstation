@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { useEscapeKey } from "../hooks/useEscapeKey";
+import { DialogKeys } from "./DialogKeys";
 import {
   useLoginSequenceStore,
   type LoginSequence,
@@ -51,7 +51,6 @@ export function LoginSequenceManager({ onClose }: LoginSequenceManagerProps): Re
     }
     onClose();
   }, [edit, confirmDelete, onClose]);
-  useEscapeKey(handleEscape);
 
   useEffect(() => {
     loadAll().catch((err: unknown) => {
@@ -151,6 +150,7 @@ export function LoginSequenceManager({ onClose }: LoginSequenceManagerProps): Re
 
   return (
     <div className="dialog-overlay" onClick={onClose} role="presentation">
+      <DialogKeys onEscape={handleEscape} />
       <div
         className="dialog dialog-wide"
         onClick={(e) => {

@@ -1,7 +1,6 @@
 import React, { useCallback, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { useEnterKey } from "../hooks/useEnterKey";
-import { useEscapeKey } from "../hooks/useEscapeKey";
+import { DialogKeys } from "./DialogKeys";
 
 export interface CommandButtonFormData {
   name: string;
@@ -57,7 +56,6 @@ export function CommandButtonDialog({
   onCancel,
 }: CommandButtonDialogProps): React.JSX.Element {
   const { t } = useTranslation();
-  useEscapeKey(onCancel);
   const [name, setName] = useState(initial?.name ?? "");
   const [command, setCommand] = useState(initial?.command ?? "");
   const [color, setColor] = useState(initial?.color ?? COLOR_PRESETS[0]);
@@ -73,10 +71,9 @@ export function CommandButtonDialog({
     onSave({ name: name.trim(), command, color });
   }, [name, command, color, onSave]);
 
-  useEnterKey(handleSave);
-
   return (
     <div className="dialog-overlay" role="presentation">
+      <DialogKeys onEscape={onCancel} onEnter={handleSave} />
       <div className="dialog" style={{ minWidth: 400 }}>
         <div className="dialog-title">{t("commandBar.dialogTitle")}</div>
 

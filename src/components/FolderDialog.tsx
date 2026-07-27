@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { useEscapeKey } from "../hooks/useEscapeKey";
+import { DialogKeys } from "./DialogKeys";
 
 interface FolderDialogProps {
   title: string;
@@ -16,7 +16,6 @@ export function FolderDialog({
   onCancel,
 }: FolderDialogProps): React.JSX.Element {
   const { t } = useTranslation();
-  useEscapeKey(onCancel);
   const [name, setName] = useState(initialName);
 
   const handleSubmit = (e: React.SyntheticEvent): void => {
@@ -27,6 +26,7 @@ export function FolderDialog({
 
   return (
     <div className="dialog-overlay" role="presentation">
+      <DialogKeys onEscape={onCancel} />
       <div className="dialog" role="dialog" aria-modal="true" aria-labelledby="fd-title">
         <h3 className="dialog-title" id="fd-title">
           {title}

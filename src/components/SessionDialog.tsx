@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
-import { useEscapeKey } from "../hooks/useEscapeKey";
+import { DialogKeys } from "./DialogKeys";
 import type { Folder, Session } from "../stores/sessionStore";
 import { sessionHasTag } from "../stores/sessionStore";
 import { useAppStore } from "../stores/appStore";
@@ -53,7 +53,6 @@ export function SessionDialog({
   onManageLoginSequences,
 }: SessionDialogProps): React.JSX.Element {
   const { t } = useTranslation();
-  useEscapeKey(onCancel);
   const isPg = useAppStore((s) => s.dbBackend) === "postgres";
   const [folderId, setFolderId] = useState(() => {
     const preferred = initial?.folderId ?? defaultFolderId;
@@ -156,6 +155,7 @@ export function SessionDialog({
 
   return (
     <div className="dialog-overlay" role="presentation">
+      <DialogKeys onEscape={onCancel} />
       <div
         className="dialog dialog-wide"
         role="dialog"

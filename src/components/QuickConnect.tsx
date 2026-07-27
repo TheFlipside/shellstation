@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { open } from "@tauri-apps/plugin-dialog";
-import { useEscapeKey } from "../hooks/useEscapeKey";
+import { DialogKeys } from "./DialogKeys";
 import { CustomSelect } from "./CustomSelect";
 
 export interface QuickConnectParams {
@@ -20,7 +20,6 @@ interface QuickConnectProps {
 
 export function QuickConnect({ onConnect, onCancel }: QuickConnectProps): React.JSX.Element {
   const { t } = useTranslation();
-  useEscapeKey(onCancel);
   const [protocol, setProtocol] = useState<"ssh" | "telnet">("ssh");
   const [host, setHost] = useState("");
   const [port, setPort] = useState("22");
@@ -52,6 +51,7 @@ export function QuickConnect({ onConnect, onCancel }: QuickConnectProps): React.
 
   return (
     <div className="dialog-overlay" onClick={onCancel} role="presentation">
+      <DialogKeys onEscape={onCancel} />
       <div
         className="dialog"
         onClick={(e) => {

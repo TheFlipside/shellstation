@@ -1,7 +1,7 @@
 import React, { useEffect, useRef } from "react";
 import ReactDOM from "react-dom";
 import { useTranslation } from "react-i18next";
-import { useEscapeKey } from "../hooks/useEscapeKey";
+import { DialogKeys } from "./DialogKeys";
 
 interface PasteConfirmDialogProps {
   content: string;
@@ -17,7 +17,6 @@ export function PasteConfirmDialog({
   onCancel,
 }: PasteConfirmDialogProps): React.JSX.Element {
   const { t } = useTranslation();
-  useEscapeKey(onCancel);
 
   const cancelRef = useRef<HTMLButtonElement>(null);
 
@@ -33,6 +32,7 @@ export function PasteConfirmDialog({
 
   return ReactDOM.createPortal(
     <div className="dialog-overlay" onClick={onCancel}>
+      <DialogKeys onEscape={onCancel} />
       <div
         className="dialog"
         role="dialog"
