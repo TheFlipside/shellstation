@@ -7,9 +7,10 @@
  * same `confirmMultilinePaste` path the app does.
  */
 import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { useSettingsStore } from "../stores/settingsStore";
 import { scrollTerminalToBottom } from "../terminalRegistry";
+import { Terminal as XTerm } from "@xterm/xterm";
 import { Terminal } from "./Terminal";
 
 /** The subset of the xterm.js API that Terminal.tsx actually touches. */
@@ -136,6 +137,83 @@ beforeEach(() => {
   return () => {
     vi.useRealTimers();
   };
+});
+
+describe("Terminal selection colors", () => {
+  /** The theme the component handed to the xterm.js constructor. */
+  function constructorTheme(): Record<string, string> {
+    const call = vi.mocked(XTerm).mock.calls[0] as [{ theme: Record<string, string> }] | undefined;
+    if (!call) {
+      throw new Error("Terminal did not construct an xterm.js instance");
+    }
+    return call[0].theme;
+  }
+
+  beforeEach(() => {
+    // Pin the palette so the assertions do not depend on the OS dark-mode
+    // preference, and start from "no override" in this shared store. Every
+    // value touched here is restored afterwards: the store is a module
+    // singleton, so anything left behind leaks into the other suites below.
+    const previousThemeMode = useSettingsStore.getState().themeMode;
+    useSettingsStore.getState().setThemeMode("dark");
+    useSettingsStore.getState().setTerminalBackgroundColor(null);
+    useSettingsStore.getState().setTerminalForegroundColor(null);
+    return () => {
+      useSettingsStore.getState().setThemeMode(previousThemeMode);
+      useSettingsStore.getState().setTerminalBackgroundColor(null);
+      useSettingsStore.getState().setTerminalForegroundColor(null);
+    };
+  });
+
+  it("renders selection as reverse video of the theme palette", () => {
+    renderTerminal();
+
+    const theme = constructorTheme();
+    expect(theme.selectionBackground).toBe(theme.foreground);
+    expect(theme.selectionForeground).toBe(theme.background);
+  });
+
+  it("keeps the unfocused selection readable rather than dimming it", () => {
+    // selectionForeground applies regardless of focus, so a dimmed inactive
+    // background would leave forced-color text on a washed-out backdrop.
+    renderTerminal();
+
+    expect(constructorTheme().selectionInactiveBackground).toBe(constructorTheme().foreground);
+  });
+
+  it("keeps selection colors fully opaque", () => {
+    // An alpha suffix here is what made the old selection wash out against
+    // bright output, so the 6-digit form is part of the contract.
+    renderTerminal();
+
+    const theme = constructorTheme();
+    expect(theme.selectionBackground).toMatch(/^#[0-9a-f]{6}$/i);
+    expect(theme.selectionForeground).toMatch(/^#[0-9a-f]{6}$/i);
+  });
+
+  it("inverts the user's color overrides, not the theme defaults", () => {
+    useSettingsStore.getState().setTerminalBackgroundColor("#101020");
+    useSettingsStore.getState().setTerminalForegroundColor("#f0f0ff");
+
+    renderTerminal();
+
+    const theme = constructorTheme();
+    expect(theme.selectionBackground).toBe("#f0f0ff");
+    expect(theme.selectionForeground).toBe("#101020");
+    expect(theme.selectionInactiveBackground).toBe("#f0f0ff");
+  });
+
+  it("re-derives selection colors when an override changes on a live terminal", () => {
+    renderTerminal();
+
+    act(() => {
+      useSettingsStore.getState().setTerminalForegroundColor("#00ff00");
+    });
+
+    const theme = latestTerminal().options.theme as Record<string, string>;
+    expect(theme.selectionBackground).toBe("#00ff00");
+    expect(theme.selectionForeground).toBe(theme.background);
+  });
 });
 
 describe("Terminal paste confirmation", () => {

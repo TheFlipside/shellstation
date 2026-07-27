@@ -54,7 +54,6 @@ export const XTERM_THEMES: Record<ResolvedTheme, Record<string, string>> = {
     background: "#1e1e2e",
     foreground: "#cdd6f4",
     cursor: "#f5e0dc",
-    selectionBackground: "#585b7066",
     black: "#45475a",
     red: "#f38ba8",
     green: "#a6e3a1",
@@ -76,7 +75,6 @@ export const XTERM_THEMES: Record<ResolvedTheme, Record<string, string>> = {
     background: "#eff1f5",
     foreground: "#4c4f69",
     cursor: "#dc8a78",
-    selectionBackground: "#acb0be66",
     black: "#5c5f77",
     red: "#d20f39",
     green: "#40a02b",
@@ -97,20 +95,40 @@ export const XTERM_THEMES: Record<ResolvedTheme, Record<string, string>> = {
 };
 
 /**
- * Apply the user's per-session color overrides (if any) on top of the
- * active app-theme palette. `null` for either field means "use the
- * theme's default", so the override is fully optional.
+ * Apply the user's color overrides (if any) on top of the active app-theme
+ * palette, then derive the selection colors from the result. `null` for
+ * either override means "use the theme's default", so both are optional.
+ *
+ * Selection is rendered as reverse video: the effective foreground becomes
+ * the selection background and vice versa, so selected text has exactly the
+ * contrast of unselected text — it cannot be washed out the way a
+ * translucent tint is against bright output. Deriving both from the resolved
+ * palette rather than hard-coding them per theme is what keeps the selection
+ * legible after the user overrides the terminal colors in settings.
+ *
+ * The colors are deliberately opaque. xterm.js clamps an opaque selection to
+ * 30% alpha, but only for the `*Transparent` variants the DOM renderer uses;
+ * the WebGL renderer this app installs reads the opaque ones, which are
+ * computed before that clamp (ThemeService.ts). Inactive selection is set to
+ * the same pair on purpose: `selectionForeground` applies whether or not the
+ * terminal has focus, so dimming only the background would push the forced
+ * text color toward the background and reintroduce the unreadable case.
  */
 function resolveTerminalTheme(
   base: ResolvedTheme,
   bgOverride: string | null,
   fgOverride: string | null,
 ): Record<string, string> {
-  if (bgOverride === null && fgOverride === null) return XTERM_THEMES[base];
+  const palette = XTERM_THEMES[base];
+  const background = bgOverride ?? palette.background;
+  const foreground = fgOverride ?? palette.foreground;
   return {
-    ...XTERM_THEMES[base],
-    ...(bgOverride !== null && { background: bgOverride }),
-    ...(fgOverride !== null && { foreground: fgOverride }),
+    ...palette,
+    background,
+    foreground,
+    selectionBackground: foreground,
+    selectionForeground: background,
+    selectionInactiveBackground: foreground,
   };
 }
 
