@@ -1,3 +1,4 @@
+/// <reference types="vitest/config" />
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
@@ -26,6 +27,19 @@ export default defineConfig({
         },
       },
     },
+  },
+
+  // Component tests run under jsdom. `globals` stays off — test files import
+  // describe/it/expect explicitly, matching the project's no-implicit-globals
+  // stance, which also means Testing Library's auto-cleanup is registered
+  // manually in the setup file.
+  test: {
+    environment: "jsdom",
+    setupFiles: ["./src/test/setup.ts"],
+    include: ["src/**/*.test.{ts,tsx}"],
+    // clearMocks (not restoreMocks) — call history is reset between tests
+    // while the module-mock factories keep their implementations.
+    clearMocks: true,
   },
 
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
