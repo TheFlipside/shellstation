@@ -1,6 +1,6 @@
 [package]
 name = "shellstation"
-version = "0.21.0"
+version = "0.30.0"
 description = "Cross-Platform Terminal Manager & SSH Client"
 authors = ["LuminaApps"]
 edition = "2021"
@@ -33,7 +33,7 @@ serde_json = "1"
 # toggle can negotiate with old network gear that only speaks 3DES. It is NOT
 # in russh's default cipher list and is only appended to `Preferred` when a
 # session explicitly opts in — see `legacy_preferred()` in src/ssh/mod.rs.
-russh = { version = "0.61", features = ["des"] }
+russh = { version = "0.62", features = ["des"] }
 # default-features disabled to exclude sqlx-mysql, which is unused and
 # otherwise pulls in the `rsa` crate (see RUSTSEC-2023-0071 above).
 #
@@ -66,7 +66,7 @@ dirs = "6"
 sha2 = "0.11.0"
 zeroize = { version = "1", features = ["serde"] }
 tauri-plugin-dialog = "2.6.0"
-quick-xml = "0.40.1"
+quick-xml = "0.41.0"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 tauri-plugin-clipboard-manager = "2.3.2"
 tauri-plugin-updater = "2"
