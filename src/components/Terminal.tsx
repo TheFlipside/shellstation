@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import i18n from "../i18n";
 import { Terminal as XTerm } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
@@ -457,19 +457,35 @@ export function Terminal({
     terminalForegroundColor,
   ]);
 
+  // Single path for "give the terminal keyboard focus". Every caller must go
+  // through here so the visibility rule can never drift between call sites: a
+  // terminal in a background tab must not steal focus from the active one.
+  // Reads `visible` through a ref because callers may fire on a delay (see the
+  // 50 ms timer below), by which point the captured prop could be stale. The
+  // ref is written during render like the other prop mirrors above — writes to
+  // a ref are not a render side effect, and every effect below sees the value
+  // from the render it was scheduled by.
+  const visibleRef = useRef(visible);
+  visibleRef.current = visible;
+  const focusIfVisible = useCallback((): void => {
+    if (visibleRef.current) {
+      termRef.current?.focus();
+    }
+  }, []);
+
   // Re-fit and focus when visibility changes.
   useEffect(() => {
     if (visible && fitAddonRef.current) {
       const timer = setTimeout(() => {
         fitAddonRef.current?.fit();
-        termRef.current?.focus();
+        focusIfVisible();
       }, 50);
       return () => {
         clearTimeout(timer);
       };
     }
     return undefined;
-  }, [visible]);
+  }, [visible, focusIfVisible]);
 
   // Restore focus to the terminal once the paste confirmation dialog closes.
   // The dialog focuses its Cancel button on mount; when it unmounts, focus
@@ -481,11 +497,13 @@ export function Terminal({
       pasteDialogWasOpen.current = true;
     } else if (pasteDialogWasOpen.current) {
       pasteDialogWasOpen.current = false;
-      if (visible) {
-        termRef.current?.focus();
-      }
+      focusIfVisible();
     }
-  }, [pendingPaste, visible]);
+    // `visible` is deliberately not a dependency: the visibility check lives
+    // inside focusIfVisible (via a ref), and re-running this effect on a bare
+    // visibility flip would do nothing anyway — the one-shot flag is already
+    // consumed by then. Do not "fix" this with exhaustive-deps.
+  }, [pendingPaste, focusIfVisible]);
 
   return (
     <>
