@@ -272,7 +272,13 @@ async fn persist_import(
             parent_id: None,
         })
         .await
-        .map_err(|e| format!("Failed to create root import folder: {e}"))?;
+        .map_err(|e| {
+            // A database error, not file content, so it can be logged whole.
+            // Without this line the log would show the start of the import but
+            // no outcome.
+            tracing::warn!("{root_name} failed to create the root import folder: {e}");
+            sanitize_message(&format!("Failed to create root import folder: {e}"))
+        })?;
     folders_created += 1;
 
     // Map temp_id → real DB UUID. temp_id 0 = root folder.
