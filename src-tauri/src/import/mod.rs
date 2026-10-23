@@ -18,18 +18,88 @@ const MAX_XML_SIZE: usize = 100 * 1024 * 1024;
 /// are truncated to protect downstream tools that may have stricter limits.
 const MAX_IMPORTED_NAME_LEN: usize = 255;
 
+/// Maximum length of a warning or error message returned to the UI.
+const MAX_MESSAGE_LEN: usize = 500;
+
+/// Maximum number of warnings returned to the UI, where each one becomes a
+/// toast. Any further warnings are summarized in a single final entry.
+const MAX_WARNINGS: usize = 20;
+
+/// Format and filler characters that `char::is_control` misses but that let a
+/// name display as something it is not: the bidi embedding, override and
+/// isolate controls (U+202A–U+202E, U+2066–U+2069), the line and paragraph
+/// separators (U+2028, U+2029), and invisible characters with no place in a
+/// host, user or session name — zero-width space and BOM (U+200B, U+FEFF),
+/// soft hyphen (U+00AD), word joiner and invisible operators (U+2060–U+2064),
+/// interlinear annotation marks (U+FFF9–U+FFFB) and the standalone Hangul
+/// fillers (U+3164, U+FFA0). Directional marks (U+200E, U+200F, U+061C) and
+/// joiners (U+200C, U+200D) are kept: right-to-left and Indic names and emoji
+/// sequences need them, and marks cannot reorder text the way overrides can.
+///
+/// This is a denylist aimed at reordering and the common blank-name tricks,
+/// not at every invisible code point. Rarer invisibles that belong to a script
+/// or to emoji sequences — conjoining Hangul fillers (U+115F, U+1160),
+/// Mongolian free variation selectors and vowel separator (U+180B–U+180E),
+/// the combining grapheme joiner (U+034F), variation selectors (U+FE00–U+FE0F)
+/// and emoji tag characters (U+E0000–U+E007F) — are deliberately left alone.
+fn is_display_spoofing_char(c: char) -> bool {
+    matches!(
+        c,
+        '\u{202A}'..='\u{202E}'
+            | '\u{2066}'..='\u{2069}'
+            | '\u{2028}'
+            | '\u{2029}'
+            | '\u{200B}'
+            | '\u{FEFF}'
+            | '\u{00AD}'
+            | '\u{2060}'..='\u{2064}'
+            | '\u{FFF9}'..='\u{FFFB}'
+            | '\u{3164}'
+            | '\u{FFA0}'
+    )
+}
+
 /// Strip NUL bytes and control characters that could confuse log pipelines
-/// or C-string-based downstream consumers, and cap the length.
-fn sanitize_imported_name(raw: &str) -> String {
+/// or C-string-based downstream consumers, drop characters that would let the
+/// text display as something it is not, and cap the length at `max_len`
+/// characters.
+fn strip_and_cap(raw: &str, max_len: usize) -> String {
     let cleaned: String = raw
         .chars()
-        .filter(|c| *c != '\0' && (!c.is_control() || *c == ' '))
+        .filter(|c| *c != '\0' && (!c.is_control() || *c == ' ') && !is_display_spoofing_char(*c))
         .collect();
-    if cleaned.chars().count() <= MAX_IMPORTED_NAME_LEN {
+    if cleaned.chars().count() <= max_len {
         cleaned
     } else {
-        cleaned.chars().take(MAX_IMPORTED_NAME_LEN).collect()
+        cleaned.chars().take(max_len).collect()
     }
+}
+
+/// Sanitize an imported folder, session, host, user or jump-host name.
+fn sanitize_imported_name(raw: &str) -> String {
+    strip_and_cap(raw, MAX_IMPORTED_NAME_LEN)
+}
+
+/// Sanitize a warning or error message for display. Parser messages quote
+/// raw file content (session and key names, protocol strings, XML fragments),
+/// so they get the same character filtering as names.
+fn sanitize_message(raw: &str) -> String {
+    strip_and_cap(raw, MAX_MESSAGE_LEN)
+}
+
+/// Sanitize warnings for display and cap how many are returned, so a file
+/// full of bad entries cannot flood the UI with one toast each.
+fn finalize_warnings(warnings: Vec<String>) -> Vec<String> {
+    let total = warnings.len();
+    let mut shown: Vec<String> = warnings
+        .iter()
+        .take(MAX_WARNINGS)
+        .map(|w| sanitize_message(w))
+        .collect();
+    if total > MAX_WARNINGS {
+        shown.push(format!("…and {} more warnings", total - MAX_WARNINGS));
+    }
+    shown
 }
 
 /// Clamp an imported port to the valid TCP range. Returns `None` if the
@@ -105,12 +175,21 @@ fn emit_progress(app: &AppHandle, phase: &'static str, current: u32, total: u32)
 
 // ── Tauri commands ──────────────────────────────────────────────────
 
+// The import log is limited to sizes and counts. A parse failure is logged as
+// a fixed message: quick-xml errors can quote fragments of the input (tag
+// names, an unrecognized entity name inside an attribute value), so the full
+// error goes back to the UI only, through `sanitize_message`. Per-session
+// problems that name a session go into `warnings`, which the summary line
+// counts but never writes out; `finalize_warnings` sanitizes and caps them on
+// the way to the UI.
+
 #[tauri::command]
 pub async fn import_mremoteng(
     app: AppHandle,
     state: State<'_, DbState>,
     xml: String,
 ) -> Result<ImportResult, String> {
+    tracing::info!("mRemoteNG import started ({} bytes)", xml.len());
     if xml.len() > MAX_XML_SIZE {
         return Err(format!(
             "File too large ({:.1} MB, max {:.0} MB)",
@@ -120,7 +199,9 @@ pub async fn import_mremoteng(
     }
 
     emit_progress(&app, "parsing", 0, 0);
-    let (folders, sessions, warnings) = mremoteng::parse(&xml)?;
+    let (folders, sessions, warnings) = mremoteng::parse(&xml)
+        .inspect_err(|_| tracing::warn!("mRemoteNG import failed to parse"))
+        .map_err(|e| sanitize_message(&e))?;
     persist_import(
         &app,
         &state.0,
@@ -138,6 +219,7 @@ pub async fn import_securecrt(
     state: State<'_, DbState>,
     xml: String,
 ) -> Result<ImportResult, String> {
+    tracing::info!("SecureCRT import started ({} bytes)", xml.len());
     if xml.len() > MAX_XML_SIZE {
         return Err(format!(
             "File too large ({:.1} MB, max {:.0} MB)",
@@ -147,7 +229,9 @@ pub async fn import_securecrt(
     }
 
     emit_progress(&app, "parsing", 0, 0);
-    let (folders, sessions, warnings) = securecrt::parse(&xml)?;
+    let (folders, sessions, warnings) = securecrt::parse(&xml)
+        .inspect_err(|_| tracing::warn!("SecureCRT import failed to parse"))
+        .map_err(|e| sanitize_message(&e))?;
     persist_import(
         &app,
         &state.0,
@@ -205,9 +289,10 @@ async fn persist_import(
             .and_then(|tid| id_map.get(&tid).copied())
             .unwrap_or(root_folder.id);
 
+        let safe_name = sanitize_imported_name(&folder.name);
         match db
             .create_folder(NewFolder {
-                name: sanitize_imported_name(&folder.name),
+                name: safe_name.clone(),
                 parent_id: Some(parent_uuid),
             })
             .await
@@ -217,7 +302,7 @@ async fn persist_import(
                 folders_created += 1;
             }
             Err(e) => {
-                warnings.push(format!("Failed to create folder \"{}\": {e}", folder.name));
+                warnings.push(format!("Failed to create folder \"{safe_name}\": {e}"));
             }
         }
         if (i + 1) % PROGRESS_STEP == 0 {
@@ -259,7 +344,11 @@ async fn persist_import(
                 hostname: safe_hostname,
                 port: safe_port,
                 protocol: session.protocol.clone(),
-                username: session.username.clone().unwrap_or_default(),
+                username: session
+                    .username
+                    .as_deref()
+                    .map(sanitize_imported_name)
+                    .unwrap_or_default(),
                 auth_method: "password".to_string(),
                 jump_host_id: None,
                 tags: String::new(),
@@ -318,10 +407,79 @@ async fn persist_import(
 
     emit_progress(app, "done", 1, 1);
 
+    let skipped = session_total_count.saturating_sub(sessions_created);
+    tracing::info!(
+        "{root_name} finished: {folders_created} folders, {sessions_created} sessions, \
+         {skipped} skipped, {} warnings",
+        warnings.len()
+    );
+
     Ok(ImportResult {
         folders_created,
         sessions_created,
-        skipped: session_total_count.saturating_sub(sessions_created),
-        warnings,
+        skipped,
+        warnings: finalize_warnings(warnings),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sanitize_strips_control_characters_but_keeps_spaces() {
+        // A resolved `&#x1b;` or `&#0;` must not reach a stored name or
+        // username as a raw control character.
+        assert_eq!(sanitize_imported_name("ad\u{1b}[31mmin\0 x"), "ad[31mmin x");
+        assert_eq!(sanitize_imported_name("a\tb\r\nc"), "abc");
+    }
+
+    #[test]
+    fn sanitize_strips_reordering_and_invisible_format_characters() {
+        assert_eq!(
+            sanitize_imported_name("ad\u{202E}min\u{2066}x\u{2069}\u{200B}\u{FEFF}\u{2028}y"),
+            "adminxy"
+        );
+        assert_eq!(
+            sanitize_imported_name("p\u{00AD}r\u{2060}o\u{FFF9}d\u{3164}"),
+            "prod"
+        );
+        // Marks and joiners that real right-to-left text and emoji need survive.
+        assert_eq!(
+            sanitize_imported_name("a\u{200F}b\u{200D}c\u{061C}d"),
+            "a\u{200F}b\u{200D}c\u{061C}d"
+        );
+    }
+
+    #[test]
+    fn sanitize_caps_length_in_characters() {
+        let long = "é".repeat(MAX_IMPORTED_NAME_LEN + 10);
+        let capped = sanitize_imported_name(&long);
+        assert_eq!(capped.chars().count(), MAX_IMPORTED_NAME_LEN);
+    }
+
+    #[test]
+    fn finalize_warnings_sanitizes_and_summarizes_the_overflow() {
+        // Parser warnings quote raw file content, and each one is a toast.
+        let warnings = (0..MAX_WARNINGS + 5)
+            .map(|i| format!("Skipped \"x\u{202E}{i}\u{1b}\""))
+            .collect();
+        let shown = finalize_warnings(warnings);
+        assert_eq!(shown.len(), MAX_WARNINGS + 1);
+        assert_eq!(shown[0], "Skipped \"x0\"");
+        assert_eq!(shown[MAX_WARNINGS], "…and 5 more warnings");
+    }
+
+    #[test]
+    fn finalize_warnings_keeps_a_short_list_whole() {
+        let shown = finalize_warnings(vec!["a".into(), "b".into()]);
+        assert_eq!(shown, ["a", "b"]);
+        assert!(finalize_warnings(Vec::new()).is_empty());
+    }
+
+    #[test]
+    fn sanitize_message_caps_length() {
+        let long = "x".repeat(MAX_MESSAGE_LEN + 1);
+        assert_eq!(sanitize_message(&long).chars().count(), MAX_MESSAGE_LEN);
+    }
 }

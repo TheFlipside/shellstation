@@ -423,7 +423,8 @@
     "addRule": "규칙 추가",
     "importSecurecrt": "SecureCRT 하이라이트 가져오기",
     "importProfile": "프로필 가져오기",
-    "importSuccess": "{{count}}개의 프로필과 {{rules}}개의 규칙이 가져와졌습니다."
+    "importSuccess": "{{count}}개의 프로필과 {{rules}}개의 규칙이 가져와졌습니다.",
+    "importTooLarge": "가져오기 파일이 너무 큽니다 (최대 10 MB)."
   },
   "kbdInteractive": {
     "title": "키보드 대화형 인증",

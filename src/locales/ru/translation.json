@@ -423,7 +423,8 @@
     "addRule": "Добавить правило",
     "importSecurecrt": "Импорт подсветки SecureCRT",
     "importProfile": "Импорт профиля",
-    "importSuccess": "Импортировано {{count}} профиля(ей) с {{rules}} правилом(ами)."
+    "importSuccess": "Импортировано {{count}} профиля(ей) с {{rules}} правилом(ами).",
+    "importTooLarge": "Файл импорта слишком велик (макс. 10 МБ)."
   },
   "kbdInteractive": {
     "title": "Аутентификация Keyboard-Interactive",

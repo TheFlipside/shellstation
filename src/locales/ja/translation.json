@@ -423,7 +423,8 @@
     "addRule": "ルールを追加",
     "importSecurecrt": "SecureCRTのハイライトをインポート",
     "importProfile": "プロファイルをインポート",
-    "importSuccess": "{{count}}件のプロファイルと{{rules}}件のルールをインポートしました。"
+    "importSuccess": "{{count}}件のプロファイルと{{rules}}件のルールをインポートしました。",
+    "importTooLarge": "インポートファイルが大きすぎます（最大 10 MB）。"
   },
   "kbdInteractive": {
     "title": "キーボードインタラクティブ認証",

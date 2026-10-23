@@ -423,7 +423,8 @@
     "addRule": "Kural ekle",
     "importSecurecrt": "SecureCRT vurgulamalarını içe aktar",
     "importProfile": "Profili içe aktar",
-    "importSuccess": "{{count}} profil ve {{rules}} kural içe aktarıldı."
+    "importSuccess": "{{count}} profil ve {{rules}} kural içe aktarıldı.",
+    "importTooLarge": "İçe aktarma dosyası çok büyük (maks. 10 MB)."
   },
   "kbdInteractive": {
     "title": "Keyboard-Interactive Kimlik Doğrulama",

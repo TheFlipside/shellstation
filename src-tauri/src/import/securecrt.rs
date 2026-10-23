@@ -390,6 +390,26 @@ fn read_text(reader: &mut Reader<&[u8]>, end_tag: &[u8]) -> Result<String, Strin
                         .as_ref(),
                 );
             }
+            Ok(Event::GeneralRef(ref e)) => {
+                // quick-xml reports `&amp;`, `&#38;` and the like as separate
+                // events between the text chunks around them; ignoring them
+                // turned "dom&amp;user" into "domuser". SecureCRT declares no
+                // DTD, so only character references and the five predefined
+                // entities are well-formed here. Anything else is kept
+                // verbatim rather than silently dropped.
+                let name = e
+                    .decode()
+                    .map_err(|err| format!("Failed to decode entity reference: {err}"))?;
+                if let Ok(Some(ch)) = e.resolve_char_ref() {
+                    text.push(ch);
+                } else if let Some(resolved) = quick_xml::escape::resolve_xml_entity(&name) {
+                    text.push_str(resolved);
+                } else {
+                    text.push('&');
+                    text.push_str(&name);
+                    text.push(';');
+                }
+            }
             Ok(Event::End(ref e)) if e.local_name().as_ref() == end_tag => return Ok(text),
             Ok(Event::Eof) => return Err("Unexpected end of XML reading text".to_string()),
             Err(e) => {
@@ -674,5 +694,40 @@ mod tests {
         );
         let (_, sessions, _) = parse(&xml).unwrap();
         assert_eq!(sessions.len(), 1);
+    }
+
+    #[test]
+    fn parse_resolves_entity_references_in_text() {
+        // Element text arrives as text chunks split around separate
+        // entity-reference events; every one of them must survive.
+        let xml = wrap(
+            r#"
+            <key name="s">
+                <dword name="Is Session">1</dword>
+                <string name="Hostname">web&#x2D;1&#46;lan</string>
+                <string name="Protocol Name">SSH2</string>
+                <string name="Username">dom&amp;user&lt;&gt;&quot;&apos;</string>
+            </key>"#,
+        );
+        let (_, sessions, _) = parse(&xml).unwrap();
+        assert_eq!(sessions[0].hostname, "web-1.lan");
+        assert_eq!(sessions[0].username.as_deref(), Some("dom&user<>\"'"));
+    }
+
+    #[test]
+    fn parse_keeps_unresolvable_references_verbatim() {
+        // Undeclared entities and invalid character references are malformed,
+        // but losing them silently would corrupt the value without a trace.
+        let xml = wrap(
+            r#"
+            <key name="s">
+                <dword name="Is Session">1</dword>
+                <string name="Hostname">h</string>
+                <string name="Protocol Name">SSH2</string>
+                <string name="Username">a&custom;b&#0;c</string>
+            </key>"#,
+        );
+        let (_, sessions, _) = parse(&xml).unwrap();
+        assert_eq!(sessions[0].username.as_deref(), Some("a&custom;b&#0;c"));
     }
 }

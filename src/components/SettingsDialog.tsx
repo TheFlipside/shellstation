@@ -8,6 +8,7 @@ import { useAppStore } from "../stores/appStore";
 import { useSessionStore } from "../stores/sessionStore";
 import { useSettingsStore, ALLOWED_TERMINAL_FONTS } from "../stores/settingsStore";
 import { XTERM_THEMES, resolveTerminalTheme } from "../terminalTheme";
+import { pickFile } from "../pickFile";
 import { useTheme } from "../hooks/useTheme";
 import {
   useHighlightStore,
@@ -21,45 +22,6 @@ import { ConfirmDialog } from "./ConfirmDialog";
 
 // eslint-disable-next-line @typescript-eslint/no-empty-function
 const noop = (): void => {};
-
-/**
- * Show a native file picker and resolve with the selected file (or null if
- * the user cancelled). Cleans up the hidden <input> in every code path,
- * including picker-cancel, where `onchange` is never invoked. The window
- * focus fallback covers older webviews that do not dispatch the `cancel`
- * event on <input type="file">.
- */
-function pickFile(accept: string): Promise<File | null> {
-  return new Promise((resolve) => {
-    const input = document.createElement("input");
-    input.type = "file";
-    input.accept = accept;
-    input.style.display = "none";
-    let resolved = false;
-    const finish = (value: File | null): void => {
-      if (resolved) return;
-      resolved = true;
-      window.removeEventListener("focus", onFocus);
-      if (input.parentNode) input.remove();
-      resolve(value);
-    };
-    const onFocus = (): void => {
-      // Picker closed; give onchange one frame to fire before treating as cancel.
-      requestAnimationFrame(() => {
-        if (!resolved && (input.files?.length ?? 0) === 0) finish(null);
-      });
-    };
-    input.onchange = (): void => {
-      finish(input.files?.[0] ?? null);
-    };
-    input.addEventListener("cancel", () => {
-      finish(null);
-    });
-    window.addEventListener("focus", onFocus);
-    document.body.appendChild(input);
-    input.click();
-  });
-}
 
 const AVAILABLE_LANGUAGES = [
   { code: "en", label: "English" },
@@ -302,6 +264,13 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
     void (async () => {
       const file = await pickFile(".ini");
       if (!file) return;
+      // Mirrors MAX_IMPORT_SIZE in commands/highlight.rs, checked before the
+      // whole file is read into memory and sent over IPC.
+      const MAX_HIGHLIGHT_IMPORT_SIZE = 10 * 1024 * 1024;
+      if (file.size > MAX_HIGHLIGHT_IMPORT_SIZE) {
+        useToastStore.getState().addToast(t("highlighting.importTooLarge"), "error");
+        return;
+      }
       try {
         const text = await file.text();
         const result = await invoke<{ profiles_created: number; total_rules: number }>(

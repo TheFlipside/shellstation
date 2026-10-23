@@ -423,7 +423,8 @@
     "addRule": "Adicionar regra",
     "importSecurecrt": "Importar destaques do SecureCRT",
     "importProfile": "Importar perfil",
-    "importSuccess": "{{count}} perfil(is) com {{rules}} regra(s) importado(s)."
+    "importSuccess": "{{count}} perfil(is) com {{rules}} regra(s) importado(s).",
+    "importTooLarge": "O arquivo de importação é grande demais (máx. 10 MB)."
   },
   "kbdInteractive": {
     "title": "Autenticação Keyboard-Interactive",

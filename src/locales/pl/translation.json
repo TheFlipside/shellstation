@@ -423,7 +423,8 @@
     "addRule": "Dodaj regułę",
     "importSecurecrt": "Importuj podświetlanie SecureCRT",
     "importProfile": "Importuj profil",
-    "importSuccess": "Zaimportowano {{count}} profil(ów) z {{rules}} regułą(-ami)."
+    "importSuccess": "Zaimportowano {{count}} profil(ów) z {{rules}} regułą(-ami).",
+    "importTooLarge": "Plik importu jest za duży (maks. 10 MB)."
   },
   "kbdInteractive": {
     "title": "Uwierzytelnianie Keyboard-Interactive",

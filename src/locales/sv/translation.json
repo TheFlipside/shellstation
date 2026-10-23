@@ -423,7 +423,8 @@
     "addRule": "Lägg till regel",
     "importSecurecrt": "Importera SecureCRT-markeringar",
     "importProfile": "Importera profil",
-    "importSuccess": "{{count}} profil(er) med {{rules}} regel/regler importerade."
+    "importSuccess": "{{count}} profil(er) med {{rules}} regel/regler importerade.",
+    "importTooLarge": "Importfilen är för stor (max 10 MB)."
   },
   "kbdInteractive": {
     "title": "Keyboard-Interactive-autentisering",

@@ -424,7 +424,8 @@
     "addRule": "Add Rule",
     "importSecurecrt": "Import SecureCRT Highlights",
     "importProfile": "Import Profile",
-    "importSuccess": "Imported {{count}} profile(s) with {{rules}} rule(s)."
+    "importSuccess": "Imported {{count}} profile(s) with {{rules}} rule(s).",
+    "importTooLarge": "Import file is too large (max 10 MB)."
   },
   "kbdInteractive": {
     "title": "Keyboard-Interactive Authentication",
