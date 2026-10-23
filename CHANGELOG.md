@@ -18,6 +18,7 @@ All notable changes to this project are documented in this file.
 ### Changed
 
 - The SecureCRT and mRemoteNG import commands now log at `info` when they start (with the payload size) and finish (folder, session, skipped and warning counts), and at `warn` when parsing fails — as a fixed message, because quick-xml errors can quote fragments of the file (tag names, an unrecognized entity name inside an attribute value); the full error still reaches the UI. Previously an import left no trace in the app log at any level, so an import that never reached the backend was indistinguishable from one that did. No hostnames, usernames or session names are logged.
+- The SecureCRT and mRemoteNG imports now reject a file with more than 10,000 folders or 50,000 sessions, the limits the JSON database import already enforced. The 100 MB file cap alone allowed hundreds of thousands of entries, each a database write. The check runs after parsing and before anything is written, so a rejected file leaves no partial import. The two constants in `commands/database.rs` are now `pub(crate)` and shared rather than duplicated.
 
 ## 0.30.0 - 2026-07-27
 

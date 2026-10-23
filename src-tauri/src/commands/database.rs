@@ -519,8 +519,10 @@ pub async fn db_export_file(
 }
 
 /// Maximum number of items allowed in a single import to prevent resource exhaustion.
-const MAX_IMPORT_FOLDERS: usize = 10_000;
-const MAX_IMPORT_SESSIONS: usize = 50_000;
+/// The folder and session limits also apply to the SecureCRT and mRemoteNG
+/// imports in `import/mod.rs`.
+pub(crate) const MAX_IMPORT_FOLDERS: usize = 10_000;
+pub(crate) const MAX_IMPORT_SESSIONS: usize = 50_000;
 const MAX_IMPORT_CREDENTIALS: usize = 50_000;
 const MAX_IMPORT_HIGHLIGHT_PROFILES: usize = 1_000;
 const MAX_IMPORT_LOGIN_SEQUENCES: usize = 1_000;

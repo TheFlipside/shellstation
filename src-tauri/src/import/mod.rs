@@ -8,6 +8,7 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
 use uuid::Uuid;
 
+use crate::commands::{MAX_IMPORT_FOLDERS, MAX_IMPORT_SESSIONS};
 use crate::db::models::{NewFolder, NewSession};
 use crate::db::{DatabaseProvider, DbState};
 
@@ -100,6 +101,23 @@ fn finalize_warnings(warnings: Vec<String>) -> Vec<String> {
         shown.push(format!("…and {} more warnings", total - MAX_WARNINGS));
     }
     shown
+}
+
+/// Reject an import with more folders or sessions than the JSON database
+/// import accepts. The 100 MB file cap alone allows hundreds of thousands of
+/// entries, each one a database write.
+fn check_import_counts(folders: usize, sessions: usize) -> Result<(), String> {
+    if folders > MAX_IMPORT_FOLDERS {
+        return Err(format!(
+            "Too many folders in import ({folders}, max {MAX_IMPORT_FOLDERS})"
+        ));
+    }
+    if sessions > MAX_IMPORT_SESSIONS {
+        return Err(format!(
+            "Too many sessions in import ({sessions}, max {MAX_IMPORT_SESSIONS})"
+        ));
+    }
+    Ok(())
 }
 
 /// Clamp an imported port to the valid TCP range. Returns `None` if the
@@ -258,6 +276,12 @@ async fn persist_import(
     sessions: Vec<ImportedSession>,
     mut warnings: Vec<String>,
 ) -> Result<ImportResult, String> {
+    // Checked before anything is written, so an oversized file leaves no
+    // partial import behind.
+    check_import_counts(folders.len(), sessions.len()).inspect_err(|e| {
+        tracing::warn!("{root_name} rejected: {e}");
+    })?;
+
     // Emit progress at most every N items to keep event traffic reasonable
     // for large imports.
     const PROGRESS_STEP: usize = 25;
@@ -481,6 +505,25 @@ mod tests {
         let shown = finalize_warnings(vec!["a".into(), "b".into()]);
         assert_eq!(shown, ["a", "b"]);
         assert!(finalize_warnings(Vec::new()).is_empty());
+    }
+
+    #[test]
+    fn check_import_counts_accepts_the_limits_and_rejects_beyond() {
+        assert!(check_import_counts(MAX_IMPORT_FOLDERS, MAX_IMPORT_SESSIONS).is_ok());
+        assert_eq!(
+            check_import_counts(MAX_IMPORT_FOLDERS + 1, 0),
+            Err(format!(
+                "Too many folders in import ({}, max {MAX_IMPORT_FOLDERS})",
+                MAX_IMPORT_FOLDERS + 1
+            ))
+        );
+        assert_eq!(
+            check_import_counts(0, MAX_IMPORT_SESSIONS + 1),
+            Err(format!(
+                "Too many sessions in import ({}, max {MAX_IMPORT_SESSIONS})",
+                MAX_IMPORT_SESSIONS + 1
+            ))
+        );
     }
 
     #[test]
