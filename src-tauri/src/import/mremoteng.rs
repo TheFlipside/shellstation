@@ -18,7 +18,7 @@ use std::collections::HashMap;
 use quick_xml::events::Event;
 use quick_xml::Reader;
 
-use super::{ImportedFolder, ImportedSession, ParseResult};
+use super::{check_parsed_counts, ImportedFolder, ImportedSession, ParseResult, SkippedSession};
 
 /// Maximum allowed folder nesting depth to prevent stack exhaustion from
 /// pathologically deep `XML` structures.
@@ -36,6 +36,7 @@ pub fn parse(xml: &str) -> Result<ParseResult, String> {
 
     let mut folders = Vec::new();
     let mut sessions = Vec::new();
+    let mut skipped = Vec::new();
     let mut warnings = Vec::new();
 
     // temp_id 0 is reserved for the root import folder (created by caller).
@@ -44,6 +45,7 @@ pub fn parse(xml: &str) -> Result<ParseResult, String> {
     let mut next_temp_id: usize = 1;
 
     loop {
+        check_parsed_counts(folders.len(), sessions.len(), warnings.len())?;
         match reader.read_event() {
             Ok(Event::Start(ref e)) => {
                 if e.local_name().as_ref() != b"Node" {
@@ -74,7 +76,13 @@ pub fn parse(xml: &str) -> Result<ParseResult, String> {
                         let parent = folder_stack.last().copied().unwrap_or(root_temp_id);
                         match build_session(&attrs, parent) {
                             Ok(s) => sessions.push(s),
-                            Err(w) => warnings.push(w),
+                            Err(w) => {
+                                warnings.push(w);
+                                skipped.push(SkippedSession {
+                                    name,
+                                    folder_temp_id: parent,
+                                });
+                            }
                         }
                         // Consume until matching </Node>.
                         skip_to_end(&mut reader, b"Node")?;
@@ -108,7 +116,13 @@ pub fn parse(xml: &str) -> Result<ParseResult, String> {
                         let parent = folder_stack.last().copied().unwrap_or(root_temp_id);
                         match build_session(&attrs, parent) {
                             Ok(s) => sessions.push(s),
-                            Err(w) => warnings.push(w),
+                            Err(w) => {
+                                warnings.push(w);
+                                skipped.push(SkippedSession {
+                                    name,
+                                    folder_temp_id: parent,
+                                });
+                            }
                         }
                     }
                     _ => {}
@@ -128,7 +142,7 @@ pub fn parse(xml: &str) -> Result<ParseResult, String> {
         }
     }
 
-    Ok((folders, sessions, warnings))
+    Ok((folders, sessions, skipped, warnings))
 }
 
 /// Skip events until the matching end tag for `tag` is consumed.
@@ -227,6 +241,7 @@ fn build_session(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::commands::MAX_IMPORT_FOLDERS;
 
     // The mRemoteNG parser is a stateful pull-parser over an XML stream:
     // tag-by-tag input, a folder-stack mutated on each `<Node Type="…">`,
@@ -238,7 +253,7 @@ mod tests {
     #[test]
     fn parse_empty_root() {
         let xml = r#"<?xml version="1.0"?><Confcons></Confcons>"#;
-        let (folders, sessions, warnings) = parse(xml).unwrap();
+        let (folders, sessions, _, warnings) = parse(xml).unwrap();
         assert!(folders.is_empty());
         assert!(sessions.is_empty());
         assert!(warnings.is_empty());
@@ -251,7 +266,7 @@ mod tests {
                 <Node Type="Connection" Name="web1" Hostname="web1.example.com"
                       Port="22" Protocol="SSH2" Username="root"/>
             </Confcons>"#;
-        let (folders, sessions, warnings) = parse(xml).unwrap();
+        let (folders, sessions, _, warnings) = parse(xml).unwrap();
         assert!(folders.is_empty());
         assert_eq!(sessions.len(), 1);
         assert!(warnings.is_empty());
@@ -270,7 +285,7 @@ mod tests {
                 <Node Type="Connection" Name="switch" Hostname="10.0.0.1"
                       Port="23" Protocol="Telnet"/>
             </Confcons>"#;
-        let (_, sessions, warnings) = parse(xml).unwrap();
+        let (_, sessions, _, warnings) = parse(xml).unwrap();
         assert_eq!(sessions.len(), 1);
         assert!(warnings.is_empty());
         assert_eq!(sessions[0].protocol, "telnet");
@@ -283,12 +298,16 @@ mod tests {
                 <Node Type="Connection" Name="rdp1" Hostname="srv" Protocol="RDP"/>
                 <Node Type="Connection" Name="ssh1" Hostname="web" Port="22" Protocol="SSH2"/>
             </Confcons>"#;
-        let (_, sessions, warnings) = parse(xml).unwrap();
+        let (_, sessions, skipped, warnings) = parse(xml).unwrap();
         // Unsupported entry produces a warning, supported entry still imports.
         assert_eq!(sessions.len(), 1);
         assert_eq!(sessions[0].name, "ssh1");
         assert_eq!(warnings.len(), 1);
         assert!(warnings[0].to_lowercase().contains("rdp"));
+        // Still reported by name, so a jump host reference to "rdp1" counts it.
+        assert_eq!(skipped.len(), 1);
+        assert_eq!(skipped[0].name, "rdp1");
+        assert_eq!(skipped[0].folder_temp_id, 0);
     }
 
     #[test]
@@ -301,7 +320,7 @@ mod tests {
                     </Node>
                 </Node>
             </Confcons>"#;
-        let (folders, sessions, _) = parse(xml).unwrap();
+        let (folders, sessions, _, _) = parse(xml).unwrap();
         assert_eq!(folders.len(), 2);
         assert_eq!(folders[0].name, "Production");
         assert_eq!(folders[0].parent_temp_id, Some(0)); // root
@@ -309,6 +328,19 @@ mod tests {
         assert_eq!(folders[1].parent_temp_id, Some(folders[0].temp_id));
         assert_eq!(sessions.len(), 1);
         assert_eq!(sessions[0].folder_temp_id, folders[1].temp_id);
+    }
+
+    #[test]
+    fn parse_stops_once_past_the_folder_limit() {
+        // A file of tiny entries is rejected during the parse, not after
+        // every entry has been built.
+        let nodes = r#"<Node Type="Container" Name="f"/>"#.repeat(MAX_IMPORT_FOLDERS + 1);
+        let xml = format!("<Confcons>{nodes}<Node Type=\"Container\" Name=\"last\"/></Confcons>");
+        let err = parse(&xml).unwrap_err();
+        assert_eq!(
+            err,
+            format!("Too many folders in import (more than {MAX_IMPORT_FOLDERS})")
+        );
     }
 
     #[test]
@@ -345,7 +377,7 @@ mod tests {
                 <Node Type="Connection" Name="target" Hostname="target.example.com"
                       Port="22" Protocol="SSH2" SSHTunnelConnectionName="bastion"/>
             </Confcons>"#;
-        let (_, sessions, _) = parse(xml).unwrap();
+        let (_, sessions, _, _) = parse(xml).unwrap();
         assert_eq!(sessions.len(), 2);
         let target = sessions.iter().find(|s| s.name == "target").unwrap();
         assert_eq!(target.jump_host_name.as_deref(), Some("bastion"));

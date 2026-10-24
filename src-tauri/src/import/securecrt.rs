@@ -17,7 +17,7 @@
 use quick_xml::events::Event;
 use quick_xml::Reader;
 
-use super::{ImportedFolder, ImportedSession, ParseResult};
+use super::{check_parsed_counts, ImportedFolder, ImportedSession, ParseResult, SkippedSession};
 
 /// Maximum allowed folder nesting depth to prevent stack exhaustion from
 /// pathologically deep `XML` structures.
@@ -46,6 +46,7 @@ pub fn parse(xml: &str) -> Result<ParseResult, String> {
 
     let mut folders = Vec::new();
     let mut sessions = Vec::new();
+    let mut skipped = Vec::new();
     let mut warnings = Vec::new();
 
     let root_temp_id: usize = 0;
@@ -58,11 +59,12 @@ pub fn parse(xml: &str) -> Result<ParseResult, String> {
         &mut next_temp_id,
         &mut folders,
         &mut sessions,
+        &mut skipped,
         &mut warnings,
         0,
     )?;
 
-    Ok((folders, sessions, warnings))
+    Ok((folders, sessions, skipped, warnings))
 }
 
 /// Advance the reader past `<key name="Sessions">`, leaving it positioned
@@ -102,10 +104,12 @@ fn parse_key_children(
     next_temp_id: &mut usize,
     folders: &mut Vec<ImportedFolder>,
     sessions: &mut Vec<ImportedSession>,
+    skipped: &mut Vec<SkippedSession>,
     warnings: &mut Vec<String>,
     depth: usize,
 ) -> Result<(), String> {
     loop {
+        check_parsed_counts(folders.len(), sessions.len(), warnings.len())?;
         match reader.read_event() {
             Ok(Event::Start(ref e)) => {
                 if e.local_name().as_ref() == b"key" {
@@ -117,6 +121,7 @@ fn parse_key_children(
                             next_temp_id,
                             folders,
                             sessions,
+                            skipped,
                             warnings,
                             depth,
                         )?;
@@ -156,6 +161,7 @@ fn parse_key_block(
     next_temp_id: &mut usize,
     folders: &mut Vec<ImportedFolder>,
     sessions: &mut Vec<ImportedSession>,
+    skipped: &mut Vec<SkippedSession>,
     warnings: &mut Vec<String>,
     depth: usize,
 ) -> Result<(), String> {
@@ -179,6 +185,7 @@ fn parse_key_block(
     let mut has_child_keys = false;
 
     loop {
+        check_parsed_counts(folders.len(), sessions.len(), warnings.len())?;
         match reader.read_event() {
             Ok(Event::Start(ref e)) => {
                 let local = e.local_name();
@@ -204,6 +211,7 @@ fn parse_key_block(
                                 next_temp_id,
                                 folders,
                                 sessions,
+                                skipped,
                                 warnings,
                                 depth + 1,
                             )?;
@@ -270,7 +278,13 @@ fn parse_key_block(
     if props.is_session {
         match build_session(key_name, &props, parent_temp_id) {
             Ok(s) => sessions.push(s),
-            Err(w) => warnings.push(w),
+            Err(w) => {
+                warnings.push(w);
+                skipped.push(SkippedSession {
+                    name: key_name.to_string(),
+                    folder_temp_id: parent_temp_id,
+                });
+            }
         }
     }
 
@@ -464,6 +478,7 @@ fn get_attr(e: &quick_xml::events::BytesStart<'_>, name: &str) -> Option<String>
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::commands::MAX_IMPORT_SESSIONS;
 
     // The SecureCRT parser walks a recursive `<key>` tree where a key is a
     // folder iff it has child keys, and a session iff it has a
@@ -495,7 +510,7 @@ mod tests {
 
     #[test]
     fn parse_empty_sessions() {
-        let (folders, sessions, warnings) = parse(&wrap("")).unwrap();
+        let (folders, sessions, _, warnings) = parse(&wrap("")).unwrap();
         assert!(folders.is_empty());
         assert!(sessions.is_empty());
         assert!(warnings.is_empty());
@@ -512,7 +527,7 @@ mod tests {
                 <dword name="[SSH2] Port">22</dword>
             </key>"#,
         );
-        let (folders, sessions, warnings) = parse(&xml).unwrap();
+        let (folders, sessions, _, warnings) = parse(&xml).unwrap();
         assert!(folders.is_empty());
         assert_eq!(sessions.len(), 1);
         assert!(warnings.is_empty());
@@ -534,7 +549,7 @@ mod tests {
                 <dword name="Port">2323</dword>
             </key>"#,
         );
-        let (_, sessions, _) = parse(&xml).unwrap();
+        let (_, sessions, _, _) = parse(&xml).unwrap();
         assert_eq!(sessions.len(), 1);
         assert_eq!(sessions[0].protocol, "telnet");
         assert_eq!(sessions[0].port, 2323);
@@ -573,26 +588,34 @@ mod tests {
                 <string name="Protocol Name">SSH2</string>
             </key>"#,
         );
-        let (_, sessions, warnings) = parse(&xml).unwrap();
+        let (_, sessions, skipped, warnings) = parse(&xml).unwrap();
         assert!(sessions.is_empty());
         assert_eq!(warnings.len(), 1);
         assert!(warnings[0].contains("no hostname"));
+        // Still reported by name, so a jump host reference to "broken" counts it.
+        assert_eq!(skipped.len(), 1);
+        assert_eq!(skipped[0].name, "broken");
     }
 
     #[test]
     fn parse_unsupported_protocol_warns() {
         let xml = wrap(
             r#"
-            <key name="rdp1">
-                <dword name="Is Session">1</dword>
-                <string name="Hostname">srv</string>
-                <string name="Protocol Name">RDP</string>
+            <key name="Windows">
+                <key name="rdp1">
+                    <dword name="Is Session">1</dword>
+                    <string name="Hostname">srv</string>
+                    <string name="Protocol Name">RDP</string>
+                </key>
             </key>"#,
         );
-        let (_, sessions, warnings) = parse(&xml).unwrap();
+        let (folders, sessions, skipped, warnings) = parse(&xml).unwrap();
         assert!(sessions.is_empty());
         assert_eq!(warnings.len(), 1);
         assert!(warnings[0].to_lowercase().contains("rdp"));
+        assert_eq!(skipped.len(), 1);
+        assert_eq!(skipped[0].name, "rdp1");
+        assert_eq!(skipped[0].folder_temp_id, folders[0].temp_id);
     }
 
     #[test]
@@ -612,7 +635,7 @@ mod tests {
                 <string name="Protocol Name">SSH2</string>
             </key>"#,
         );
-        let (_, sessions, _) = parse(&xml).unwrap();
+        let (_, sessions, _, _) = parse(&xml).unwrap();
         assert_eq!(sessions.len(), 1);
         assert_eq!(sessions[0].name, "real");
     }
@@ -632,7 +655,7 @@ mod tests {
                 </key>
             </key>"#,
         );
-        let (folders, sessions, _) = parse(&xml).unwrap();
+        let (folders, sessions, _, _) = parse(&xml).unwrap();
         assert_eq!(folders.len(), 2);
         assert_eq!(folders[0].name, "Production");
         assert_eq!(folders[1].name, "EU");
@@ -658,9 +681,24 @@ mod tests {
                 <string name="Firewall Name">Session:bastion</string>
             </key>"#,
         );
-        let (_, sessions, _) = parse(&xml).unwrap();
+        let (_, sessions, _, _) = parse(&xml).unwrap();
         let target = sessions.iter().find(|s| s.name == "target").unwrap();
         assert_eq!(target.jump_host_name.as_deref(), Some("bastion"));
+    }
+
+    #[test]
+    fn parse_stops_once_past_the_warning_limit() {
+        // Each malformed element is a warning, and a crafted file can repeat
+        // one at will; the parse must not collect them without bound.
+        let junk = "<string>x</string>".repeat(MAX_IMPORT_SESSIONS + 1);
+        let xml = wrap(&format!(
+            r#"<key name="s">{junk}<string name="Hostname">h</string></key>"#
+        ));
+        let err = parse(&xml).unwrap_err();
+        assert!(
+            err.starts_with("Too many skipped or unreadable entries"),
+            "{err}"
+        );
     }
 
     #[test]
@@ -692,7 +730,7 @@ mod tests {
                 <string name="Protocol Name">SSH2</string>
             </key>"#,
         );
-        let (_, sessions, _) = parse(&xml).unwrap();
+        let (_, sessions, _, _) = parse(&xml).unwrap();
         assert_eq!(sessions.len(), 1);
     }
 
@@ -709,7 +747,7 @@ mod tests {
                 <string name="Username">dom&amp;user&lt;&gt;&quot;&apos;</string>
             </key>"#,
         );
-        let (_, sessions, _) = parse(&xml).unwrap();
+        let (_, sessions, _, _) = parse(&xml).unwrap();
         assert_eq!(sessions[0].hostname, "web-1.lan");
         assert_eq!(sessions[0].username.as_deref(), Some("dom&user<>\"'"));
     }
@@ -727,7 +765,7 @@ mod tests {
                 <string name="Username">a&custom;b&#0;c</string>
             </key>"#,
         );
-        let (_, sessions, _) = parse(&xml).unwrap();
+        let (_, sessions, _, _) = parse(&xml).unwrap();
         assert_eq!(sessions[0].username.as_deref(), Some("a&custom;b&#0;c"));
     }
 }

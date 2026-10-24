@@ -81,6 +81,16 @@ fn sanitize_imported_name(raw: &str) -> String {
     strip_and_cap(raw, MAX_IMPORTED_NAME_LEN)
 }
 
+/// Sanitize a jump host reference, or a session name as a reference matches
+/// it, with one character more than the name cap. A string still longer than
+/// the cap afterwards was over-long in the file: `JumpHostIndex` neither
+/// tracks such a reference nor can such a name equal a tracked one. Cutting
+/// both to the cap instead would match whatever shares the first 255
+/// characters.
+fn sanitize_reference(raw: &str) -> String {
+    strip_and_cap(raw, MAX_IMPORTED_NAME_LEN + 1)
+}
+
 /// Sanitize a warning or error message for display. Parser messages quote
 /// raw file content (session and key names, protocol strings, XML fragments),
 /// so they get the same character filtering as names.
@@ -120,6 +130,28 @@ fn check_import_counts(folders: usize, sessions: usize) -> Result<(), String> {
     Ok(())
 }
 
+/// Stop a parse as soon as it holds more entries than an import may take.
+/// The 100 MB file cap alone allows millions of tiny entries, and without
+/// this a file would be parsed in full before `check_import_counts` saw it.
+/// Warnings get the session limit: every dropped session is one, and so is
+/// every malformed element, which a crafted file can repeat at will.
+fn check_parsed_counts(folders: usize, sessions: usize, warnings: usize) -> Result<(), String> {
+    for (count, max, what) in [
+        (folders, MAX_IMPORT_FOLDERS, "folders"),
+        (sessions, MAX_IMPORT_SESSIONS, "sessions"),
+        (
+            warnings,
+            MAX_IMPORT_SESSIONS,
+            "skipped or unreadable entries",
+        ),
+    ] {
+        if count > max {
+            return Err(format!("Too many {what} in import (more than {max})"));
+        }
+    }
+    Ok(())
+}
+
 /// Clamp an imported port to the valid TCP range. Returns `None` if the
 /// value cannot be represented as a valid port, signaling the caller to
 /// skip the session.
@@ -131,8 +163,14 @@ fn validate_port(port: i32) -> Option<i32> {
     }
 }
 
-/// Return type shared by both parsers: (folders, sessions, warnings).
-type ParseResult = (Vec<ImportedFolder>, Vec<ImportedSession>, Vec<String>);
+/// Return type shared by both parsers: (folders, sessions, skipped sessions,
+/// warnings).
+type ParseResult = (
+    Vec<ImportedFolder>,
+    Vec<ImportedSession>,
+    Vec<SkippedSession>,
+    Vec<String>,
+);
 
 // ── Common types ────────────────────────────────────────────────────
 
@@ -144,6 +182,16 @@ pub struct ImportedFolder {
     pub name: String,
     /// `None` only for the root import folder; all others reference a parent.
     pub parent_temp_id: Option<usize>,
+}
+
+/// A session the parser dropped (unsupported protocol, no hostname), kept by
+/// name and folder only: a jump host reference that also matches it is then
+/// reported as ambiguous instead of being linked to the copy that remained.
+#[derive(Debug)]
+pub struct SkippedSession {
+    pub name: String,
+    /// References an `ImportedFolder.temp_id`.
+    pub folder_temp_id: usize,
 }
 
 /// A session extracted from an external session file.
@@ -217,7 +265,7 @@ pub async fn import_mremoteng(
     }
 
     emit_progress(&app, "parsing", 0, 0);
-    let (folders, sessions, warnings) = mremoteng::parse(&xml)
+    let (folders, sessions, skipped, warnings) = mremoteng::parse(&xml)
         .inspect_err(|_| tracing::warn!("mRemoteNG import failed to parse"))
         .map_err(|e| sanitize_message(&e))?;
     persist_import(
@@ -226,6 +274,7 @@ pub async fn import_mremoteng(
         "mRemoteNG Import",
         folders,
         sessions,
+        &skipped,
         warnings,
     )
     .await
@@ -247,7 +296,7 @@ pub async fn import_securecrt(
     }
 
     emit_progress(&app, "parsing", 0, 0);
-    let (folders, sessions, warnings) = securecrt::parse(&xml)
+    let (folders, sessions, skipped, warnings) = securecrt::parse(&xml)
         .inspect_err(|_| tracing::warn!("SecureCRT import failed to parse"))
         .map_err(|e| sanitize_message(&e))?;
     persist_import(
@@ -256,12 +305,126 @@ pub async fn import_securecrt(
         "SecureCRT Import",
         folders,
         sessions,
+        &skipped,
         warnings,
     )
     .await
 }
 
 // ── Shared import-to-DB logic ───────────────────────────────────────
+
+/// The sessions in the file that jump host references point at. A session
+/// answers to its bare name (mRemoteNG's `SSHTunnelConnectionName`) and to
+/// its folder path ending in that name (`Prod/EU/bastion`), so a reference
+/// that carries a path can pick out one of several sessions sharing a name.
+/// Sessions that were skipped or failed to create are counted too, so a name
+/// the file uses twice stays ambiguous even when only one copy was imported.
+///
+/// Only references that appear in the file are tracked, each with a match
+/// count and the first match, so the index is sized by the references and not
+/// by the sessions, of which dropped ones are not covered by the import caps.
+struct JumpHostIndex(HashMap<String, JumpHostMatches>);
+
+#[derive(Default)]
+struct JumpHostMatches {
+    count: usize,
+    /// Database id of the first match, `None` if it was not imported.
+    first: Option<Uuid>,
+}
+
+impl JumpHostIndex {
+    /// An index that will count the sessions matching `references`, which
+    /// come from `sanitize_reference`. One that sanitized to nothing names
+    /// nothing, and one over the name cap names nothing that can be matched
+    /// safely.
+    fn new(references: impl IntoIterator<Item = String>) -> Self {
+        Self(
+            references
+                .into_iter()
+                .filter(|r| !r.is_empty() && r.chars().count() <= MAX_IMPORTED_NAME_LEN)
+                .map(|r| (r, JumpHostMatches::default()))
+                .collect(),
+        )
+    }
+
+    /// `path` is the session's folder path joined with its name, or `None`
+    /// when the session sits directly under the import root (its name is its
+    /// path) or the path is too long for a reference to match. The name and
+    /// the path always differ, so a session counts at most once per reference.
+    fn insert(&mut self, name: &str, path: Option<&str>, id: Option<Uuid>) {
+        for key in [Some(name), path].into_iter().flatten() {
+            if let Some(matches) = self.0.get_mut(key) {
+                if matches.count == 0 {
+                    matches.first = id;
+                }
+                matches.count += 1;
+            }
+        }
+    }
+
+    /// The session that `reference` on session `session_id` names, or the
+    /// warning to report instead. A reference that matches several sessions
+    /// is never guessed at: linking the wrong bastion routes the connection
+    /// through a host the user did not choose.
+    fn resolve(
+        &self,
+        session_id: Uuid,
+        session_name: &str,
+        reference: &str,
+    ) -> Result<Uuid, String> {
+        match self.0.get(reference) {
+            Some(JumpHostMatches {
+                count: 1,
+                first: Some(id),
+            }) if *id == session_id => Err(format!(
+                "Session \"{session_name}\" names itself as its jump host; left unset"
+            )),
+            Some(JumpHostMatches {
+                count: 1,
+                first: Some(id),
+            }) => Ok(*id),
+            Some(JumpHostMatches {
+                count: 1,
+                first: None,
+            }) => Err(format!(
+                "Jump host \"{reference}\" for \"{session_name}\" was not imported; left unset"
+            )),
+            Some(JumpHostMatches { count, .. }) if *count > 1 => Err(format!(
+                "Jump host \"{reference}\" for \"{session_name}\" matches {count} sessions in \
+                 the file; left unset"
+            )),
+            // Matched nothing, or was empty and never tracked.
+            _ => Err(format!(
+                "Jump host \"{reference}\" for \"{session_name}\" not found among \
+                 imported sessions"
+            )),
+        }
+    }
+}
+
+/// `parent` and `name` joined into a jump host reference path, or `None` when
+/// the result is longer than a reference can be. References are capped like
+/// names, so a longer path could never match one, and not building it keeps a
+/// deeply nested file from costing a long path string per folder and session.
+/// A name that sanitized to nothing has no path.
+fn join_reference_path(parent: &str, name: &str) -> Option<String> {
+    let len = parent.chars().count() + 1 + name.chars().count();
+    (!name.is_empty() && len <= MAX_IMPORTED_NAME_LEN).then(|| format!("{parent}/{name}"))
+}
+
+/// The reference path of a session named `name` in folder `folder_temp_id`:
+/// `None` directly under the import root, where the name is the path, and
+/// in a folder whose path is already too long for a reference.
+fn session_reference_path(
+    folder_paths: &HashMap<usize, Option<String>>,
+    folder_temp_id: usize,
+    name: &str,
+) -> Option<String> {
+    match folder_paths.get(&folder_temp_id) {
+        Some(Some(folder_path)) => join_reference_path(folder_path, name),
+        _ => None,
+    }
+}
 
 /// Persist parsed folders and sessions into the database.
 ///
@@ -274,6 +437,7 @@ async fn persist_import(
     root_name: &str,
     folders: Vec<ImportedFolder>,
     sessions: Vec<ImportedSession>,
+    skipped: &[SkippedSession],
     mut warnings: Vec<String>,
 ) -> Result<ImportResult, String> {
     // Checked before anything is written, so an oversized file leaves no
@@ -308,6 +472,11 @@ async fn persist_import(
     // Map temp_id → real DB UUID. temp_id 0 = root folder.
     let mut id_map: HashMap<usize, Uuid> = HashMap::new();
     id_map.insert(0, root_folder.id);
+    // temp_id → folder path for jump host references, `None` once it is too
+    // long for a reference to match. Paths follow the file even where a folder
+    // failed to create and its contents fell back to the import root, since
+    // the file's references are written against the file's layout.
+    let mut folder_paths: HashMap<usize, Option<String>> = HashMap::new();
 
     let folder_total = folders.len() as u32;
     emit_progress(app, "folders", 0, folder_total);
@@ -320,6 +489,13 @@ async fn persist_import(
             .unwrap_or(root_folder.id);
 
         let safe_name = sanitize_imported_name(&folder.name);
+        let path = match folder.parent_temp_id.and_then(|tid| folder_paths.get(&tid)) {
+            Some(Some(parent_path)) => join_reference_path(parent_path, &safe_name),
+            Some(None) => None,
+            // A top-level folder: its parent is the import root.
+            None => (!safe_name.is_empty()).then(|| safe_name.clone()),
+        };
+        folder_paths.insert(folder.temp_id, path);
         match db
             .create_folder(NewFolder {
                 name: safe_name.clone(),
@@ -341,9 +517,21 @@ async fn persist_import(
     }
     emit_progress(app, "folders", folder_total, folder_total);
 
-    // Create sessions and track (name → session_id) for jump host resolution.
-    let mut session_name_map: HashMap<String, Uuid> = HashMap::new();
-    let mut jump_host_pending: Vec<(Uuid, String)> = Vec::new();
+    // Create sessions and index them for jump host resolution, starting with
+    // the ones the parser already dropped.
+    let mut jump_targets = JumpHostIndex::new(
+        sessions
+            .iter()
+            .filter_map(|s| s.jump_host_name.as_deref())
+            .map(sanitize_reference),
+    );
+    for dropped in skipped {
+        let name = sanitize_reference(&dropped.name);
+        let path = session_reference_path(&folder_paths, dropped.folder_temp_id, &name);
+        jump_targets.insert(&name, path.as_deref(), None);
+    }
+    // (session id, session name, jump host reference)
+    let mut jump_host_pending: Vec<(Uuid, String, String)> = Vec::new();
 
     let session_total = sessions.len() as u32;
     emit_progress(app, "sessions", 0, session_total);
@@ -356,51 +544,58 @@ async fn persist_import(
 
         let safe_name = sanitize_imported_name(&session.name);
         let safe_hostname = sanitize_imported_name(&session.hostname);
-        let Some(safe_port) = validate_port(session.port) else {
-            warnings.push(format!(
-                "Skipped session \"{}\": invalid port {}",
-                safe_name, session.port
-            ));
-            if (i + 1) % PROGRESS_STEP == 0 {
-                emit_progress(app, "sessions", (i + 1) as u32, session_total);
+        let created_id = match validate_port(session.port) {
+            None => {
+                warnings.push(format!(
+                    "Skipped session \"{}\": invalid port {}",
+                    safe_name, session.port
+                ));
+                None
             }
-            continue;
-        };
-
-        match db
-            .create_session(NewSession {
-                folder_id: folder_uuid,
-                name: safe_name.clone(),
-                hostname: safe_hostname,
-                port: safe_port,
-                protocol: session.protocol.clone(),
-                username: session
-                    .username
-                    .as_deref()
-                    .map(sanitize_imported_name)
-                    .unwrap_or_default(),
-                auth_method: "password".to_string(),
-                jump_host_id: None,
-                tags: String::new(),
-                icon: String::new(),
-                highlight_profile_id: None,
-                credential_profile_id: None,
-                login_sequence_id: None,
-                legacy_algorithms: false,
-            })
-            .await
-        {
-            Ok(created) => {
-                session_name_map.insert(safe_name.clone(), created.id);
-                if let Some(ref jump_name) = session.jump_host_name {
-                    jump_host_pending.push((created.id, sanitize_imported_name(jump_name)));
+            Some(safe_port) => match db
+                .create_session(NewSession {
+                    folder_id: folder_uuid,
+                    name: safe_name.clone(),
+                    hostname: safe_hostname,
+                    port: safe_port,
+                    protocol: session.protocol.clone(),
+                    username: session
+                        .username
+                        .as_deref()
+                        .map(sanitize_imported_name)
+                        .unwrap_or_default(),
+                    auth_method: "password".to_string(),
+                    jump_host_id: None,
+                    tags: String::new(),
+                    icon: String::new(),
+                    highlight_profile_id: None,
+                    credential_profile_id: None,
+                    login_sequence_id: None,
+                    legacy_algorithms: false,
+                })
+                .await
+            {
+                Ok(created) => {
+                    if let Some(ref jump_name) = session.jump_host_name {
+                        jump_host_pending.push((
+                            created.id,
+                            safe_name.clone(),
+                            sanitize_reference(jump_name),
+                        ));
+                    }
+                    sessions_created += 1;
+                    Some(created.id)
                 }
-                sessions_created += 1;
-            }
-            Err(e) => {
-                warnings.push(format!("Failed to create session \"{safe_name}\": {e}"));
-            }
-        }
+                Err(e) => {
+                    warnings.push(format!("Failed to create session \"{safe_name}\": {e}"));
+                    None
+                }
+            },
+        };
+        // Matched as a reference sees it, not as stored: see `sanitize_reference`.
+        let name = sanitize_reference(&session.name);
+        let path = session_reference_path(&folder_paths, session.folder_temp_id, &name);
+        jump_targets.insert(&name, path.as_deref(), created_id);
         if (i + 1) % PROGRESS_STEP == 0 {
             emit_progress(app, "sessions", (i + 1) as u32, session_total);
         }
@@ -412,25 +607,26 @@ async fn persist_import(
     if jump_total > 0 {
         emit_progress(app, "jump_hosts", 0, jump_total);
     }
-    for (session_id, jump_name) in &jump_host_pending {
-        if let Some(&jump_id) = session_name_map.get(jump_name) {
-            if let Err(e) = db
-                .update_session(
-                    *session_id,
-                    crate::db::models::UpdateSession {
-                        jump_host_id: Some(Some(jump_id)),
-                        ..Default::default()
-                    },
-                )
-                .await
-            {
-                warnings.push(format!(
-                    "Failed to set jump host \"{jump_name}\" on session: {e}"
-                ));
+    for (session_id, session_name, jump_name) in &jump_host_pending {
+        let jump_id = match jump_targets.resolve(*session_id, session_name, jump_name) {
+            Ok(id) => id,
+            Err(warning) => {
+                warnings.push(warning);
+                continue;
             }
-        } else {
+        };
+        if let Err(e) = db
+            .update_session(
+                *session_id,
+                crate::db::models::UpdateSession {
+                    jump_host_id: Some(Some(jump_id)),
+                    ..Default::default()
+                },
+            )
+            .await
+        {
             warnings.push(format!(
-                "Jump host \"{jump_name}\" not found among imported sessions"
+                "Failed to set jump host \"{jump_name}\" on \"{session_name}\": {e}"
             ));
         }
     }
@@ -505,6 +701,184 @@ mod tests {
         let shown = finalize_warnings(vec!["a".into(), "b".into()]);
         assert_eq!(shown, ["a", "b"]);
         assert!(finalize_warnings(Vec::new()).is_empty());
+    }
+
+    /// An index over `references`, as `persist_import` builds it.
+    fn index_for(references: &[&str]) -> JumpHostIndex {
+        JumpHostIndex::new(references.iter().map(|r| (*r).to_string()))
+    }
+
+    /// Index a session as `persist_import` does, from its folder path
+    /// (empty for the import root).
+    fn index_session(index: &mut JumpHostIndex, folder: &str, name: &str, id: Option<Uuid>) {
+        let path = (!folder.is_empty())
+            .then(|| join_reference_path(folder, name))
+            .flatten();
+        index.insert(name, path.as_deref(), id);
+    }
+
+    #[test]
+    fn jump_host_resolves_a_unique_name_and_a_folder_path() {
+        let (bastion, target) = (Uuid::new_v4(), Uuid::new_v4());
+        let mut index = index_for(&["bastion", "Prod/EU/bastion", "EU/bastion"]);
+        index_session(&mut index, "Prod/EU", "bastion", Some(bastion));
+        index_session(&mut index, "", "target", Some(target));
+        assert_eq!(index.resolve(target, "target", "bastion"), Ok(bastion));
+        assert_eq!(
+            index.resolve(target, "target", "Prod/EU/bastion"),
+            Ok(bastion)
+        );
+        assert_eq!(
+            index.resolve(target, "target", "EU/bastion"),
+            Err("Jump host \"EU/bastion\" for \"target\" not found among imported sessions".into())
+        );
+    }
+
+    #[test]
+    fn jump_host_shared_name_is_left_unset_unless_a_path_picks_one() {
+        // Last-one-wins by name used to link whichever duplicate came last.
+        let (eu, us, target) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
+        let mut index = index_for(&["bastion", "EU/bastion", "US/bastion"]);
+        index_session(&mut index, "EU", "bastion", Some(eu));
+        index_session(&mut index, "US", "bastion", Some(us));
+        assert_eq!(
+            index.resolve(target, "target", "bastion"),
+            Err(
+                "Jump host \"bastion\" for \"target\" matches 2 sessions in the file; left unset"
+                    .into()
+            )
+        );
+        assert_eq!(index.resolve(target, "target", "EU/bastion"), Ok(eu));
+        assert_eq!(index.resolve(target, "target", "US/bastion"), Ok(us));
+    }
+
+    #[test]
+    fn jump_host_shared_name_stays_ambiguous_when_one_copy_was_not_imported() {
+        // The file is what is ambiguous; a duplicate that was skipped — by
+        // the parser or by `persist_import` — must not leave the other copy
+        // looking unique.
+        let (us, target) = (Uuid::new_v4(), Uuid::new_v4());
+        let mut index = index_for(&["bastion", "EU/bastion", "US/bastion"]);
+        index_session(&mut index, "EU", "bastion", None);
+        index_session(&mut index, "US", "bastion", Some(us));
+        assert!(index.resolve(target, "target", "bastion").is_err());
+        assert_eq!(
+            index.resolve(target, "target", "EU/bastion"),
+            Err("Jump host \"EU/bastion\" for \"target\" was not imported; left unset".into())
+        );
+        assert_eq!(index.resolve(target, "target", "US/bastion"), Ok(us));
+    }
+
+    #[test]
+    fn jump_host_path_and_slashed_name_collide_as_ambiguous() {
+        // A root-level session literally named "EU/bastion" and "bastion" in
+        // folder "EU" both answer to "EU/bastion".
+        let (slashed, nested, target) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
+        let mut index = index_for(&["EU/bastion"]);
+        index_session(&mut index, "", "EU/bastion", Some(slashed));
+        index_session(&mut index, "EU", "bastion", Some(nested));
+        assert!(index.resolve(target, "target", "EU/bastion").is_err());
+    }
+
+    #[test]
+    fn jump_host_naming_its_own_session_is_left_unset() {
+        let web = Uuid::new_v4();
+        let mut index = index_for(&["web"]);
+        index_session(&mut index, "", "web", Some(web));
+        assert_eq!(
+            index.resolve(web, "web", "web"),
+            Err("Session \"web\" names itself as its jump host; left unset".into())
+        );
+    }
+
+    #[test]
+    fn jump_host_empty_name_is_not_a_target() {
+        // A name made only of control characters sanitizes to "", and so
+        // does a reference made the same way.
+        let (blank, target) = (Uuid::new_v4(), Uuid::new_v4());
+        let mut index = index_for(&["", "EU/"]);
+        index_session(&mut index, "EU", "", Some(blank));
+        assert!(index.resolve(target, "target", "").is_err());
+        assert!(index.resolve(target, "target", "EU/").is_err());
+    }
+
+    #[test]
+    fn jump_host_index_keeps_only_what_a_reference_uses() {
+        // Skipped sessions are not covered by the import caps; the index
+        // must not grow with sessions nothing points at.
+        let mut index = index_for(&["bastion"]);
+        for i in 0..1000 {
+            index_session(&mut index, "Deep/Folder", &format!("rdp-{i}"), None);
+        }
+        index_session(&mut index, "Deep/Folder", "bastion", Some(Uuid::new_v4()));
+        assert_eq!(index.0.len(), 1);
+        assert_eq!(index.0["bastion"].count, 1);
+    }
+
+    #[test]
+    fn jump_host_overlong_name_or_reference_matches_nothing_by_prefix() {
+        // Stored names are cut to the cap. Neither an over-long reference nor
+        // an over-long name may match the other side by its first 255
+        // characters alone.
+        let long = "x".repeat(MAX_IMPORTED_NAME_LEN + 10);
+        let at_cap = "x".repeat(MAX_IMPORTED_NAME_LEN);
+        let (bastion, target) = (Uuid::new_v4(), Uuid::new_v4());
+
+        let mut index = JumpHostIndex::new([sanitize_reference(&long)]);
+        index_session(&mut index, "", &sanitize_reference(&at_cap), Some(bastion));
+        assert!(index
+            .resolve(target, "target", &sanitize_reference(&long))
+            .is_err());
+
+        let mut index = JumpHostIndex::new([sanitize_reference(&at_cap)]);
+        index_session(&mut index, "", &sanitize_reference(&long), Some(bastion));
+        assert!(index
+            .resolve(target, "target", &sanitize_reference(&at_cap))
+            .is_err());
+
+        // At the cap, the reference and the name are the same string.
+        let mut index = JumpHostIndex::new([sanitize_reference(&at_cap)]);
+        index_session(&mut index, "", &sanitize_reference(&at_cap), Some(bastion));
+        assert_eq!(
+            index.resolve(target, "target", &sanitize_reference(&at_cap)),
+            Ok(bastion)
+        );
+    }
+
+    #[test]
+    fn check_parsed_counts_stops_past_each_limit() {
+        assert!(
+            check_parsed_counts(MAX_IMPORT_FOLDERS, MAX_IMPORT_SESSIONS, MAX_IMPORT_SESSIONS)
+                .is_ok()
+        );
+        assert_eq!(
+            check_parsed_counts(MAX_IMPORT_FOLDERS + 1, 0, 0),
+            Err(format!(
+                "Too many folders in import (more than {MAX_IMPORT_FOLDERS})"
+            ))
+        );
+        assert!(check_parsed_counts(0, MAX_IMPORT_SESSIONS + 1, 0).is_err());
+        assert_eq!(
+            check_parsed_counts(0, 0, MAX_IMPORT_SESSIONS + 1),
+            Err(format!(
+                "Too many skipped or unreadable entries in import (more than {MAX_IMPORT_SESSIONS})"
+            ))
+        );
+    }
+
+    #[test]
+    fn join_reference_path_stops_at_the_reference_length_cap() {
+        assert_eq!(
+            join_reference_path("EU", "bastion").as_deref(),
+            Some("EU/bastion")
+        );
+        // Exactly at the cap in characters, multi-byte ones included.
+        let parent = "é".repeat(MAX_IMPORTED_NAME_LEN - 2);
+        assert_eq!(
+            join_reference_path(&parent, "x").map(|p| p.chars().count()),
+            Some(MAX_IMPORTED_NAME_LEN)
+        );
+        assert_eq!(join_reference_path(&parent, "xy"), None);
     }
 
     #[test]
