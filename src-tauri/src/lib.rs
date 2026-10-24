@@ -551,6 +551,32 @@ fn build_app_menu(
     Ok(menu)
 }
 
+/// The app log level to use for the configured `level`. The value comes from
+/// the config file, where it may have been edited by hand, and is validated
+/// here because `app_log_directives` splices it into the filter string: a
+/// value such as `trace,sqlx=trace` would otherwise switch on logging for
+/// other crates. An invalid value falls back to the default.
+fn app_log_level(level: &str) -> String {
+    // EnvFilter reads levels case-insensitively, so a hand-edited "DEBUG"
+    // has always worked and must keep working.
+    let normalized = level.to_ascii_lowercase();
+    if config::AppLoggingConfig::validate_level(&normalized).is_ok() {
+        normalized
+    } else {
+        let fallback = config::AppLoggingConfig::default().level;
+        // The subscriber is not installed yet, so this goes straight to stderr.
+        eprintln!("Invalid app log level {level:?} in config; using {fallback:?}.");
+        fallback
+    }
+}
+
+/// Filter directives for a level from `app_log_level`. Only the app's own
+/// targets get that level; every other crate (sqlx, russh, hyper, ...) has no
+/// directive and so stays off, whatever the level.
+fn app_log_directives(level: &str) -> String {
+    format!("shellstation={level},shellstation_lib={level}")
+}
+
 /// Build the tracing subscriber from the application config.
 ///
 /// Always installs a stdout layer. When `cfg.enabled` is true, also installs
@@ -566,12 +592,9 @@ fn init_tracing(
 ) -> Option<WorkerGuard> {
     use tracing_subscriber::fmt;
 
-    let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-        EnvFilter::new(format!(
-            "shellstation={lvl},shellstation_lib={lvl}",
-            lvl = cfg.level
-        ))
-    });
+    let level = app_log_level(&cfg.level);
+    let env_filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::new(app_log_directives(&level)));
 
     let stdout_layer = fmt::layer().with_writer(std::io::stdout);
 
@@ -621,7 +644,7 @@ fn init_tracing(
             .init();
         tracing::info!(
             log_dir = %log_dir.display(),
-            level = %cfg.level,
+            level = %level,
             "Application file logging enabled (daily rotation)"
         );
         return Some(guard);
@@ -1070,6 +1093,26 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn app_log_directives_leave_other_crates_off() {
+        use tracing::Level;
+        let subscriber = tracing_subscriber::registry()
+            .with(EnvFilter::new(app_log_directives(&app_log_level("trace"))));
+        tracing::subscriber::with_default(subscriber, || {
+            assert!(tracing::enabled!(target: "shellstation_lib::import", Level::TRACE));
+            assert!(!tracing::enabled!(target: "sqlx::query", Level::ERROR));
+            assert!(!tracing::enabled!(target: "russh::client", Level::ERROR));
+        });
+    }
+
+    #[test]
+    fn app_log_level_normalizes_case_and_rejects_extra_directives() {
+        assert_eq!(app_log_level("debug"), "debug");
+        assert_eq!(app_log_level("DEBUG"), "debug");
+        assert_eq!(app_log_level("trace,sqlx=trace"), "info");
+        assert_eq!(app_log_level(""), "info");
+    }
 
     // sanitize_pg_error converts sqlx / libpq error text into a UX-safe
     // message. The branches matter: each one corresponds to a distinct

@@ -410,6 +410,16 @@ cargo tauri dev
 
 This compiles the Rust backend, starts the Vite dev server for the frontend, and opens the application window. The first build takes several minutes as it compiles all Rust dependencies.
 
+### Verbose logging
+
+The **Log level** under **Application Logging** in Settings applies to ShellStation's own code only; every third-party crate stays silent at any level. For more, set `RUST_LOG`, which replaces that filter entirely:
+
+```bash
+RUST_LOG=shellstation_lib=trace,russh=debug cargo tauri dev
+```
+
+On Windows PowerShell, set `$env:RUST_LOG = "shellstation_lib=trace,russh=debug"` first. `RUST_LOG` is passed through as given, so third-party targets at `debug` or `trace` write whatever they log — `sqlx` every SQL statement, `russh` protocol detail — and with application logging enabled, that lands in the rotating log file too. Unset it before collecting a log to share.
+
 ---
 
 ## 8. Verify the Environment
