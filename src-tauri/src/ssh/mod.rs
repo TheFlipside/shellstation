@@ -127,10 +127,10 @@ pub struct SshConnectParams {
     pub login_sequence: Option<crate::login_sequence::LoginSequenceConfig>,
 }
 
-/// Error returned by `ssh_write` once a session's channel or connection has
-/// closed. The frontend matches this exact string (`SESSION_CLOSED_ERROR` in
-/// `src/terminalRegistry.ts`) to mark the tab exited when the exit event was
-/// missed, so the two must change together.
+/// Error returned by `ssh_write` and `telnet_write` once a session's channel
+/// or connection has closed. The frontend matches this exact string
+/// (`SESSION_CLOSED_ERROR` in `src/terminalRegistry.ts`) to mark the tab
+/// exited when the exit event was missed, so the two must change together.
 pub const SESSION_CLOSED_ERROR: &str = "Session closed";
 
 /// Manages all active SSH sessions.

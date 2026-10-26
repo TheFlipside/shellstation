@@ -9,7 +9,7 @@ use tokio::sync::{mpsc, watch, Mutex, Semaphore};
 use tokio::task::JoinHandle;
 use tracing::{debug, info, warn};
 
-use crate::ssh::ResizeRequest;
+use crate::ssh::{ResizeRequest, SESSION_CLOSED_ERROR};
 
 // ── Telnet protocol constants (RFC 854 / RFC 1073) ─────────────────
 
@@ -89,11 +89,22 @@ impl TelnetManager {
     }
 
     /// Get the write sender for a session.
+    ///
+    /// Fails with [`SESSION_CLOSED_ERROR`] once the session's I/O task has
+    /// ended — connection closed, a read or write error, or no way left to
+    /// emit output. That task owns the write channel's receiver, so the
+    /// channel closes exactly then. A session stays registered until the
+    /// frontend calls `telnet_disconnect`, and the send happens on a detached
+    /// task, so without this check writes to a dead session would report
+    /// success and the frontend would never learn it is gone.
     pub fn get_write_sender(&self, id: &str) -> Result<mpsc::Sender<Vec<u8>>, String> {
         let session = self
             .sessions
             .get(id)
             .ok_or_else(|| format!("Telnet session {id} not found"))?;
+        if session.write_tx.is_closed() {
+            return Err(SESSION_CLOSED_ERROR.to_string());
+        }
         Ok(session.write_tx.clone())
     }
 
@@ -578,5 +589,51 @@ mod tests {
     fn telnet_fallback() {
         let s = sanitize_telnet_error("/dev/pts/3: I/O error reading from device");
         assert_eq!(s, "Telnet connection failed");
+    }
+
+    // ── get_write_sender ─────────────────────────────────────────────────
+    // A dead session must reject writes with the exact string the frontend
+    // matches, or its tab keeps looking alive while input goes nowhere.
+
+    /// A session whose write channel receiver stands in for the I/O task.
+    fn session_with_receiver() -> (TelnetSession, mpsc::Receiver<Vec<u8>>) {
+        let (write_tx, write_rx) = mpsc::channel(1);
+        let (resize_tx, _) = watch::channel(None);
+        let session = TelnetSession {
+            reader_task: tokio::spawn(async {}),
+            write_tx,
+            resize_tx,
+            write_semaphore: Arc::new(Semaphore::new(1)),
+        };
+        (session, write_rx)
+    }
+
+    #[tokio::test]
+    async fn write_sender_available_while_io_task_runs() {
+        let (session, _write_rx) = session_with_receiver();
+        let mut manager = TelnetManager::default();
+        manager.register_session("s".to_string(), session).unwrap();
+
+        assert!(manager.get_write_sender("s").is_ok());
+    }
+
+    #[tokio::test]
+    async fn write_sender_rejects_closed_session() {
+        let (session, write_rx) = session_with_receiver();
+        let mut manager = TelnetManager::default();
+        manager.register_session("s".to_string(), session).unwrap();
+
+        drop(write_rx); // the I/O task ended
+        assert_eq!(
+            manager.get_write_sender("s").err().as_deref(),
+            Some(SESSION_CLOSED_ERROR)
+        );
+    }
+
+    #[test]
+    fn write_sender_rejects_unknown_session() {
+        let manager = TelnetManager::default();
+        let err = manager.get_write_sender("missing").unwrap_err();
+        assert_eq!(err, "Telnet session missing not found");
     }
 }

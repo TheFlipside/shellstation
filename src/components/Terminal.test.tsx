@@ -399,13 +399,17 @@ describe("Terminal session exit", () => {
    * Feed `data` through the terminal's input handler, as a keypress would,
    * and check it was sent — so no test can pass without a write happening.
    */
-  function typeInto(term: FakeTerminal, data: string): void {
+  function typeInto(
+    term: FakeTerminal,
+    data: string,
+    writeCmd: "ssh_write" | "telnet_write" = "ssh_write",
+  ): void {
     const call = term.onData.mock.calls[0] as [(input: string) => void] | undefined;
     if (!call) {
       throw new Error("Terminal did not subscribe to input");
     }
     call[0](data);
-    expect(invoke).toHaveBeenCalledWith("ssh_write", { id: "session-1", data });
+    expect(invoke).toHaveBeenCalledWith(writeCmd, { id: "session-1", data });
   }
 
   /** Deliver the backend's exit event to the listener the terminal registered. */
@@ -437,6 +441,19 @@ describe("Terminal session exit", () => {
     await renderSshTerminal(onExit);
 
     typeInto(latestTerminal(), "\x17");
+    await settle();
+
+    expect(onExit).toHaveBeenCalledTimes(1);
+    expect(writeCount(latestTerminal(), EXIT_MESSAGE)).toBe(1);
+  });
+
+  it("runs the exit path when a telnet write reports the session closed", async () => {
+    rejectWrites(SESSION_CLOSED_ERROR);
+    const onExit = vi.fn();
+    render(<Terminal sessionId="session-1" sessionType="telnet" visible={true} onExit={onExit} />);
+    await settle();
+
+    typeInto(latestTerminal(), "x", "telnet_write");
     await settle();
 
     expect(onExit).toHaveBeenCalledTimes(1);

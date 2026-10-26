@@ -128,7 +128,7 @@ pub async fn telnet_write(
     tokio::spawn(async move {
         let _permit = permit; // released when the task ends
         if write_tx.send(bytes).await.is_err() {
-            tracing::warn!("telnet_write: write channel closed");
+            tracing::warn!(session_id = %id, "telnet_write: connection closed, data not sent");
         }
     });
     Ok(())
