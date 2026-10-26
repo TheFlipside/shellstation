@@ -14,7 +14,7 @@ import { useHighlightStore } from "../stores/highlightStore";
 import { HighlightEngine } from "../highlightEngine";
 import { useTheme } from "../hooks/useTheme";
 import { PasteConfirmDialog } from "./PasteConfirmDialog";
-import { registerTerminal, unregisterTerminal } from "../terminalRegistry";
+import { isSessionClosedError, registerTerminal, unregisterTerminal } from "../terminalRegistry";
 import { resolveTerminalTheme } from "../terminalTheme";
 
 interface TerminalProps {
@@ -175,13 +175,33 @@ export function Terminal({
 
     termRef.current = term;
     fitAddonRef.current = fitAddon;
+
+    // Exit handling runs once, on whichever signal arrives first: the
+    // backend's exit event, or a write rejected because the session has
+    // already closed. The second path covers a late or lost event — without
+    // it the tab sits on a dead session, swallowing input, and Ctrl+W/Enter
+    // never switch to close/reconnect. Set on unmount too, so a write that
+    // rejects after teardown cannot touch the disposed terminal.
+    let sessionEnded = false;
+    const handleExit = (): void => {
+      if (sessionEnded) return;
+      sessionEnded = true;
+      term.write(`\r\n${i18n.t("terminal.processExited")}\r\n`);
+      if (sessionDbId) {
+        term.write(`${i18n.t("terminal.reconnectHint")}\r\n`);
+      }
+      onExitRef.current?.();
+    };
+
     // Let senders outside this component (command buttons, command bar)
     // reach this instance — see terminalRegistry.
-    registerTerminal(sessionId, term);
+    registerTerminal(sessionId, term, handleExit);
 
     // Forward user input to the backend.
     const onDataDisposable = term.onData((data: string) => {
-      invoke(writeCmd, { id: sessionId, data }).catch(noop);
+      invoke(writeCmd, { id: sessionId, data }).catch((err: unknown) => {
+        if (isSessionClosedError(err)) handleExit();
+      });
     });
 
     // Route clipboard text into the terminal. If the "warn before multi-line
@@ -334,15 +354,7 @@ export function Terminal({
         term.write(highlighted);
       });
 
-      exitUnlisten = await listen(`terminal-exit-${sessionId}`, () => {
-        term.write(`\r\n${i18n.t("terminal.processExited")}\r\n`);
-        if (sessionDbId) {
-          term.write(`${i18n.t("terminal.reconnectHint")}\r\n`);
-        }
-        if (onExitRef.current) {
-          onExitRef.current();
-        }
-      });
+      exitUnlisten = await listen(`terminal-exit-${sessionId}`, handleExit);
     };
 
     setupListeners()
@@ -361,6 +373,7 @@ export function Terminal({
     resizeObserver.observe(container);
 
     return () => {
+      sessionEnded = true;
       resizeObserver.disconnect();
       onDataDisposable.dispose();
       onSelectionDisposable.dispose();

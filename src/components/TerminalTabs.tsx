@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from
 import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { useTerminalStore } from "../stores/terminalStore";
+import { useTerminalStore, type SessionType } from "../stores/terminalStore";
 import { useSessionStore } from "../stores/sessionStore";
 import { Terminal } from "./Terminal";
 import { QuickConnect, type QuickConnectParams } from "./QuickConnect";
@@ -16,6 +16,17 @@ import { CommandBar } from "./CommandBar";
 
 // eslint-disable-next-line @typescript-eslint/no-empty-function
 const noop = (): void => {};
+
+/** Tear down a backend session. Failures are ignored — it may already be gone. */
+async function disconnectSession(id: string, type: SessionType): Promise<void> {
+  if (type === "ssh") {
+    await invoke("ssh_disconnect", { id }).catch(noop);
+  } else if (type === "telnet") {
+    await invoke("telnet_disconnect", { id }).catch(noop);
+  } else {
+    await invoke("pty_kill", { id }).catch(noop);
+  }
+}
 
 interface TerminalTabsProps {
   uiScale: number;
@@ -242,17 +253,23 @@ export function TerminalTabs({ uiScale }: TerminalTabsProps): React.JSX.Element 
     [showNextKbdRequest],
   );
 
+  // Tabs being closed. destroyTab awaits the backend teardown before removing
+  // the tab, and a reconnect resolving in that window must not hand its new
+  // session to a tab that is about to disappear.
+  const closingRef = useRef(new Set<string>());
+
   const destroyTab = useCallback(
     async (id: string) => {
+      // Already closing — e.g. close-on-disconnect racing a manual close.
+      if (closingRef.current.has(id)) return;
       const tab = tabs.find((tb) => tb.id === id);
-      if (tab?.type === "ssh") {
-        await invoke("ssh_disconnect", { id }).catch(noop);
-      } else if (tab?.type === "telnet") {
-        await invoke("telnet_disconnect", { id }).catch(noop);
-      } else {
-        await invoke("pty_kill", { id }).catch(noop);
+      closingRef.current.add(id);
+      try {
+        await disconnectSession(id, tab?.type ?? "local");
+        removeTab(id);
+      } finally {
+        closingRef.current.delete(id);
       }
-      removeTab(id);
     },
     [removeTab, tabs],
   );
@@ -327,16 +344,24 @@ export function TerminalTabs({ uiScale }: TerminalTabsProps): React.JSX.Element 
     [tabs, createLocalTab, addToast, t],
   );
 
+  // Tabs with a reconnect in flight. The tab stays `exited` until
+  // session_connect resolves, so a second Enter (or key repeat) would
+  // otherwise open a second connection that no tab can claim — left open
+  // until the app quits.
+  const reconnectingRef = useRef(new Set<string>());
+
   const reconnectTab = useCallback(
     (tabId: string) => {
       const tab = tabs.find((tb) => tb.id === tabId);
       if (!tab?.sessionDbId || !tab.exited) return;
+      if (reconnectingRef.current.has(tabId)) return;
       const session = useSessionStore.getState().sessions.find((s) => s.id === tab.sessionDbId);
       if (!session) {
         addToast(t("terminal.connectionFailed", { message: "Session not found" }));
         return;
       }
 
+      reconnectingRef.current.add(tabId);
       const settings = useSettingsStore.getState();
       invoke<string>("session_connect", {
         id: tab.sessionDbId,
@@ -348,6 +373,17 @@ export function TerminalTabs({ uiScale }: TerminalTabsProps): React.JSX.Element 
         keepaliveMax: settings.keepaliveMax,
       })
         .then((newConnId) => {
+          // The tab was closed, or is being closed, while connecting. Nothing
+          // would ever show or close this session, so tear it down instead of
+          // leaking it. session_connect picks the protocol from the saved
+          // session, so that decides the teardown command, not the tab.
+          const tabGone =
+            closingRef.current.has(tabId) ||
+            !useTerminalStore.getState().tabs.some((tb) => tb.id === tabId);
+          if (tabGone) {
+            void disconnectSession(newConnId, session.protocol === "telnet" ? "telnet" : "ssh");
+            return;
+          }
           // Update stableTabIdsRef so the terminal keeps its DOM position.
           const stableIds = stableTabIdsRef.current;
           const idx = stableIds.indexOf(tabId);
@@ -359,6 +395,9 @@ export function TerminalTabs({ uiScale }: TerminalTabsProps): React.JSX.Element 
         .catch((err: unknown) => {
           const msg = err instanceof Error ? err.message : String(err);
           addToast(t("terminal.connectionFailed", { message: msg }));
+        })
+        .finally(() => {
+          reconnectingRef.current.delete(tabId);
         });
     },
     [tabs, replaceTab, addToast, t],

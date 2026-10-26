@@ -5,18 +5,43 @@
  * viewport back to the prompt (`scrollOnUserInput`). Input sent from outside
  * the terminal — command buttons, the freeform command bar — goes straight to
  * the backend over IPC and never passes through xterm, so those senders need a
- * way to reach the instance and apply the same scroll behavior.
+ * way to reach the instance and apply the same scroll behavior. For the same
+ * reason they are the ones who see a write rejected because the session has
+ * closed, and need a way to hand that news to the terminal.
  *
  * Keeping the map in a plain module (rather than a Zustand store) keeps
  * non-serializable terminal objects out of application state.
  */
 import type { Terminal as XTerm } from "@xterm/xterm";
 
-const terminals = new Map<string, XTerm>();
+interface Entry {
+  term: XTerm;
+  onSessionClosed?: () => void;
+}
 
-/** Register a terminal as the live instance for `sessionId`. */
-export function registerTerminal(sessionId: string, term: XTerm): void {
-  terminals.set(sessionId, term);
+const terminals = new Map<string, Entry>();
+
+/**
+ * Error a write command rejects with once the session's connection is gone.
+ * Must match `SESSION_CLOSED_ERROR` in `src-tauri/src/ssh/mod.rs`.
+ */
+export const SESSION_CLOSED_ERROR = "Session closed";
+
+/** Whether an IPC rejection means the session is closed for good. */
+export function isSessionClosedError(err: unknown): boolean {
+  return err === SESSION_CLOSED_ERROR;
+}
+
+/**
+ * Register a terminal as the live instance for `sessionId`. `onSessionClosed`
+ * runs the terminal's exit handling when an outside sender reports closure.
+ */
+export function registerTerminal(
+  sessionId: string,
+  term: XTerm,
+  onSessionClosed?: () => void,
+): void {
+  terminals.set(sessionId, { term, onSessionClosed });
 }
 
 /**
@@ -28,7 +53,7 @@ export function registerTerminal(sessionId: string, term: XTerm): void {
  * into a no-op rather than a silently dead registry entry.
  */
 export function unregisterTerminal(sessionId: string, term: XTerm): void {
-  if (terminals.get(sessionId) === term) {
+  if (terminals.get(sessionId)?.term === term) {
     terminals.delete(sessionId);
   }
 }
@@ -38,5 +63,13 @@ export function unregisterTerminal(sessionId: string, term: XTerm): void {
  * no terminal — a disconnected or already-closed tab is not an error here.
  */
 export function scrollTerminalToBottom(sessionId: string): void {
-  terminals.get(sessionId)?.scrollToBottom();
+  terminals.get(sessionId)?.term.scrollToBottom();
+}
+
+/**
+ * Tell a session's terminal that a write was rejected because the session
+ * has closed. No-op when the session has no terminal.
+ */
+export function reportSessionClosed(sessionId: string): void {
+  terminals.get(sessionId)?.onSessionClosed?.();
 }

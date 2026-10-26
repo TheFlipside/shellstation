@@ -140,8 +140,12 @@ pub async fn ssh_write(state: State<'_, SshState>, id: String, data: String) -> 
     };
     tokio::spawn(async move {
         let _permit = permit; // released when the task ends
-        if let Err(e) = handle.data(channel_id, data.into_bytes()).await {
-            tracing::warn!("ssh_write: failed to send data: {e:?}");
+
+        // The error hands back the unsent payload. Never log it, nor its
+        // length: it is the user's raw input and can be a password typed at
+        // a prompt.
+        if handle.data(channel_id, data.into_bytes()).await.is_err() {
+            tracing::warn!(session_id = %id, "ssh_write: connection closed, data not sent");
         }
     });
     Ok(())

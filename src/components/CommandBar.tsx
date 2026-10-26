@@ -11,7 +11,11 @@ import {
 } from "./CommandButtonDialog";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
-import { scrollTerminalToBottom } from "../terminalRegistry";
+import {
+  isSessionClosedError,
+  reportSessionClosed,
+  scrollTerminalToBottom,
+} from "../terminalRegistry";
 
 // eslint-disable-next-line @typescript-eslint/no-empty-function
 const noop = (): void => {};
@@ -116,22 +120,32 @@ async function executeCommand(
   // keeps the viewport pinned because it is already at the bottom.
   scrollTerminalToBottom(sessionId);
 
-  for (const seg of segments) {
-    if (seg.type === "text") {
-      await invoke(cmd, { id: sessionId, data: seg.value });
-    } else if (seg.type === "pause") {
-      await sleep(1000);
-    } else {
-      // seg.type === "clipboard"
-      try {
-        const text = await readText();
+  try {
+    for (const seg of segments) {
+      if (seg.type === "text") {
+        await invoke(cmd, { id: sessionId, data: seg.value });
+      } else if (seg.type === "pause") {
+        await sleep(1000);
+      } else {
+        // seg.type === "clipboard". Only the read is guarded: a failed write
+        // must reach the handler below like any other segment's.
+        let text = "";
+        try {
+          text = await readText();
+        } catch {
+          // Clipboard access denied or unavailable — skip silently.
+        }
         if (text) {
           await invoke(cmd, { id: sessionId, data: text });
         }
-      } catch {
-        // Clipboard access denied or unavailable — skip silently.
       }
     }
+  } catch (err: unknown) {
+    // A tab whose exit event never arrived still looks alive, so a rejected
+    // send may be the first sign its session is gone. Hand that to the
+    // terminal so it runs the normal exit path.
+    if (isSessionClosedError(err)) reportSessionClosed(sessionId);
+    throw err;
   }
 }
 

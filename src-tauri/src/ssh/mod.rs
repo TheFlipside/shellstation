@@ -127,6 +127,12 @@ pub struct SshConnectParams {
     pub login_sequence: Option<crate::login_sequence::LoginSequenceConfig>,
 }
 
+/// Error returned by `ssh_write` once a session's channel or connection has
+/// closed. The frontend matches this exact string (`SESSION_CLOSED_ERROR` in
+/// `src/terminalRegistry.ts`) to mark the tab exited when the exit event was
+/// missed, so the two must change together.
+pub const SESSION_CLOSED_ERROR: &str = "Session closed";
+
 /// Manages all active SSH sessions.
 #[derive(Default)]
 pub struct SshManager {
@@ -158,6 +164,14 @@ impl SshManager {
 
     /// Get the handle and channel `ID` for writing to a session.
     /// The caller should drop the manager lock before performing the async write.
+    ///
+    /// Fails with [`SESSION_CLOSED_ERROR`] once the session is dead but still
+    /// registered — the reader task has stopped (channel EOF/close, end of the
+    /// message stream, or no way left to emit output to the frontend), or the
+    /// connection itself is gone. A session stays registered until the
+    /// frontend calls `ssh_disconnect`, and the actual send happens on a
+    /// detached task, so without this check writes to a dead session would
+    /// report success and the frontend would never learn it is gone.
     pub fn get_write_handle(
         &self,
         id: &str,
@@ -166,6 +180,9 @@ impl SshManager {
             .sessions
             .get(id)
             .ok_or_else(|| format!("SSH session {id} not found"))?;
+        if session.reader_task.is_finished() || session.handle.is_closed() {
+            return Err(SESSION_CLOSED_ERROR.to_string());
+        }
         Ok((Arc::clone(&session.handle), session.channel_id))
     }
 

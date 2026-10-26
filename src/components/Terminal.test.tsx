@@ -2,14 +2,20 @@
  * Terminal component tests.
  *
  * Focus of this suite: the multiline-paste confirmation flow and the focus
- * restoration that follows it. xterm.js, the Tauri IPC layer, and i18n are
- * mocked; the real Zustand settings store is used so the tests exercise the
- * same `confirmMultilinePaste` path the app does.
+ * restoration that follows it, and the session-exit path. xterm.js, the Tauri
+ * IPC layer, and i18n are mocked; the real Zustand settings store is used so
+ * the tests exercise the same `confirmMultilinePaste` path the app does.
  */
-import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { act, fireEvent, render, screen } from "@testing-library/react";
+import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { useSettingsStore } from "../stores/settingsStore";
-import { scrollTerminalToBottom } from "../terminalRegistry";
+import {
+  SESSION_CLOSED_ERROR,
+  reportSessionClosed,
+  scrollTerminalToBottom,
+} from "../terminalRegistry";
 import { Terminal as XTerm } from "@xterm/xterm";
 import { Terminal } from "./Terminal";
 
@@ -331,5 +337,217 @@ describe("Terminal focus restoration", () => {
     vi.advanceTimersByTime(100);
 
     expect(term.focus).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("Terminal session exit", () => {
+  const EXIT_MESSAGE = "\r\nterminal.processExited\r\n";
+  const RECONNECT_HINT = "terminal.reconnectHint\r\n";
+
+  beforeEach(() => {
+    // These tests await real IPC promise chains — the opt-out described at
+    // the file-level fake-timer setup.
+    vi.useRealTimers();
+  });
+
+  afterEach(() => {
+    // clearMocks keeps implementations, so put the default back.
+    vi.mocked(invoke).mockImplementation(() => Promise.resolve(undefined as never));
+  });
+
+  /**
+   * Make IPC calls reject with `err`, the way Tauri rejects with a command's
+   * error string. Only writes matter: the component swallows the
+   * terminal_ready rejection this also causes.
+   */
+  function rejectWrites(err: string): void {
+    vi.mocked(invoke).mockRejectedValue(err);
+  }
+
+  /** Render an SSH terminal and wait until its listeners are registered. */
+  async function renderSshTerminal(
+    onExit: () => void,
+    sessionDbId?: string,
+  ): Promise<ReturnType<typeof render>> {
+    const result = render(
+      <Terminal
+        sessionId="session-1"
+        sessionType="ssh"
+        sessionDbId={sessionDbId}
+        visible={true}
+        onExit={onExit}
+      />,
+    );
+    await settle();
+    return result;
+  }
+
+  /**
+   * Let pending promise chains settle — listener setup, rejected writes.
+   * They are pure microtask chains, which all drain before the next
+   * macrotask, so this does not depend on how many awaits each one has.
+   */
+  async function settle(): Promise<void> {
+    await act(async () => {
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 0);
+      });
+    });
+  }
+
+  /**
+   * Feed `data` through the terminal's input handler, as a keypress would,
+   * and check it was sent — so no test can pass without a write happening.
+   */
+  function typeInto(term: FakeTerminal, data: string): void {
+    const call = term.onData.mock.calls[0] as [(input: string) => void] | undefined;
+    if (!call) {
+      throw new Error("Terminal did not subscribe to input");
+    }
+    call[0](data);
+    expect(invoke).toHaveBeenCalledWith("ssh_write", { id: "session-1", data });
+  }
+
+  /** Deliver the backend's exit event to the listener the terminal registered. */
+  function fireExitEvent(): void {
+    const call = vi.mocked(listen).mock.calls.find(([name]) => name === "terminal-exit-session-1");
+    if (!call) {
+      throw new Error("Terminal did not listen for its exit event");
+    }
+    act(() => {
+      (call[1] as unknown as () => void)();
+    });
+  }
+
+  function reportClosed(): void {
+    act(() => {
+      reportSessionClosed("session-1");
+    });
+  }
+
+  function writeCount(term: FakeTerminal, text: string): number {
+    return term.write.mock.calls.filter(([written]) => written === text).length;
+  }
+
+  it("runs the exit path when a write reports the session closed", async () => {
+    // The exit event never arrives here — the rejected write alone has to
+    // bring the tab out of its dead-but-looks-alive state.
+    rejectWrites(SESSION_CLOSED_ERROR);
+    const onExit = vi.fn();
+    await renderSshTerminal(onExit);
+
+    typeInto(latestTerminal(), "\x17");
+    await settle();
+
+    expect(onExit).toHaveBeenCalledTimes(1);
+    expect(writeCount(latestTerminal(), EXIT_MESSAGE)).toBe(1);
+  });
+
+  it("keeps the session open on other write errors", async () => {
+    rejectWrites("Too many pending writes for this session");
+    const onExit = vi.fn();
+    await renderSshTerminal(onExit);
+
+    typeInto(latestTerminal(), "x");
+    await settle();
+
+    expect(onExit).not.toHaveBeenCalled();
+    expect(writeCount(latestTerminal(), EXIT_MESSAGE)).toBe(0);
+  });
+
+  it("runs the exit path once when the event arrives before closed writes", async () => {
+    rejectWrites(SESSION_CLOSED_ERROR);
+    const onExit = vi.fn();
+    await renderSshTerminal(onExit);
+
+    fireExitEvent();
+    typeInto(latestTerminal(), "x");
+    typeInto(latestTerminal(), "y");
+    await settle();
+
+    expect(onExit).toHaveBeenCalledTimes(1);
+    expect(writeCount(latestTerminal(), EXIT_MESSAGE)).toBe(1);
+  });
+
+  it("runs the exit path once when a closed write arrives before the event", async () => {
+    rejectWrites(SESSION_CLOSED_ERROR);
+    const onExit = vi.fn();
+    await renderSshTerminal(onExit);
+
+    typeInto(latestTerminal(), "x");
+    await settle();
+    fireExitEvent();
+
+    expect(onExit).toHaveBeenCalledTimes(1);
+    expect(writeCount(latestTerminal(), EXIT_MESSAGE)).toBe(1);
+  });
+
+  it("runs the exit path when an outside sender reports the session closed", async () => {
+    const onExit = vi.fn();
+    await renderSshTerminal(onExit);
+
+    reportClosed();
+
+    expect(onExit).toHaveBeenCalledTimes(1);
+    expect(writeCount(latestTerminal(), EXIT_MESSAGE)).toBe(1);
+  });
+
+  it("runs the exit path once when an outside report and the event both arrive", async () => {
+    const onExit = vi.fn();
+    await renderSshTerminal(onExit);
+
+    reportClosed();
+    fireExitEvent();
+
+    expect(onExit).toHaveBeenCalledTimes(1);
+    expect(writeCount(latestTerminal(), EXIT_MESSAGE)).toBe(1);
+  });
+
+  it("writes the reconnect hint once for a saved session", async () => {
+    rejectWrites(SESSION_CLOSED_ERROR);
+    await renderSshTerminal(vi.fn(), "db-1");
+
+    typeInto(latestTerminal(), "x");
+    await settle();
+    fireExitEvent();
+
+    expect(writeCount(latestTerminal(), RECONNECT_HINT)).toBe(1);
+  });
+
+  it("ignores a closed write that rejects after unmount", async () => {
+    const pendingWrite: { reject?: (err: unknown) => void } = {};
+    vi.mocked(invoke).mockImplementation((cmd: string) =>
+      cmd === "ssh_write"
+        ? new Promise<never>((_resolve, reject) => {
+            pendingWrite.reject = reject;
+          })
+        : Promise.resolve(undefined as never),
+    );
+    const onExit = vi.fn();
+    const { unmount } = await renderSshTerminal(onExit);
+    const term = latestTerminal();
+
+    typeInto(term, "x");
+    unmount();
+    if (!pendingWrite.reject) {
+      throw new Error("the write was not left pending");
+    }
+    pendingWrite.reject(SESSION_CLOSED_ERROR);
+    await settle();
+
+    expect(onExit).not.toHaveBeenCalled();
+    expect(writeCount(term, EXIT_MESSAGE)).toBe(0);
+  });
+
+  it("ignores an outside report after unmount", async () => {
+    const onExit = vi.fn();
+    const { unmount } = await renderSshTerminal(onExit);
+    const term = latestTerminal();
+
+    unmount();
+    reportClosed();
+
+    expect(onExit).not.toHaveBeenCalled();
+    expect(writeCount(term, EXIT_MESSAGE)).toBe(0);
   });
 });
