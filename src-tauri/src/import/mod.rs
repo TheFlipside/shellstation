@@ -133,9 +133,16 @@ fn check_import_counts(folders: usize, sessions: usize) -> Result<(), String> {
 /// Stop a parse as soon as it holds more entries than an import may take.
 /// The 100 MB file cap alone allows millions of tiny entries, and without
 /// this a file would be parsed in full before `check_import_counts` saw it.
-/// Warnings get the session limit: every dropped session is one, and so is
-/// every malformed element, which a crafted file can repeat at will.
-fn check_parsed_counts(folders: usize, sessions: usize, warnings: usize) -> Result<(), String> {
+/// Warnings get the session limit: every session dropped on its own is one,
+/// and so is every malformed element, which a crafted file can repeat at
+/// will. The dropped sessions kept for jump host resolution get it too, since
+/// an element dropped with everything in it takes one warning for all of them.
+fn check_parsed_counts(
+    folders: usize,
+    sessions: usize,
+    skipped: usize,
+    warnings: usize,
+) -> Result<(), String> {
     for (count, max, what) in [
         (folders, MAX_IMPORT_FOLDERS, "folders"),
         (sessions, MAX_IMPORT_SESSIONS, "sessions"),
@@ -144,12 +151,23 @@ fn check_parsed_counts(folders: usize, sessions: usize, warnings: usize) -> Resu
             MAX_IMPORT_SESSIONS,
             "skipped or unreadable entries",
         ),
+        (skipped, MAX_IMPORT_SESSIONS, "skipped sessions"),
     ] {
         if count > max {
             return Err(format!("Too many {what} in import (more than {max})"));
         }
     }
     Ok(())
+}
+
+/// The end of a warning about an element dropped with everything in it,
+/// saying how many sessions went with it.
+fn dropped_sessions_note(sessions: usize) -> String {
+    match sessions {
+        0 => String::new(),
+        1 => " (with 1 session in it)".to_string(),
+        n => format!(" (with {n} sessions in it)"),
+    }
 }
 
 /// Clamp an imported port to the valid TCP range. Returns `None` if the
@@ -184,14 +202,17 @@ pub struct ImportedFolder {
     pub parent_temp_id: Option<usize>,
 }
 
-/// A session the parser dropped (unsupported protocol, no hostname), kept by
-/// name and folder only: a jump host reference that also matches it is then
-/// reported as ambiguous instead of being linked to the copy that remained.
+/// A session the parser dropped (unsupported protocol, no hostname, or inside
+/// an element dropped with everything in it), kept by name and folder only: a
+/// jump host reference that also matches it is then reported as ambiguous
+/// instead of being linked to the copy that remained.
 #[derive(Debug)]
 pub struct SkippedSession {
     pub name: String,
-    /// References an `ImportedFolder.temp_id`.
-    pub folder_temp_id: usize,
+    /// References an `ImportedFolder.temp_id`. `None` inside a dropped
+    /// element, whose folders are never imported: such a session has no
+    /// folder path and matches a reference by its name only.
+    pub folder_temp_id: Option<usize>,
 }
 
 /// A session extracted from an external session file.
@@ -527,7 +548,9 @@ async fn persist_import(
     );
     for dropped in skipped {
         let name = sanitize_reference(&dropped.name);
-        let path = session_reference_path(&folder_paths, dropped.folder_temp_id, &name);
+        let path = dropped
+            .folder_temp_id
+            .and_then(|tid| session_reference_path(&folder_paths, tid, &name));
         jump_targets.insert(&name, path.as_deref(), None);
     }
     // (session id, session name, jump host reference)
@@ -549,6 +572,15 @@ async fn persist_import(
                 warnings.push(format!(
                     "Skipped session \"{}\": invalid port {}",
                     safe_name, session.port
+                ));
+                None
+            }
+            // The parsers reject an empty hostname, but one made only of
+            // control or formatting characters is empty only from here on.
+            Some(_) if safe_hostname.is_empty() => {
+                warnings.push(format!(
+                    "Skipped session \"{safe_name}\": no hostname once control and \
+                     formatting characters are removed"
                 ));
                 None
             }
@@ -847,19 +879,30 @@ mod tests {
 
     #[test]
     fn check_parsed_counts_stops_past_each_limit() {
-        assert!(
-            check_parsed_counts(MAX_IMPORT_FOLDERS, MAX_IMPORT_SESSIONS, MAX_IMPORT_SESSIONS)
-                .is_ok()
-        );
+        assert!(check_parsed_counts(
+            MAX_IMPORT_FOLDERS,
+            MAX_IMPORT_SESSIONS,
+            MAX_IMPORT_SESSIONS,
+            MAX_IMPORT_SESSIONS
+        )
+        .is_ok());
         assert_eq!(
-            check_parsed_counts(MAX_IMPORT_FOLDERS + 1, 0, 0),
+            check_parsed_counts(MAX_IMPORT_FOLDERS + 1, 0, 0, 0),
             Err(format!(
                 "Too many folders in import (more than {MAX_IMPORT_FOLDERS})"
             ))
         );
-        assert!(check_parsed_counts(0, MAX_IMPORT_SESSIONS + 1, 0).is_err());
+        assert!(check_parsed_counts(0, MAX_IMPORT_SESSIONS + 1, 0, 0).is_err());
         assert_eq!(
-            check_parsed_counts(0, 0, MAX_IMPORT_SESSIONS + 1),
+            check_parsed_counts(0, 0, MAX_IMPORT_SESSIONS + 1, 0),
+            Err(format!(
+                "Too many skipped sessions in import (more than {MAX_IMPORT_SESSIONS})"
+            ))
+        );
+        // A session dropped on its own counts in both, and stops the parse
+        // with the message it always did.
+        assert_eq!(
+            check_parsed_counts(0, 0, MAX_IMPORT_SESSIONS + 1, MAX_IMPORT_SESSIONS + 1),
             Err(format!(
                 "Too many skipped or unreadable entries in import (more than {MAX_IMPORT_SESSIONS})"
             ))
@@ -898,6 +941,13 @@ mod tests {
                 MAX_IMPORT_SESSIONS + 1
             ))
         );
+    }
+
+    #[test]
+    fn dropped_sessions_note_counts_only_when_there_were_sessions() {
+        assert_eq!(dropped_sessions_note(0), "");
+        assert_eq!(dropped_sessions_note(1), " (with 1 session in it)");
+        assert_eq!(dropped_sessions_note(3), " (with 3 sessions in it)");
     }
 
     #[test]

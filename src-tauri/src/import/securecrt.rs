@@ -17,13 +17,18 @@
 use quick_xml::events::Event;
 use quick_xml::Reader;
 
-use super::{check_parsed_counts, ImportedFolder, ImportedSession, ParseResult, SkippedSession};
+use super::{
+    check_parsed_counts, dropped_sessions_note, ImportedFolder, ImportedSession, ParseResult,
+    SkippedSession,
+};
 
 /// Maximum allowed folder nesting depth to prevent stack exhaustion from
 /// pathologically deep `XML` structures.
 const MAX_NESTING_DEPTH: usize = 100;
 
-/// Names of built-in `SecureCRT` sessions to skip during import.
+/// Names of `SecureCRT`'s built-in session templates. They sit directly under
+/// `Sessions`, and are skipped there only: further down, the same name is a
+/// user's own folder or session.
 const SKIP_SESSIONS: &[&str] = &[
     "Default",
     "Default_LocalShell",
@@ -38,6 +43,9 @@ const SKIP_SESSIONS: &[&str] = &[
 /// (has `<dword name="Is Session">1</dword>`).
 pub fn parse(xml: &str) -> Result<ParseResult, String> {
     let mut reader = Reader::from_str(xml);
+    // Already the default; the parse relies on every end tag matching its
+    // start tag to tell a whole file from a truncated one.
+    reader.config_mut().check_end_names = true;
 
     // Navigate to the <key name="Sessions"> block.
     if !find_sessions_key(&mut reader)? {
@@ -109,7 +117,7 @@ fn parse_key_children(
     depth: usize,
 ) -> Result<(), String> {
     loop {
-        check_parsed_counts(folders.len(), sessions.len(), warnings.len())?;
+        check_parsed_counts(folders.len(), sessions.len(), skipped.len(), warnings.len())?;
         match reader.read_event() {
             Ok(Event::Start(ref e)) => {
                 if e.local_name().as_ref() == b"key" {
@@ -126,15 +134,21 @@ fn parse_key_children(
                             depth,
                         )?;
                     } else {
-                        warnings.push("Skipped <key> element without name attribute".into());
-                        skip_through_end(reader, b"key")?;
+                        let dropped = skip_dropped_key(reader, skipped, depth)?;
+                        warnings.push(format!(
+                            "Skipped <key> element without name attribute{}",
+                            dropped_sessions_note(dropped)
+                        ));
                     }
                 } else {
                     // Non-key element at this level (shouldn't happen, but be safe).
                     skip_through_end(reader, e.local_name().as_ref())?;
                 }
             }
-            Ok(Event::End(_) | Event::Eof) => break,
+            Ok(Event::End(_)) => break,
+            // quick-xml does not report elements left open at the end, and a
+            // file cut off before `</key>` must not import as a partial one.
+            Ok(Event::Eof) => return Err("Unexpected end of XML".to_string()),
             Err(e) => {
                 return Err(format!(
                     "XML parse error at position {}: {e}",
@@ -165,17 +179,7 @@ fn parse_key_block(
     warnings: &mut Vec<String>,
     depth: usize,
 ) -> Result<(), String> {
-    if depth >= MAX_NESTING_DEPTH {
-        return Err(format!(
-            "Folder nesting exceeds maximum depth of {MAX_NESTING_DEPTH}"
-        ));
-    }
-
-    // Skip built-in default sessions early.
-    if SKIP_SESSIONS.contains(&key_name) {
-        skip_through_end(reader, b"key")?;
-        return Ok(());
-    }
+    check_depth(depth)?;
 
     // Allocate a temp_id for this block (used if it turns out to be a folder).
     let my_temp_id = *next_temp_id;
@@ -185,7 +189,7 @@ fn parse_key_block(
     let mut has_child_keys = false;
 
     loop {
-        check_parsed_counts(folders.len(), sessions.len(), warnings.len())?;
+        check_parsed_counts(folders.len(), sessions.len(), skipped.len(), warnings.len())?;
         match reader.read_event() {
             Ok(Event::Start(ref e)) => {
                 let local = e.local_name();
@@ -216,10 +220,12 @@ fn parse_key_block(
                                 depth + 1,
                             )?;
                         } else {
+                            let dropped = skip_dropped_key(reader, skipped, depth + 1)?;
                             warnings.push(format!(
-                                "In \"{key_name}\": skipped <key> element without name attribute"
+                                "In \"{key_name}\": skipped <key> element without name \
+                                 attribute{}",
+                                dropped_sessions_note(dropped)
                             ));
-                            skip_through_end(reader, b"key")?;
                         }
                     }
                     b"string" => {
@@ -261,7 +267,7 @@ fn parse_key_block(
             Ok(Event::End(ref e)) if e.local_name().as_ref() == b"key" => {
                 break;
             }
-            Ok(Event::Eof) => break,
+            Ok(Event::Eof) => return Err("Unexpected end of XML".to_string()),
             Err(e) => {
                 return Err(format!(
                     "XML parse error at position {}: {e}",
@@ -273,22 +279,98 @@ fn parse_key_block(
     }
 
     // Decide: session or folder. Folders with children were already pushed
-    // eagerly above. An empty key with no children and no Is Session flag is
-    // silently dropped (matches SecureCRT's own "empty placeholder" behavior).
-    if props.is_session {
+    // eagerly above, under any name: a key with child keys is imported as a
+    // folder even directly under `Sessions` with a template's name, and only
+    // the template's own session settings are dropped. An empty key with no
+    // children and no Is Session flag is silently dropped (matches
+    // SecureCRT's own "empty placeholder" behavior), and so is a template.
+    let is_template = depth == 0 && SKIP_SESSIONS.contains(&key_name);
+    if props.is_session && !is_template {
         match build_session(key_name, &props, parent_temp_id) {
             Ok(s) => sessions.push(s),
             Err(w) => {
                 warnings.push(w);
                 skipped.push(SkippedSession {
                     name: key_name.to_string(),
-                    folder_temp_id: parent_temp_id,
+                    folder_temp_id: Some(parent_temp_id),
                 });
             }
         }
     }
 
     Ok(())
+}
+
+/// Fail once a `<key>` sits `MAX_NESTING_DEPTH` levels below `Sessions`.
+fn check_depth(depth: usize) -> Result<(), String> {
+    if depth >= MAX_NESTING_DEPTH {
+        return Err(format!(
+            "Folder nesting exceeds maximum depth of {MAX_NESTING_DEPTH}"
+        ));
+    }
+    Ok(())
+}
+
+/// Advance the reader past a `<key>` block, at `depth`, that is dropped with
+/// everything in it, and record each session in it as skipped: a jump host
+/// reference that also names a session elsewhere then stays ambiguous instead
+/// of linking that one as if it were unique. The block's folders are not
+/// imported, so its sessions have no folder path. Returns how many sessions
+/// the block held.
+fn skip_dropped_key(
+    reader: &mut Reader<&[u8]>,
+    skipped: &mut Vec<SkippedSession>,
+    depth: usize,
+) -> Result<usize, String> {
+    check_depth(depth)?;
+    let before = skipped.len();
+    // The name and properties of each open `<key>`, starting with the dropped
+    // one, which has no name.
+    let mut open = vec![(None, SessionProps::default())];
+    loop {
+        // Only `skipped` grows here; the caller checks the other counts.
+        check_parsed_counts(0, 0, skipped.len(), 0)?;
+        match reader.read_event() {
+            Ok(Event::Start(ref e)) => {
+                let local = e.local_name();
+                match local.as_ref() {
+                    b"key" => {
+                        check_depth(depth + open.len())?;
+                        open.push((get_attr(e, "name"), SessionProps::default()));
+                    }
+                    b"dword" => {
+                        let attr_name = get_attr(e, "name");
+                        let value = read_text(reader, b"dword")?;
+                        if let (Some(attr_name), Some((_, props))) = (attr_name, open.last_mut()) {
+                            props.set_dword(&attr_name, &value);
+                        }
+                    }
+                    _ => skip_through_end(reader, local.as_ref())?,
+                }
+            }
+            Ok(Event::End(ref e)) if e.local_name().as_ref() == b"key" => {
+                if let Some((Some(name), props)) = open.pop() {
+                    if props.is_session {
+                        skipped.push(SkippedSession {
+                            name,
+                            folder_temp_id: None,
+                        });
+                    }
+                }
+                if open.is_empty() {
+                    return Ok(skipped.len() - before);
+                }
+            }
+            Ok(Event::Eof) => return Err("Unexpected end of XML".to_string()),
+            Err(e) => {
+                return Err(format!(
+                    "XML parse error at position {}: {e}",
+                    reader.error_position()
+                ));
+            }
+            _ => {}
+        }
+    }
 }
 
 /// Collected session properties from `SecureCRT` `XML`.
@@ -509,6 +591,27 @@ mod tests {
     }
 
     #[test]
+    fn parse_rejects_a_truncated_file() {
+        // A file cut off part way must not import the part before the cut
+        // as if it were the whole export.
+        let session = r#"<key name="a">
+                <dword name="Is Session">1</dword>
+                <string name="Hostname">h</string>
+                <string name="Protocol Name">SSH2</string>
+            </key>"#;
+        let head = r#"<?xml version="1.0"?><VanDyke version="3.0"><key name="Sessions">"#;
+        for cut in [
+            format!(r#"{head}<key name="EU">{session}"#),
+            format!("{head}{session}"),
+            format!(r#"{head}<key name="b"><dword name="Is Session">1</dword>"#),
+        ] {
+            assert_eq!(parse(&cut).unwrap_err(), "Unexpected end of XML", "{cut}");
+        }
+        // Only what follows the `Sessions` block is missing.
+        assert!(parse(&format!("{head}{session}</key>")).is_ok());
+    }
+
+    #[test]
     fn parse_empty_sessions() {
         let (folders, sessions, _, warnings) = parse(&wrap("")).unwrap();
         assert!(folders.is_empty());
@@ -615,7 +718,7 @@ mod tests {
         assert!(warnings[0].to_lowercase().contains("rdp"));
         assert_eq!(skipped.len(), 1);
         assert_eq!(skipped[0].name, "rdp1");
-        assert_eq!(skipped[0].folder_temp_id, folders[0].temp_id);
+        assert_eq!(skipped[0].folder_temp_id, Some(folders[0].temp_id));
     }
 
     #[test]
@@ -629,15 +732,146 @@ mod tests {
                 <string name="Hostname">should-not-appear</string>
                 <string name="Protocol Name">SSH2</string>
             </key>
+            <key name="Default_RDP">
+                <dword name="Is Session">1</dword>
+                <string name="Protocol Name">RDP</string>
+            </key>
             <key name="real">
                 <dword name="Is Session">1</dword>
                 <string name="Hostname">real.example.com</string>
                 <string name="Protocol Name">SSH2</string>
             </key>"#,
         );
-        let (_, sessions, _, _) = parse(&xml).unwrap();
+        let (_, sessions, skipped, warnings) = parse(&xml).unwrap();
         assert_eq!(sessions.len(), 1);
         assert_eq!(sessions[0].name, "real");
+        // A template is no session a jump host can name, and no user error.
+        assert!(skipped.is_empty());
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn parse_imports_template_names_below_the_top_level() {
+        // Only the keys directly under `Sessions` are templates; the same
+        // name further down is the user's own folder or session.
+        let xml = wrap(
+            r#"
+            <key name="Lab">
+                <key name="Default">
+                    <key name="bastion">
+                        <dword name="Is Session">1</dword>
+                        <string name="Hostname">bastion.lab</string>
+                        <string name="Protocol Name">SSH2</string>
+                    </key>
+                </key>
+                <key name="Default_Serial">
+                    <dword name="Is Session">1</dword>
+                    <string name="Hostname">console.lab</string>
+                    <string name="Protocol Name">SSH2</string>
+                </key>
+            </key>"#,
+        );
+        let (folders, sessions, skipped, warnings) = parse(&xml).unwrap();
+        let folder_names: Vec<_> = folders.iter().map(|f| f.name.as_str()).collect();
+        assert_eq!(folder_names, ["Lab", "Default"]);
+        let session_names: Vec<_> = sessions.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(session_names, ["bastion", "Default_Serial"]);
+        assert_eq!(sessions[0].folder_temp_id, folders[1].temp_id);
+        assert_eq!(sessions[1].folder_temp_id, folders[0].temp_id);
+        assert!(skipped.is_empty());
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn parse_imports_a_top_level_template_name_with_child_keys_as_a_folder() {
+        // A key with child keys is a folder under any name; only the
+        // template's own session settings are dropped.
+        let xml = wrap(
+            r#"
+            <key name="Default">
+                <dword name="Is Session">1</dword>
+                <string name="Hostname">template</string>
+                <string name="Protocol Name">SSH2</string>
+                <key name="bastion">
+                    <dword name="Is Session">1</dword>
+                    <string name="Hostname">bastion.example.com</string>
+                    <string name="Protocol Name">SSH2</string>
+                </key>
+            </key>"#,
+        );
+        let (folders, sessions, skipped, warnings) = parse(&xml).unwrap();
+        assert_eq!(folders.len(), 1);
+        assert_eq!(folders[0].name, "Default");
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].name, "bastion");
+        assert_eq!(sessions[0].folder_temp_id, folders[0].temp_id);
+        assert!(skipped.is_empty());
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn parse_nameless_key_warns_and_counts_its_sessions_as_skipped() {
+        // A `<key>` without a name is dropped with everything in it. Its
+        // sessions still count toward jump host ambiguity, by name only,
+        // since none of its folders exist to give them a path.
+        let xml = wrap(
+            r#"
+            <key>
+                <key name="EU">
+                    <key name="bastion">
+                        <dword name="Is Session">1</dword>
+                        <string name="Hostname">bastion.eu</string>
+                        <string name="Protocol Name">SSH2</string>
+                    </key>
+                    <key name="notes">
+                        <dword name="Is Session">0</dword>
+                    </key>
+                </key>
+                <key name="web">
+                    <dword name="Is Session">1</dword>
+                </key>
+            </key>
+            <key>
+                <string name="Hostname">no-session-here</string>
+            </key>
+            <key name="Prod">
+                <key>
+                    <key name="db">
+                        <dword name="Is Session">1</dword>
+                    </key>
+                </key>
+            </key>"#,
+        );
+        let (folders, sessions, skipped, warnings) = parse(&xml).unwrap();
+        assert_eq!(folders.len(), 1);
+        assert_eq!(folders[0].name, "Prod");
+        assert!(sessions.is_empty());
+        let skipped: Vec<_> = skipped
+            .iter()
+            .map(|s| (s.name.as_str(), s.folder_temp_id))
+            .collect();
+        assert_eq!(skipped, [("bastion", None), ("web", None), ("db", None)]);
+        assert_eq!(
+            warnings,
+            [
+                "Skipped <key> element without name attribute (with 2 sessions in it)",
+                "Skipped <key> element without name attribute",
+                "In \"Prod\": skipped <key> element without name attribute (with 1 session in it)",
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_stops_once_past_the_skipped_session_limit() {
+        // A nameless key takes one warning for all its sessions, so the
+        // sessions it records need a bound of their own.
+        let inner = r#"<key name="s"><dword name="Is Session">1</dword></key>"#
+            .repeat(MAX_IMPORT_SESSIONS + 1);
+        let err = parse(&wrap(&format!("<key>{inner}</key>"))).unwrap_err();
+        assert_eq!(
+            err,
+            format!("Too many skipped sessions in import (more than {MAX_IMPORT_SESSIONS})")
+        );
     }
 
     #[test]
@@ -713,6 +947,25 @@ mod tests {
             inner.push_str("</key>");
         }
         let err = parse(&wrap(&inner)).unwrap_err();
+        assert!(err.contains("nesting"));
+    }
+
+    #[test]
+    fn parse_limits_nesting_under_a_nameless_key_like_any_other() {
+        use std::fmt::Write as _;
+        // A nameless key followed by `named` levels, closed again.
+        let chain = |named: usize| {
+            let mut inner = String::from("<key>");
+            for i in 0..named {
+                let _ = write!(inner, r#"<key name="f{i}">"#);
+            }
+            inner.push_str(&"</key>".repeat(named + 1));
+            wrap(&inner)
+        };
+        // The nameless key takes the first level, so as with named keys
+        // alone, MAX_NESTING_DEPTH levels pass and one more does not.
+        assert!(parse(&chain(MAX_NESTING_DEPTH - 1)).is_ok());
+        let err = parse(&chain(MAX_NESTING_DEPTH)).unwrap_err();
         assert!(err.contains("nesting"));
     }
 

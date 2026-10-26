@@ -18,7 +18,10 @@ use std::collections::HashMap;
 use quick_xml::events::Event;
 use quick_xml::Reader;
 
-use super::{check_parsed_counts, ImportedFolder, ImportedSession, ParseResult, SkippedSession};
+use super::{
+    check_parsed_counts, dropped_sessions_note, ImportedFolder, ImportedSession, ParseResult,
+    SkippedSession,
+};
 
 /// Maximum allowed folder nesting depth to prevent stack exhaustion from
 /// pathologically deep `XML` structures.
@@ -30,9 +33,13 @@ const MAX_NESTING_DEPTH: usize = 100;
 /// - `Type="Container"` → folder (may nest arbitrarily)
 /// - `Type="Connection"` → session (usually self-closing)
 ///
-/// Unsupported protocols (RDP, VNC, etc.) are skipped and reported as warnings.
+/// Unsupported protocols (RDP, VNC, etc.) are skipped and reported as warnings,
+/// and so is a `<Node>` of any other type, with everything in it.
 pub fn parse(xml: &str) -> Result<ParseResult, String> {
     let mut reader = Reader::from_str(xml);
+    // Already the default; the parse relies on every end tag matching its
+    // start tag to tell a whole file from a truncated one.
+    reader.config_mut().check_end_names = true;
 
     let mut folders = Vec::new();
     let mut sessions = Vec::new();
@@ -43,12 +50,17 @@ pub fn parse(xml: &str) -> Result<ParseResult, String> {
     let root_temp_id: usize = 0;
     let mut folder_stack: Vec<usize> = Vec::new();
     let mut next_temp_id: usize = 1;
+    // Elements other than `<Node>` still open, such as the root. quick-xml
+    // does not report elements left open at the end, so this and
+    // `folder_stack` are what tell a file cut off part way from a whole one.
+    let mut open_elements: usize = 0;
 
     loop {
-        check_parsed_counts(folders.len(), sessions.len(), warnings.len())?;
+        check_parsed_counts(folders.len(), sessions.len(), skipped.len(), warnings.len())?;
         match reader.read_event() {
             Ok(Event::Start(ref e)) => {
                 if e.local_name().as_ref() != b"Node" {
+                    open_elements += 1;
                     continue;
                 }
                 let attrs = parse_attributes(e)?;
@@ -80,7 +92,7 @@ pub fn parse(xml: &str) -> Result<ParseResult, String> {
                                 warnings.push(w);
                                 skipped.push(SkippedSession {
                                     name,
-                                    folder_temp_id: parent,
+                                    folder_temp_id: Some(parent),
                                 });
                             }
                         }
@@ -88,7 +100,8 @@ pub fn parse(xml: &str) -> Result<ParseResult, String> {
                         skip_to_end(&mut reader, b"Node")?;
                     }
                     _ => {
-                        skip_to_end(&mut reader, b"Node")?;
+                        let dropped = skip_dropped_node(&mut reader, &mut skipped)?;
+                        warnings.push(unsupported_node_warning(&name, node_type, dropped));
                     }
                 }
             }
@@ -120,18 +133,20 @@ pub fn parse(xml: &str) -> Result<ParseResult, String> {
                                 warnings.push(w);
                                 skipped.push(SkippedSession {
                                     name,
-                                    folder_temp_id: parent,
+                                    folder_temp_id: Some(parent),
                                 });
                             }
                         }
                     }
-                    _ => {}
+                    _ => warnings.push(unsupported_node_warning(&name, node_type, 0)),
                 }
             }
             Ok(Event::End(ref e)) if e.local_name().as_ref() == b"Node" => {
                 folder_stack.pop();
             }
-            Ok(Event::Eof) => break,
+            Ok(Event::End(_)) => open_elements = open_elements.saturating_sub(1),
+            Ok(Event::Eof) if folder_stack.is_empty() && open_elements == 0 => break,
+            Ok(Event::Eof) => return Err("Unexpected end of XML".to_string()),
             Err(e) => {
                 return Err(format!(
                     "XML parse error at position {}: {e}",
@@ -143,6 +158,71 @@ pub fn parse(xml: &str) -> Result<ParseResult, String> {
     }
 
     Ok((folders, sessions, skipped, warnings))
+}
+
+/// The warning for a `<Node>` whose type is neither `Container` nor
+/// `Connection`, dropped with the `dropped` sessions in it.
+fn unsupported_node_warning(name: &str, node_type: &str, dropped: usize) -> String {
+    format!(
+        "Skipped \"{name}\" — unsupported node type \"{node_type}\"{}",
+        dropped_sessions_note(dropped)
+    )
+}
+
+/// Skip events until the matching end tag of a `<Node>` that is dropped with
+/// everything in it, and record each connection in it as skipped: a jump host
+/// reference that also names a session elsewhere then stays ambiguous instead
+/// of linking that one as if it were unique. The node's folders are not
+/// imported, so its sessions have no folder path. Returns how many sessions
+/// the node held.
+fn skip_dropped_node(
+    reader: &mut Reader<&[u8]>,
+    skipped: &mut Vec<SkippedSession>,
+) -> Result<usize, String> {
+    let before = skipped.len();
+    let mut depth = 1u32;
+    loop {
+        // Only `skipped` grows here; the caller checks the other counts.
+        check_parsed_counts(0, 0, skipped.len(), 0)?;
+        match reader.read_event() {
+            Ok(Event::Start(ref e)) if e.local_name().as_ref() == b"Node" => {
+                depth += 1;
+                record_dropped_connection(e, skipped)?;
+            }
+            Ok(Event::Empty(ref e)) if e.local_name().as_ref() == b"Node" => {
+                record_dropped_connection(e, skipped)?;
+            }
+            Ok(Event::End(ref e)) if e.local_name().as_ref() == b"Node" => {
+                depth -= 1;
+                if depth == 0 {
+                    return Ok(skipped.len() - before);
+                }
+            }
+            Ok(Event::Eof) => return Err("Unexpected end of XML".to_string()),
+            Err(e) => {
+                return Err(format!(
+                    "XML parse error at position {}: {e}",
+                    reader.error_position()
+                ));
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Record a `<Node>` inside a dropped one as skipped if it is a connection.
+fn record_dropped_connection(
+    e: &quick_xml::events::BytesStart<'_>,
+    skipped: &mut Vec<SkippedSession>,
+) -> Result<(), String> {
+    let mut attrs = parse_attributes(e)?;
+    if attrs.get("Type").map(String::as_str) == Some("Connection") {
+        skipped.push(SkippedSession {
+            name: attrs.remove("Name").unwrap_or_default(),
+            folder_temp_id: None,
+        });
+    }
+    Ok(())
 }
 
 /// Skip events until the matching end tag for `tag` is consumed.
@@ -241,7 +321,7 @@ fn build_session(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::MAX_IMPORT_FOLDERS;
+    use crate::commands::{MAX_IMPORT_FOLDERS, MAX_IMPORT_SESSIONS};
 
     // The mRemoteNG parser is a stateful pull-parser over an XML stream:
     // tag-by-tag input, a folder-stack mutated on each `<Node Type="…">`,
@@ -307,7 +387,57 @@ mod tests {
         // Still reported by name, so a jump host reference to "rdp1" counts it.
         assert_eq!(skipped.len(), 1);
         assert_eq!(skipped[0].name, "rdp1");
-        assert_eq!(skipped[0].folder_temp_id, 0);
+        assert_eq!(skipped[0].folder_temp_id, Some(0));
+    }
+
+    #[test]
+    fn parse_unknown_node_type_warns_and_counts_its_sessions_as_skipped() {
+        // A node that is neither a folder nor a connection is dropped with
+        // everything in it. Its connections still count toward jump host
+        // ambiguity, by name only, since none of its folders exist to give
+        // them a path.
+        let xml = r#"<?xml version="1.0"?>
+            <Confcons>
+                <Node Type="Group" Name="EU">
+                    <Node Type="Container" Name="Web">
+                        <Node Type="Connection" Name="bastion" Hostname="b" Protocol="SSH2"/>
+                    </Node>
+                    <Node Type="Connection" Name="db" Hostname="d" Protocol="SSH2"></Node>
+                    <Node Type="Note" Name="readme"/>
+                </Node>
+                <Node Type="Note" Name="todo"/>
+                <Node Type="Connection" Name="web" Hostname="w" Port="22" Protocol="SSH2"/>
+            </Confcons>"#;
+        let (folders, sessions, skipped, warnings) = parse(xml).unwrap();
+        assert!(folders.is_empty());
+        // The folder stack is intact past the dropped node.
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].name, "web");
+        assert_eq!(sessions[0].folder_temp_id, 0);
+        let skipped: Vec<_> = skipped
+            .iter()
+            .map(|s| (s.name.as_str(), s.folder_temp_id))
+            .collect();
+        assert_eq!(skipped, [("bastion", None), ("db", None)]);
+        assert_eq!(
+            warnings,
+            [
+                "Skipped \"EU\" — unsupported node type \"Group\" (with 2 sessions in it)",
+                "Skipped \"todo\" — unsupported node type \"Note\"",
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_stops_once_past_the_skipped_session_limit() {
+        // A dropped node takes one warning for all its connections, so the
+        // ones it records need a bound of their own.
+        let nodes = r#"<Node Type="Connection" Name="c"/>"#.repeat(MAX_IMPORT_SESSIONS + 1);
+        let xml = format!(r#"<Confcons><Node Type="Group" Name="g">{nodes}</Node></Confcons>"#);
+        assert_eq!(
+            parse(&xml).unwrap_err(),
+            format!("Too many skipped sessions in import (more than {MAX_IMPORT_SESSIONS})")
+        );
     }
 
     #[test]
@@ -357,6 +487,22 @@ mod tests {
         xml.push_str("</Confcons>");
         let err = parse(&xml).unwrap_err();
         assert!(err.contains("nesting"));
+    }
+
+    #[test]
+    fn parse_rejects_a_truncated_file() {
+        // A file cut off part way must not import the part before the cut
+        // as if it were the whole export.
+        let connection = r#"<Node Type="Connection" Name="a" Hostname="h" Protocol="SSH2"/>"#;
+        for cut in [
+            format!(r#"<Confcons><Node Type="Container" Name="EU">{connection}"#),
+            format!("<Confcons>{connection}"),
+        ] {
+            assert_eq!(parse(&cut).unwrap_err(), "Unexpected end of XML", "{cut}");
+        }
+        let whole =
+            format!(r#"<Confcons><Node Type="Container" Name="EU">{connection}</Node></Confcons>"#);
+        assert!(parse(&whole).is_ok());
     }
 
     #[test]
