@@ -438,7 +438,7 @@ pub async fn db_save_config(
 
 // ── Export / Import ──────────────────────────────────────────────────
 
-async fn build_export_data(
+pub(crate) async fn build_export_data(
     state: &DbState,
     cred_db: &CredentialDbState,
     login_seq_db: &crate::db::LoginSequenceDbState,
@@ -471,52 +471,8 @@ pub async fn db_export(
     build_export_data(&state, &cred_db, &login_seq_db).await
 }
 
-#[tauri::command]
-pub async fn db_export_file(
-    state: State<'_, DbState>,
-    cred_db: State<'_, CredentialDbState>,
-    login_seq_db: State<'_, crate::db::LoginSequenceDbState>,
-    path: String,
-) -> Result<String, String> {
-    let dest = std::path::Path::new(&path);
-
-    if !dest.is_absolute() {
-        return Err("Export path must be absolute".to_string());
-    }
-
-    let file_name = dest
-        .file_name()
-        .ok_or_else(|| "Export path must include a file name".to_string())?;
-
-    // Canonicalize the parent directory to resolve symlinks and prevent
-    // directory traversal, then reconstruct the final path from the
-    // canonical parent + filename so the write target is fully resolved.
-    let parent = dest
-        .parent()
-        .filter(|p| !p.as_os_str().is_empty())
-        .ok_or_else(|| "Export path has no parent directory".to_string())?;
-
-    let canonical_parent = std::fs::canonicalize(parent)
-        .map_err(|_| format!("Parent directory does not exist: {}", parent.display()))?;
-    if !canonical_parent.is_dir() {
-        return Err(format!(
-            "Parent path is not a directory: {}",
-            canonical_parent.display()
-        ));
-    }
-
-    let final_path = canonical_parent.join(file_name);
-
-    let data = build_export_data(&state, &cred_db, &login_seq_db).await?;
-    let json = serde_json::to_string_pretty(&data)
-        .map_err(|e| format!("Failed to serialize export data: {e}"))?;
-    std::fs::write(&final_path, json).map_err(|e| format!("Failed to write export file: {e}"))?;
-    Ok(format!(
-        "Exported {} folders, {} sessions",
-        data.folders.len(),
-        data.sessions.len()
-    ))
-}
+// Writing export files lives in `data_transfer.rs`, which wraps this data
+// in an envelope together with the client settings and command buttons.
 
 /// Maximum number of items allowed in a single import to prevent resource exhaustion.
 /// The folder and session limits also apply to the SecureCRT and mRemoteNG

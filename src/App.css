@@ -1012,6 +1012,89 @@ body,
   font-size: 12px;
 }
 
+.data-transfer-results p {
+  margin: 0 0 4px;
+}
+
+/* Export / import section picker */
+.data-section-option {
+  margin-bottom: 12px;
+}
+
+.data-section-option .dialog-field {
+  margin-bottom: 2px;
+}
+
+.data-section-option .dialog-field label {
+  font-size: 13px;
+  color: var(--color-text);
+}
+
+/* Indented past the 16px checkbox and the row's 8px gap, under the label. */
+.data-section-detail {
+  margin: 0 0 0 24px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--color-subtext0);
+}
+
+.data-section-option-unavailable .dialog-field label,
+.data-section-option-unavailable .data-section-detail {
+  opacity: 0.5;
+}
+
+.data-section-option-unavailable .dialog-field label {
+  cursor: not-allowed;
+}
+
+/* The buttons an import would add, as name and command. */
+.data-button-preview {
+  list-style: none;
+  margin: 6px 0 0 24px;
+  padding: 4px 0;
+  max-height: 160px;
+  overflow-y: auto;
+  border: 1px solid var(--color-surface0);
+  border-radius: 4px;
+  background: var(--color-mantle);
+}
+
+.data-button-preview li {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 2px 8px;
+  font-size: 12px;
+  min-width: 0;
+}
+
+.data-button-preview-swatch {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+}
+
+.data-button-preview-name {
+  flex: none;
+  max-width: 40%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-text);
+}
+
+.data-button-preview-command {
+  flex: 1;
+  min-width: 0;
+  font-family: "JetBrains Mono", monospace;
+  color: var(--color-subtext0);
+  /* Runs of spaces collapse, so padding cannot push the rest of a command
+     out of view below the visible lines. */
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
 .settings-db-note {
   color: var(--color-overlay0);
   font-size: 11px;

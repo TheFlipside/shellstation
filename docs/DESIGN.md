@@ -317,6 +317,7 @@ For one-time setup, key generation, and rotation procedures, see **[DEVELOPMENT.
 - **Quick connect:** A shortcut bar for connecting without saving a session (hostname + optional user/port).
 - **Import:** Bulk import from mRemoteNG XML (`confCons.xml`) and SecureCRT XML session files. CSV import for generic datasets.
 - **Export:** Export session data (without credentials) as JSON or CSV for backup and sharing.
+- **Data export / import:** A single JSON file can carry any mix of the database (without secrets), the client settings and the command bar buttons; the user picks the sections on export, and import offers only the sections present in the file. Settings and buttons live in the webview's localStorage, so this is how they move to another machine together with a copied database. Since a file may come from someone else, import never weakens safety settings (it can only switch them on), and it lists the buttons it would add with their commands before anything runs. The backend opens the save dialog itself, so an export can only write where the user chose.
 
 ### 5.4 Command Broadcast System
 

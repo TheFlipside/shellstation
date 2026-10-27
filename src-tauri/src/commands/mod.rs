@@ -1,4 +1,5 @@
 mod credential_profile;
+mod data_transfer;
 mod database;
 mod highlight;
 mod logging;
@@ -11,6 +12,7 @@ mod ssh;
 mod telnet;
 
 pub use credential_profile::*;
+pub use data_transfer::*;
 pub use database::*;
 pub use highlight::*;
 pub use logging::*;

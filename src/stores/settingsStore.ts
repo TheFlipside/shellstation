@@ -44,7 +44,25 @@ const MAX_BUTTON_COMMAND_LENGTH = 1024;
 const HEX_COLOR_RE = /^#[\da-f]{6}$/i;
 const UUID_RE = /^[\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12}$/i;
 
-function isValidButtonShape(b: Partial<CommandButton>): boolean {
+// The connection settings reach the backend as Rust integers (u64 / u32).
+// A fraction or an oversized number fails IPC deserialization there, which
+// would break every connection attempt, so only whole numbers in range pass.
+function isWholeNumberInRange(value: unknown, min: number, max: number): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= min && value <= max;
+}
+function isConnectTimeout(seconds: unknown): seconds is number {
+  return isWholeNumberInRange(seconds, 1, 3600);
+}
+function isKeepaliveInterval(seconds: unknown): seconds is number {
+  return isWholeNumberInRange(seconds, 0, 3600);
+}
+function isKeepaliveMax(count: unknown): count is number {
+  return isWholeNumberInRange(count, 1, 100);
+}
+
+function isValidButtonShape(
+  b: Partial<CommandButton>,
+): b is Partial<CommandButton> & Omit<CommandButton, "id"> {
   return (
     typeof b.name === "string" &&
     b.name.length > 0 &&
@@ -272,17 +290,17 @@ export const useSettingsStore = create<SettingsState>()(
         }
       },
       setConnectTimeout: (seconds: number) => {
-        if (Number.isFinite(seconds) && seconds > 0) {
+        if (isConnectTimeout(seconds)) {
           set({ connectTimeout: seconds });
         }
       },
       setKeepaliveInterval: (seconds: number) => {
-        if (Number.isFinite(seconds) && seconds >= 0) {
+        if (isKeepaliveInterval(seconds)) {
           set({ keepaliveInterval: seconds });
         }
       },
       setKeepaliveMax: (count: number) => {
-        if (Number.isFinite(count) && count >= 1) {
+        if (isKeepaliveMax(count)) {
           set({ keepaliveMax: count });
         }
       },
@@ -318,11 +336,14 @@ export const useSettingsStore = create<SettingsState>()(
               state.language = "";
             }
           }
-          // Sanitize persisted keepalive values against corrupted storage.
-          if (!Number.isFinite(state.keepaliveInterval) || state.keepaliveInterval < 0) {
+          // Sanitize persisted connection values against corrupted storage.
+          if (!isConnectTimeout(state.connectTimeout)) {
+            state.connectTimeout = 10;
+          }
+          if (!isKeepaliveInterval(state.keepaliveInterval)) {
             state.keepaliveInterval = 15;
           }
-          if (!Number.isFinite(state.keepaliveMax) || state.keepaliveMax < 1) {
+          if (!isKeepaliveMax(state.keepaliveMax)) {
             state.keepaliveMax = 3;
           }
           // Clamp uiScale to the supported range (75-125). 150% used to be
@@ -405,3 +426,242 @@ export const useSettingsStore = create<SettingsState>()(
     },
   ),
 );
+
+// ── Data export / import ─────────────────────────────────────────────────
+
+/** The persisted values of SettingsState, without its actions. */
+type SettingsData = {
+  [K in keyof SettingsState as SettingsState[K] extends (...args: never[]) => unknown
+    ? never
+    : K]: SettingsState[K];
+};
+
+/** Settings carried by a data export. Command buttons are a section of their own. */
+export type ExportableSettingKey = Exclude<keyof SettingsData, "commandButtons">;
+
+type SettingImporter = (state: SettingsState, value: unknown) => void;
+
+function importBoolean(apply: (state: SettingsState, value: boolean) => void): SettingImporter {
+  return (state, value) => {
+    if (typeof value === "boolean") apply(state, value);
+  };
+}
+
+function importNumber(apply: (state: SettingsState, value: number) => void): SettingImporter {
+  return (state, value) => {
+    if (typeof value === "number" && Number.isFinite(value)) apply(state, value);
+  };
+}
+
+/**
+ * For settings that guard against something: a file may switch them on, but
+ * never off, so importing a file from someone else cannot quietly weaken
+ * this machine. Turning one off stays a deliberate change in Settings.
+ */
+function importEnableOnly(apply: (state: SettingsState) => void): SettingImporter {
+  return (state, value) => {
+    if (value === true) apply(state);
+  };
+}
+
+function importString(apply: (state: SettingsState, value: string) => void): SettingImporter {
+  return (state, value) => {
+    if (typeof value === "string") apply(state, value);
+  };
+}
+
+function importColor(apply: (state: SettingsState, value: string | null) => void): SettingImporter {
+  return (state, value) => {
+    if (value === null || typeof value === "string") apply(state, value);
+  };
+}
+
+const THEME_MODES: ReadonlySet<string> = new Set<ThemeMode>(["dark", "light", "system"]);
+
+/**
+ * Applies one imported setting through its setter, so a value from a file
+ * gets the same validation as a change made in the Settings dialog. The
+ * importers only check the JSON type a setter's signature promises.
+ *
+ * Keyed by every persisted setting, so adding one to SettingsState does not
+ * compile until it is listed here too, and with that it is exported as well.
+ */
+const SETTING_IMPORTERS: Readonly<Record<ExportableSettingKey, SettingImporter>> = {
+  // An empty language means "follow the system language". The importing
+  // machine keeps its own choice in that case instead of being reset.
+  language: importString((s, v) => {
+    if (v !== "") s.setLanguage(v);
+  }),
+  uiScale: importNumber((s, v) => {
+    s.setUiScale(v);
+  }),
+  themeMode: importString((s, v) => {
+    if (THEME_MODES.has(v)) s.setThemeMode(v as ThemeMode);
+  }),
+  closeOnDisconnect: importBoolean((s, v) => {
+    s.setCloseOnDisconnect(v);
+  }),
+  openLocalOnStartup: importBoolean((s, v) => {
+    s.setOpenLocalOnStartup(v);
+  }),
+  confirmOnQuit: importBoolean((s, v) => {
+    s.setConfirmOnQuit(v);
+  }),
+  confirmOnCloseTab: importBoolean((s, v) => {
+    s.setConfirmOnCloseTab(v);
+  }),
+  terminalFontFamily: importString((s, v) => {
+    s.setTerminalFontFamily(v);
+  }),
+  terminalFontSize: importNumber((s, v) => {
+    s.setTerminalFontSize(v);
+  }),
+  terminalBackgroundColor: importColor((s, v) => {
+    s.setTerminalBackgroundColor(v);
+  }),
+  terminalForegroundColor: importColor((s, v) => {
+    s.setTerminalForegroundColor(v);
+  }),
+  copyOnSelect: importBoolean((s, v) => {
+    s.setCopyOnSelect(v);
+  }),
+  pasteOnRightClick: importBoolean((s, v) => {
+    s.setPasteOnRightClick(v);
+  }),
+  confirmMultilinePaste: importEnableOnly((s) => {
+    s.setConfirmMultilinePaste(true);
+  }),
+  restrictPrivateIps: importEnableOnly((s) => {
+    s.setRestrictPrivateIps(true);
+  }),
+  autoRefreshInterval: importNumber((s, v) => {
+    s.setAutoRefreshInterval(v);
+  }),
+  connectTimeout: importNumber((s, v) => {
+    s.setConnectTimeout(v);
+  }),
+  keepaliveInterval: importNumber((s, v) => {
+    s.setKeepaliveInterval(v);
+  }),
+  keepaliveMax: importNumber((s, v) => {
+    s.setKeepaliveMax(v);
+  }),
+  sidebarWidth: importNumber((s, v) => {
+    s.setSidebarWidth(v);
+  }),
+  toastAutoDismiss: importBoolean((s, v) => {
+    s.setToastAutoDismiss(v);
+  }),
+  toastDismissSeconds: importNumber((s, v) => {
+    s.setToastDismissSeconds(v);
+  }),
+  autoCheckForUpdates: importEnableOnly((s) => {
+    s.setAutoCheckForUpdates(true);
+  }),
+};
+
+const EXPORTABLE_SETTING_KEYS = Object.keys(SETTING_IMPORTERS) as ExportableSettingKey[];
+
+/** The current settings as they go into an export file. */
+export function getExportableSettings(): Record<ExportableSettingKey, unknown> {
+  const state = useSettingsStore.getState();
+  const out: Partial<Record<ExportableSettingKey, unknown>> = {};
+  for (const key of EXPORTABLE_SETTING_KEYS) out[key] = state[key];
+  return out as Record<ExportableSettingKey, unknown>;
+}
+
+/**
+ * Apply settings read from an export file. Keys this version does not know
+ * and values its setters reject are ignored, leaving the current value.
+ */
+export function importSettings(raw: Readonly<Record<string, unknown>>): void {
+  // Only the setters are used from this snapshot; each one updates the
+  // live store itself.
+  const state = useSettingsStore.getState();
+  for (const key of EXPORTABLE_SETTING_KEYS) {
+    if (Object.prototype.hasOwnProperty.call(raw, key)) SETTING_IMPORTERS[key](state, raw[key]);
+  }
+}
+
+/** The current command buttons as they go into an export file. */
+export function getExportableCommandButtons(): CommandButton[] {
+  return useSettingsStore
+    .getState()
+    .commandButtons.map(({ id, name, command, color }) => ({ id, name, command, color }));
+}
+
+// Characters that change how a button looks without being seen: control
+// and format characters (format covers zero-width characters, text-direction
+// overrides and tag characters), line and paragraph separators, lone
+// surrogates, and characters that render as blanks. Private-use characters
+// are allowed: icon fonts such as Nerd Fonts put their glyphs there.
+const HIDDEN_CHARACTER_RE = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Cs}\u034f\u115f\u1160\u2800\u3164\uffa0]/u;
+// Every space character except the ordinary one, which the button list
+// collapses, so runs of them cannot push a command out of view.
+const UNUSUAL_SPACE_RE = /[\u00a0\u1680\u2000-\u200a\u202f\u205f\u3000]/u;
+// A command never needs an icon glyph or a variation selector; either can
+// render blank or as a lookalike, so commands refuse them on top of the above.
+const COMMAND_ONLY_HIDDEN_RE = /[\p{Co}\p{Variation_Selector}]/u;
+// Emoji sequences join with U+200D. In a name it only changes how emoji
+// combine, so it is allowed there; in a command it is still refused.
+const ZERO_WIDTH_JOINER_RE = /\u200d/g;
+
+/**
+ * Whether `text` holds characters a button from someone else's file could
+ * use to look harmless while sending something else. Commands typed in the
+ * app use the visible `\r`-style escapes instead, so a real button never
+ * needs them.
+ */
+function hasHiddenCharacters(text: string): boolean {
+  return HIDDEN_CHARACTER_RE.test(text) || UNUSUAL_SPACE_RE.test(text);
+}
+
+/** Whether an entry from an export file can become a command button. */
+export function isImportableButton(raw: unknown): raw is CommandButton {
+  if (typeof raw !== "object" || raw === null) return false;
+  const b = raw as Partial<CommandButton>;
+  return (
+    typeof b.id === "string" &&
+    UUID_RE.test(b.id) &&
+    isValidButtonShape(b) &&
+    !hasHiddenCharacters(b.name.replace(ZERO_WIDTH_JOINER_RE, "")) &&
+    !hasHiddenCharacters(b.command) &&
+    !COMMAND_ONLY_HIDDEN_RE.test(b.command)
+  );
+}
+
+export interface CommandButtonImportResult {
+  added: number;
+  skipped: number;
+}
+
+/**
+ * Add command buttons from an export file after the existing ones. Existing
+ * buttons are never changed: a button is skipped when one with the same id,
+ * or the same name and command, is already there, when it is malformed, or
+ * when the bar is full.
+ */
+export function importCommandButtons(raw: readonly unknown[]): CommandButtonImportResult {
+  const current = useSettingsStore.getState().commandButtons;
+  // Ids are compared lowercased on both sides: the store accepts either case.
+  const ids = new Set(current.map((b) => b.id.toLowerCase()));
+  const contentKey = (b: CommandButton): string => JSON.stringify([b.name, b.command]);
+  const contents = new Set(current.map(contentKey));
+  const added: CommandButton[] = [];
+  for (const item of raw) {
+    if (current.length + added.length >= MAX_COMMAND_BUTTONS) break;
+    if (!isImportableButton(item)) continue;
+    // Normalised so ids compare the same way however the file spells them.
+    const id = item.id.toLowerCase();
+    if (ids.has(id) || contents.has(contentKey(item))) continue;
+    // Copy the known fields only, so nothing else in the file is persisted.
+    const button = { id, name: item.name, command: item.command, color: item.color };
+    added.push(button);
+    ids.add(id);
+    contents.add(contentKey(button));
+  }
+  if (added.length > 0) {
+    useSettingsStore.setState({ commandButtons: [...current, ...added] });
+  }
+  return { added: added.length, skipped: raw.length - added.length };
+}

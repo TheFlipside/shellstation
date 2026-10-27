@@ -19,6 +19,23 @@ import { useToastStore } from "../stores/toastStore";
 import { HighlightProfileDialog } from "./HighlightProfileDialog";
 import { CustomSelect } from "./CustomSelect";
 import { ConfirmDialog } from "./ConfirmDialog";
+import {
+  DataExportDialog,
+  DataImportDialog,
+  exportResultLines,
+  importFileErrorMessage,
+  importResultLine,
+  type DataResultLine,
+} from "./DataTransferDialog";
+import {
+  MAX_IMPORT_FILE_SIZE,
+  errorText,
+  exportData,
+  importData,
+  parseExportFile,
+  type ParsedExportFile,
+  type SectionSelection,
+} from "../dataTransfer";
 
 // eslint-disable-next-line @typescript-eslint/no-empty-function
 const noop = (): void => {};
@@ -168,8 +185,13 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
   const [dbCreateResult, setDbCreateResult] = useState<string | null>(null);
   const [dbSaved, setDbSaved] = useState(false);
   const [dbError, setDbError] = useState<string | null>(null);
-  const [dbOpResult, setDbOpResult] = useState<string | null>(null);
   const [dbDirty, setDbDirty] = useState(false);
+
+  // Data export / import
+  const [exportDialogOpen, setExportDialogOpen] = useState(false);
+  const [importFile, setImportFile] = useState<ParsedExportFile | null>(null);
+  const [dataBusy, setDataBusy] = useState(false);
+  const [dataResults, setDataResults] = useState<DataResultLine[]>([]);
 
   // User identity (PG mode only)
   const appDbBackend = useAppStore((s) => s.dbBackend);
@@ -468,57 +490,68 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
     }
   }, [dbBackend, sqlitePath, pgHost, pgPort, pgDatabase, pgUsername, pgPassword, pgSslMode]);
 
-  const handleDbExport = useCallback(async () => {
-    setDbOpResult(null);
-    setDbError(null);
-    try {
-      const path = await save({
-        title: t("settings.dbExport"),
-        defaultPath: "shellstation-export.json",
-        filters: [{ name: "JSON", extensions: ["json"] }],
-      });
-      if (!path) return;
-      const result = await invoke<string>("db_export_file", { path });
-      setDbOpResult(result);
-    } catch (e) {
-      setDbError(String(e));
-    }
-  }, [t]);
+  const handleDataExport = useCallback(
+    async (selection: SectionSelection) => {
+      setExportDialogOpen(false);
+      setDataResults([]);
+      // The save dialog is shown by the backend and always settles, cancel
+      // included, so the busy flag cannot get stuck.
+      setDataBusy(true);
+      try {
+        const result = await exportData(selection, t("settings.dbExport"));
+        if (result) setDataResults(exportResultLines(t, selection, result));
+      } catch (e) {
+        setDataResults([
+          { ok: false, message: t("settings.dataExportFailed", { error: errorText(e) }) },
+        ]);
+      } finally {
+        setDataBusy(false);
+      }
+    },
+    [t],
+  );
 
-  const handleDbImport = useCallback(() => {
-    setDbOpResult(null);
-    setDbError(null);
+  // Reads the file first, so the import dialog can offer exactly the
+  // sections it holds.
+  const handleDataImportPick = useCallback(() => {
+    setDataResults([]);
     void (async () => {
       const file = await pickFile(".json");
       if (!file) return;
+      if (file.size > MAX_IMPORT_FILE_SIZE) {
+        setDataResults([{ ok: false, message: t("settings.importTooLarge") }]);
+        return;
+      }
+      // Busy only once a file is chosen (see pickFile): reading and parsing
+      // a large file takes a moment, and the buttons must not start another.
+      setDataBusy(true);
       try {
-        const MAX_IMPORT_SIZE = 100 * 1024 * 1024; // 100 MB
-        if (file.size > MAX_IMPORT_SIZE) {
-          setDbError("Import file is too large (max 100 MB).");
-          return;
-        }
-        const text = await file.text();
-        const data: unknown = JSON.parse(text);
-        if (
-          typeof data !== "object" ||
-          data === null ||
-          Array.isArray(data) ||
-          !("folders" in data) ||
-          !("sessions" in data) ||
-          !Array.isArray((data as Record<string, unknown>).folders) ||
-          !Array.isArray((data as Record<string, unknown>).sessions)
-        ) {
-          setDbError("Invalid export format: expected an object with folders and sessions arrays.");
-          return;
-        }
-        const result = await invoke<string>("db_import", { data });
-        await useSessionStore.getState().loadAll();
-        setDbOpResult(result);
+        setImportFile(parseExportFile(await file.text()));
       } catch (e) {
-        setDbError(String(e));
+        setDataResults([{ ok: false, message: importFileErrorMessage(t, e) }]);
+      } finally {
+        setDataBusy(false);
       }
     })();
-  }, []);
+  }, [t]);
+
+  const handleDataImport = useCallback(
+    async (file: ParsedExportFile, selection: SectionSelection) => {
+      setImportFile(null);
+      setDataBusy(true);
+      try {
+        const results = await importData(file, selection);
+        setDataResults(results.map((r) => importResultLine(t, r)));
+      } catch (e) {
+        setDataResults([
+          { ok: false, message: t("settings.dataImportFailed", { error: errorText(e) }) },
+        ]);
+      } finally {
+        setDataBusy(false);
+      }
+    },
+    [t],
+  );
 
   const handleImportExternal = useCallback(
     (command: "import_mremoteng" | "import_securecrt", accept: string) => {
@@ -1515,7 +1548,7 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
 
         {/* ── Data Export / Import ─────────────────────────────────── */}
         <div className="settings-label-row">
-          <h4 className="settings-section-title">{t("settings.database")} — Export / Import</h4>
+          <h4 className="settings-section-title">{t("settings.dataExportImport")}</h4>
           <span className="settings-help" title={t("settings.dbExportImportHint")}>
             ?
           </span>
@@ -1524,17 +1557,35 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
           <button
             type="button"
             className="dialog-btn"
+            disabled={dataBusy}
             onClick={() => {
-              void handleDbExport();
+              setDataResults([]);
+              setExportDialogOpen(true);
             }}
           >
             {t("settings.dbExport")}
           </button>
-          <button type="button" className="dialog-btn" onClick={handleDbImport}>
+          <button
+            type="button"
+            className="dialog-btn"
+            disabled={dataBusy}
+            onClick={handleDataImportPick}
+          >
             {t("settings.dbImport")}
           </button>
         </div>
-        {dbOpResult && <span className="settings-db-success">{dbOpResult}</span>}
+        {dataResults.length > 0 && (
+          <div
+            className="data-transfer-results"
+            role={dataResults.some((line) => !line.ok) ? "alert" : "status"}
+          >
+            {dataResults.map((line, i) => (
+              <p key={i} className={line.ok ? "settings-db-success" : "settings-db-error"}>
+                {line.message}
+              </p>
+            ))}
+          </div>
+        )}
 
         {/* ── Keyword Highlighting ──────────────────────────── */}
         <div className="settings-label-row">
@@ -1655,6 +1706,27 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
           }}
           onCancel={() => {
             setHighlightDeleteConfirm(null);
+          }}
+        />
+      )}
+      {exportDialogOpen && (
+        <DataExportDialog
+          onConfirm={(selection) => {
+            void handleDataExport(selection);
+          }}
+          onCancel={() => {
+            setExportDialogOpen(false);
+          }}
+        />
+      )}
+      {importFile && (
+        <DataImportDialog
+          file={importFile}
+          onConfirm={(selection) => {
+            void handleDataImport(importFile, selection);
+          }}
+          onCancel={() => {
+            setImportFile(null);
           }}
         />
       )}
