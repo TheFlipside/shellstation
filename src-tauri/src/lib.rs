@@ -36,6 +36,7 @@ mod import;
 mod limits;
 mod login_sequence;
 mod migrate_legacy;
+mod private_fs;
 mod pty;
 mod session_logger;
 mod ssh;

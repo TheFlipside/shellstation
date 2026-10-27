@@ -604,17 +604,17 @@ fn known_hosts_path() -> Result<PathBuf, String> {
 /// permissions that OpenSSH expects.
 fn ensure_known_hosts_file(path: &std::path::Path) {
     if let Some(parent) = path.parent() {
-        if !parent.exists() {
-            if let Err(e) = std::fs::create_dir_all(parent) {
-                warn!(path = %parent.display(), error = %e, "Failed to create .ssh directory");
-                return;
-            }
+        if let Err(e) = crate::private_fs::create_private_dir(parent) {
+            warn!(path = %parent.display(), error = %e, "Failed to create .ssh directory");
+            return;
         }
         // Always enforce correct permissions on the .ssh directory.
         set_restricted_dir_permissions(parent);
     }
-    if !path.exists() {
-        if let Err(e) = std::fs::File::create(path) {
+    match crate::private_fs::create_private_file(path) {
+        Ok(_) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+        Err(e) => {
             warn!(path = %path.display(), error = %e, "Failed to create known_hosts file");
             return;
         }
@@ -628,7 +628,9 @@ fn set_restricted_dir_permissions(path: &std::path::Path) {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700));
+        if let Err(e) = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)) {
+            warn!(path = %path.display(), error = %e, "Failed to restrict directory permissions");
+        }
     }
     #[cfg(windows)]
     {
@@ -641,7 +643,9 @@ fn set_restricted_file_permissions(path: &std::path::Path) {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+        if let Err(e) = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)) {
+            warn!(path = %path.display(), error = %e, "Failed to restrict file permissions");
+        }
     }
     #[cfg(windows)]
     {
@@ -650,30 +654,82 @@ fn set_restricted_file_permissions(path: &std::path::Path) {
 }
 
 /// On Windows, use icacls to remove inherited permissions and grant full
-/// control only to the current user.
+/// control only to the current user, as OpenSSH expects; SYSTEM and the
+/// administrators lose their inherited access too. The user is named by SID:
+/// a bare user name can resolve to another account of the same name (a local
+/// one on a domain-joined machine), and with inheritance removed the user
+/// would then be locked out of their own `.ssh` directory.
 #[cfg(windows)]
 fn restrict_windows_acl(path: &std::path::Path, is_dir: bool) {
     use std::os::windows::process::CommandExt;
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
-    let path_str = path.to_string_lossy().to_string();
-    let username = std::env::var("USERNAME").unwrap_or_default();
-    if username.is_empty()
-        || !username
-            .chars()
-            .all(|c| c.is_alphanumeric() || c == '_' || c == '-' || c == '.' || c == ' ')
-    {
+    let Some(sid) = current_user_sid() else {
+        warn!(path = %path.display(), "Could not determine the current user's SID; permissions left as they are");
         return;
-    }
-    let grant = if is_dir {
-        format!("{username}:(OI)(CI)F")
-    } else {
-        format!("{username}:F")
     };
-    let _ = std::process::Command::new("icacls")
-        .args([&path_str, "/inheritance:r", "/grant:r", &grant])
+    let grant = if is_dir {
+        format!("*{sid}:(OI)(CI)F")
+    } else {
+        format!("*{sid}:F")
+    };
+    match std::process::Command::new(windows_tool("icacls.exe"))
+        .arg(path)
+        .args(["/inheritance:r", "/grant:r", grant.as_str()])
         .creation_flags(CREATE_NO_WINDOW)
-        .output();
+        .output()
+    {
+        Ok(out) if out.status.success() => {}
+        Ok(out) => {
+            warn!(path = %path.display(), status = %out.status, "icacls could not restrict permissions");
+        }
+        Err(e) => warn!(path = %path.display(), error = %e, "Failed to run icacls"),
+    }
+}
+
+/// The current user's SID, read once from `whoami /user`.
+#[cfg(windows)]
+fn current_user_sid() -> Option<&'static str> {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+    static SID: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    SID.get_or_init(|| {
+        let out = std::process::Command::new(windows_tool("whoami.exe"))
+            .args(["/user", "/fo", "csv", "/nh"])
+            .creation_flags(CREATE_NO_WINDOW)
+            .output()
+            .ok()
+            .filter(|out| out.status.success())?;
+        parse_whoami_sid(&String::from_utf8_lossy(&out.stdout)).map(str::to_string)
+    })
+    .as_deref()
+}
+
+/// The SID in `whoami /user /fo csv /nh` output, `"domain\user","S-1-…"`.
+/// Only the last field is read, so a comma or quote in the user name cannot
+/// shift it, and only a well-formed SID is accepted.
+#[cfg(any(windows, test))]
+fn parse_whoami_sid(output: &str) -> Option<&str> {
+    let sid = output
+        .trim()
+        .rsplit(',')
+        .next()?
+        .strip_prefix('"')?
+        .strip_suffix('"')?;
+    let parts = sid.strip_prefix("S-1-")?;
+    parts
+        .split('-')
+        .all(|part| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit()))
+        .then_some(sid)
+}
+
+/// A program in the Windows system directory, by full path so that `PATH`
+/// cannot put another program of the same name first.
+#[cfg(windows)]
+fn windows_tool(name: &str) -> std::path::PathBuf {
+    let root = std::env::var_os("SystemRoot").unwrap_or_else(|| r"C:\Windows".into());
+    std::path::Path::new(&root).join("System32").join(name)
 }
 
 /// Remove all existing `known_hosts` entries for the given host+port,
@@ -1610,6 +1666,70 @@ mod tests {
 
     fn v6(s: &str) -> IpAddr {
         IpAddr::V6(s.parse::<Ipv6Addr>().unwrap())
+    }
+
+    // ── parse_whoami_sid ─────────────────────────────────────────────────
+    // The SID names the user the .ssh ACL is granted to, so a misread one
+    // would lock the user out; anything not shaped like a SID is refused.
+
+    #[test]
+    fn parse_whoami_sid_reads_the_last_field() {
+        let sid = "S-1-5-21-2123663517-4207914079-1984504764-1001";
+        assert_eq!(
+            parse_whoami_sid(&format!("\"dev02\\max\",\"{sid}\"\r\n")),
+            Some(sid)
+        );
+        // A comma or quote in the name does not move the SID.
+        assert_eq!(
+            parse_whoami_sid(&format!("\"corp\\a,\"\"b\",\"{sid}\"")),
+            Some(sid)
+        );
+    }
+
+    #[test]
+    fn parse_whoami_sid_refuses_anything_else() {
+        for bad in [
+            "",
+            "\"dev02\\max\"",
+            "\"dev02\\max\",S-1-5-21-1",
+            "\"dev02\\max\",\"S-1-\"",
+            "\"dev02\\max\",\"S-1-5--1\"",
+            "\"dev02\\max\",\"S-1-5-21-1 /grant:r Everyone:F\"",
+            "\"dev02\\max\",\"S-2-5-21-1\"",
+        ] {
+            assert_eq!(parse_whoami_sid(bad), None, "{bad:?}");
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn current_user_sid_is_found() {
+        // S-1-5-21-… for local and domain accounts, S-1-12-1-… for Entra ID.
+        let sid = current_user_sid().expect("whoami should report a SID");
+        assert!(
+            parse_whoami_sid(&format!("\"x\",\"{sid}\"")).is_some(),
+            "{sid}"
+        );
+    }
+
+    /// The real icacls grant: once inherited access is gone, the user must
+    /// still be able to use the directory and the file, or a wrong grant
+    /// would lock them out of their own `.ssh`.
+    #[cfg(windows)]
+    #[test]
+    fn restricted_acl_leaves_the_user_access() {
+        let dir = std::env::temp_dir().join(format!("ss-acl-{}", uuid::Uuid::new_v4()));
+        crate::private_fs::create_private_dir(&dir).unwrap();
+        restrict_windows_acl(&dir, true);
+        let file = dir.join("known_hosts");
+        crate::private_fs::create_private_file(&file).unwrap();
+        restrict_windows_acl(&file, false);
+        std::fs::write(&file, b"example.com ssh-ed25519 AAAA\n").unwrap();
+        assert_eq!(
+            std::fs::read(&file).unwrap(),
+            b"example.com ssh-ed25519 AAAA\n"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     // ── is_restricted_ip ─────────────────────────────────────────────────
