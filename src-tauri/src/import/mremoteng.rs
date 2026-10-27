@@ -336,7 +336,7 @@ mod tests {
         let (folders, sessions, _, warnings) = parse(xml).unwrap();
         assert!(folders.is_empty());
         assert!(sessions.is_empty());
-        assert!(warnings.is_empty());
+        assert_eq!(warnings, Vec::<String>::new());
     }
 
     #[test]
@@ -349,7 +349,7 @@ mod tests {
         let (folders, sessions, _, warnings) = parse(xml).unwrap();
         assert!(folders.is_empty());
         assert_eq!(sessions.len(), 1);
-        assert!(warnings.is_empty());
+        assert_eq!(warnings, Vec::<String>::new());
         let s = &sessions[0];
         assert_eq!(s.name, "web1");
         assert_eq!(s.hostname, "web1.example.com");
@@ -367,7 +367,7 @@ mod tests {
             </Confcons>"#;
         let (_, sessions, _, warnings) = parse(xml).unwrap();
         assert_eq!(sessions.len(), 1);
-        assert!(warnings.is_empty());
+        assert_eq!(warnings, Vec::<String>::new());
         assert_eq!(sessions[0].protocol, "telnet");
     }
 

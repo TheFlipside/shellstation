@@ -461,15 +461,16 @@ async fn persist_import(
     skipped: &[SkippedSession],
     mut warnings: Vec<String>,
 ) -> Result<ImportResult, String> {
+    // Emit progress at most every N items to keep event traffic reasonable
+    // for large imports.
+    const PROGRESS_STEP: usize = 25;
+
     // Checked before anything is written, so an oversized file leaves no
     // partial import behind.
     check_import_counts(folders.len(), sessions.len()).inspect_err(|e| {
         tracing::warn!("{root_name} rejected: {e}");
     })?;
 
-    // Emit progress at most every N items to keep event traffic reasonable
-    // for large imports.
-    const PROGRESS_STEP: usize = 25;
     let mut folders_created = 0u32;
     let mut sessions_created = 0u32;
     let session_total_count = sessions.len() as u32;
@@ -732,7 +733,7 @@ mod tests {
     fn finalize_warnings_keeps_a_short_list_whole() {
         let shown = finalize_warnings(vec!["a".into(), "b".into()]);
         assert_eq!(shown, ["a", "b"]);
-        assert!(finalize_warnings(Vec::new()).is_empty());
+        assert_eq!(finalize_warnings(Vec::new()), Vec::<String>::new());
     }
 
     /// An index over `references`, as `persist_import` builds it.

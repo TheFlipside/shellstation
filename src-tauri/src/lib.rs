@@ -117,7 +117,7 @@ fn startup_show_maximized() -> bool {
     // and set `cb` to the struct size, matching the Win32 calling contract.
     let mut info: StartupInfoW = unsafe { std::mem::zeroed() };
     info.cb = std::mem::size_of::<StartupInfoW>() as u32;
-    unsafe { GetStartupInfoW(&mut info) };
+    unsafe { GetStartupInfoW(&raw mut info) };
     (info.dw_flags & STARTF_USESHOWWINDOW) != 0 && info.w_show_window == SW_SHOWMAXIMIZED
 }
 use tracing_subscriber::util::SubscriberInitExt;

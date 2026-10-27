@@ -653,6 +653,9 @@ fn set_restricted_file_permissions(path: &std::path::Path) {
 /// control only to the current user.
 #[cfg(windows)]
 fn restrict_windows_acl(path: &std::path::Path, is_dir: bool) {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
     let path_str = path.to_string_lossy().to_string();
     let username = std::env::var("USERNAME").unwrap_or_default();
     if username.is_empty()
@@ -667,8 +670,6 @@ fn restrict_windows_acl(path: &std::path::Path, is_dir: bool) {
     } else {
         format!("{username}:F")
     };
-    use std::os::windows::process::CommandExt;
-    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
     let _ = std::process::Command::new("icacls")
         .args([&path_str, "/inheritance:r", "/grant:r", &grant])
         .creation_flags(CREATE_NO_WINDOW)
@@ -1595,16 +1596,6 @@ impl client::Handler for SshHandler {
         }
 
         Ok(accepted)
-    }
-
-    async fn data(
-        &mut self,
-        _channel: russh::ChannelId,
-        _data: &[u8],
-        _session: &mut client::Session,
-    ) -> Result<(), Self::Error> {
-        // Data is consumed via channel.wait() in the reader task.
-        Ok(())
     }
 }
 

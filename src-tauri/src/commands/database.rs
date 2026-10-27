@@ -475,7 +475,7 @@ pub async fn db_export(
 // in an envelope together with the client settings and command buttons.
 
 /// Maximum number of items allowed in a single import to prevent resource exhaustion.
-/// The folder and session limits also apply to the SecureCRT and mRemoteNG
+/// The folder and session limits also apply to the `SecureCRT` and `mRemoteNG`
 /// imports in `import/mod.rs`.
 pub(crate) const MAX_IMPORT_FOLDERS: usize = 10_000;
 pub(crate) const MAX_IMPORT_SESSIONS: usize = 50_000;

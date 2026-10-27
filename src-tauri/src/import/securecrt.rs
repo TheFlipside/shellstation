@@ -616,7 +616,7 @@ mod tests {
         let (folders, sessions, _, warnings) = parse(&wrap("")).unwrap();
         assert!(folders.is_empty());
         assert!(sessions.is_empty());
-        assert!(warnings.is_empty());
+        assert_eq!(warnings, Vec::<String>::new());
     }
 
     #[test]
@@ -633,7 +633,7 @@ mod tests {
         let (folders, sessions, _, warnings) = parse(&xml).unwrap();
         assert!(folders.is_empty());
         assert_eq!(sessions.len(), 1);
-        assert!(warnings.is_empty());
+        assert_eq!(warnings, Vec::<String>::new());
         let s = &sessions[0];
         assert_eq!(s.name, "web1");
         assert_eq!(s.hostname, "web1.example.com");
@@ -747,7 +747,7 @@ mod tests {
         assert_eq!(sessions[0].name, "real");
         // A template is no session a jump host can name, and no user error.
         assert!(skipped.is_empty());
-        assert!(warnings.is_empty());
+        assert_eq!(warnings, Vec::<String>::new());
     }
 
     #[test]
@@ -779,7 +779,7 @@ mod tests {
         assert_eq!(sessions[0].folder_temp_id, folders[1].temp_id);
         assert_eq!(sessions[1].folder_temp_id, folders[0].temp_id);
         assert!(skipped.is_empty());
-        assert!(warnings.is_empty());
+        assert_eq!(warnings, Vec::<String>::new());
     }
 
     #[test]
@@ -806,7 +806,7 @@ mod tests {
         assert_eq!(sessions[0].name, "bastion");
         assert_eq!(sessions[0].folder_temp_id, folders[0].temp_id);
         assert!(skipped.is_empty());
-        assert!(warnings.is_empty());
+        assert_eq!(warnings, Vec::<String>::new());
     }
 
     #[test]

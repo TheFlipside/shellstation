@@ -238,7 +238,7 @@ mod tests {
         assert!(b.is_empty());
         assert_eq!(b.set_clause(), "");
         assert_eq!(b.where_placeholder(), "$1");
-        assert!(b.values().is_empty());
+        assert_eq!(b.values(), []);
     }
 
     #[test]
