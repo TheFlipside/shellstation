@@ -79,6 +79,17 @@ export function TerminalTabs({ uiScale }: TerminalTabsProps): React.JSX.Element 
     };
   }, [checkOverflow]);
 
+  // Keep the active tab in view. New tabs are appended at the end of the
+  // strip, past its right edge once it overflows, and closing a tab can hand
+  // activation to a neighbour that is scrolled out of view. scrollIntoView
+  // rather than scrollLeft math, because the tab bar's CSS zoom skews
+  // getBoundingClientRect differently per webview engine.
+  useLayoutEffect(() => {
+    tabScrollRef.current
+      ?.querySelector<HTMLElement>(".tab-active")
+      ?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }, [activeTabId]);
+
   const SCROLL_AMOUNT = 150;
 
   const scrollTabs = useCallback((direction: "left" | "right") => {

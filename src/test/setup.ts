@@ -17,6 +17,10 @@ globalThis.ResizeObserver = vi.fn(function (): ResizeObserver {
   };
 });
 
+// jsdom ships no scrollIntoView. TerminalTabs calls it to keep the active tab
+// in view whenever the active tab changes.
+Element.prototype.scrollIntoView = vi.fn();
+
 // jsdom ships no matchMedia. useTheme() subscribes to the OS dark-mode
 // preference through it; report "light" and never emit changes.
 Object.defineProperty(window, "matchMedia", {

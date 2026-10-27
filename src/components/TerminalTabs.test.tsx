@@ -3,7 +3,8 @@
  *
  * Focus of this suite: reconnecting an exited tab. Each session_connect opens
  * a real backend connection, so a reconnect that no tab ends up owning is a
- * connection nobody can see or close. Terminal and CommandBar are stubbed out;
+ * connection nobody can see or close. Also covers keeping the active tab
+ * scrolled into view in the tab strip. Terminal and CommandBar are stubbed out;
  * the real Zustand stores are used so the tests exercise the same tab state
  * the app does.
  */
@@ -234,5 +235,23 @@ describe("TerminalTabs reconnect", () => {
 
     expect(invoke).toHaveBeenCalledWith("telnet_disconnect", { id: NEW_CONN });
     expect(invoke).not.toHaveBeenCalledWith("ssh_disconnect", { id: NEW_CONN });
+  });
+});
+
+describe("TerminalTabs tab strip", () => {
+  it("scrolls a newly opened tab into view", () => {
+    // New tabs are appended at the end of the strip. Once it overflows, that
+    // is past the right edge, so the active tab would sit out of sight.
+    render(<TerminalTabs uiScale={100} />);
+    const scrollIntoView = vi.spyOn(Element.prototype, "scrollIntoView");
+    scrollIntoView.mockClear();
+
+    act(() => {
+      useTerminalStore.getState().addTab(NEW_CONN, "db-server", "ssh");
+    });
+
+    expect(scrollIntoView).toHaveBeenCalledTimes(1);
+    expect(scrollIntoView).toHaveBeenCalledWith({ block: "nearest", inline: "nearest" });
+    expect(scrollIntoView.mock.contexts[0]).toBe(screen.getByTitle("db-server"));
   });
 });
