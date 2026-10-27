@@ -166,10 +166,24 @@ Every `folders` and `sessions` row has two columns added by the RLS migration:
 | ----------------- | --------- | ------------------------------------------------ |
 | `*_owner_all`     | ALL       | Owner can read, insert, update, delete own rows. |
 | `*_shared_read`   | SELECT    | Any user can read shared rows.                   |
-| `*_shared_update` | UPDATE    | Any user can update shared rows.                 |
+| `*_shared_update` | UPDATE    | Any user can update shared rows (but see below). |
 | `*_shared_delete` | DELETE    | Only the owner can delete shared rows.           |
 
 `FORCE ROW LEVEL SECURITY` is enabled, meaning policies apply even to the table owner — no role bypasses RLS through ownership alone.
+
+Apart from its owner and its place in the folder tree, a shared row stays editable by every user at the database level, including the hostname, port, username and jump host. The app's own edit commands require ownership, but a user with direct SQL access is not bound by them. A shared session is therefore only as trustworthy as the least trusted member of the team.
+
+Two trigger functions keep a shared row with its owner, and where its owner put it. PostgreSQL accepts an updated row that passes any permissive policy. Without the triggers, any user could get around the owner-only delete rule in two ways:
+
+- **Taking ownership.** Setting yourself as the owner of a shared row passes `*_owner_all`. A policy's `WITH CHECK` cannot prevent this, because it sees only the new row.
+- **Moving the row.** Moving a shared row under a folder of your own takes it out of everyone else's folder tree. Deleting that folder then deletes the row too, because the foreign keys cascade and a cascade is not subject to RLS.
+
+The two functions:
+
+- **`shellstation_keep_owner`** runs as `folders_keep_owner` and `sessions_keep_owner` and refuses any change of `owner`. Only a superuser or the table owner (the admin role, or a member of it) gets past it. `FORCE ROW LEVEL SECURITY` still limits the admin to its own and shared rows, so reassigning a removed user's personal rows takes a superuser ([ADMIN_GUIDE.md §4](ADMIN_GUIDE.md#4-removing-a-user)). The one other change allowed is that a user may claim a placeholder `'local'` row for themselves, which the startup fix-up does. RLS limits a user to the `'local'` rows that are shared. A role named `local`, though, would own all of them, so no role should be named that.
+- **`shellstation_keep_place`** runs as `folders_keep_place` (on `parent_id`) and `sessions_keep_place` (on `folder_id`). It refuses a move by anyone other than the row's owner, the table owner or a superuser. The app's own move commands already require the user to own the row.
+
+Both functions run as the updating user. Their `search_path` is pinned to `pg_catalog, pg_temp`, with the temporary schema last, and their catalog lookups are schema-qualified, so a temporary table cannot stand in for `pg_class`. These guarantees hold under Option A (§4.5.2). Option B users hold `TRIGGER` and `TRUNCATE` on the tables, and both reach past row-level security anyway: such a user can add a trigger of their own that rewrites `owner`, or empty a table outright.
 
 **Per-user credential mapping:** The `session_credentials` table maps each user's credential profile to shared sessions. When user A shares a session with user B, each user connects with their own credentials — the session definition is shared, the authentication is not.
 
@@ -195,7 +209,7 @@ Every user gets schema modification rights. Any user who launches a new app vers
 - Each user role gets: `CREATE ON SCHEMA public`, `ALTER TABLE`, `CREATE POLICY`, plus DML on all tables.
 - The first user to start the new version runs the migration; subsequent users see it's already applied.
 
-The trade-off: every user has the privileges to modify or drop tables, not just read and write data. This is acceptable for small, trusted teams but inappropriate in environments where you want to limit who can alter the schema.
+The trade-off: every user has the privileges to modify or drop tables, not just read and write data. Their table privileges also include `TRIGGER` and `TRUNCATE`, which reach past row-level security (§4.5.1). This is acceptable for small, trusted teams but inappropriate in environments where you want to limit who can alter the schema.
 
 ### 4.6 PostgreSQL Administration Guide
 

@@ -365,28 +365,24 @@ async fn setup_postgres_rls(pool: &sqlx::PgPool) -> Result<(), String> {
             "folders",
             "ALL",
             "owner = current_user",
-            "",
         ),
         (
             "folders_shared_read",
             "folders",
             "SELECT",
             "visibility = 'shared'",
-            "",
         ),
         (
             "folders_shared_update",
             "folders",
             "UPDATE",
             "visibility = 'shared'",
-            "",
         ),
         (
             "folders_shared_delete",
             "folders",
             "DELETE",
             "visibility = 'shared' AND owner = current_user",
-            "",
         ),
         // Sessions
         (
@@ -394,32 +390,28 @@ async fn setup_postgres_rls(pool: &sqlx::PgPool) -> Result<(), String> {
             "sessions",
             "ALL",
             "owner = current_user",
-            "",
         ),
         (
             "sessions_shared_read",
             "sessions",
             "SELECT",
             "visibility = 'shared'",
-            "",
         ),
         (
             "sessions_shared_update",
             "sessions",
             "UPDATE",
             "visibility = 'shared'",
-            "",
         ),
         (
             "sessions_shared_delete",
             "sessions",
             "DELETE",
             "visibility = 'shared' AND owner = current_user",
-            "",
         ),
     ];
 
-    for (name, table, cmd, using_expr, _) in &policies {
+    for (name, table, cmd, using_expr) in &policies {
         let sql = format!(
             "DO $$ BEGIN \
                  CREATE POLICY {name} ON {table} FOR {cmd} USING ({using_expr}); \
@@ -445,6 +437,105 @@ async fn setup_postgres_rls(pool: &sqlx::PgPool) -> Result<(), String> {
             .execute(pool)
             .await
             .map_err(|e| format!("RLS setup (constraint {table}_vis_ck): {e}"))?;
+    }
+
+    // Triggers keep a shared row with its owner and where its owner put it.
+    // Anyone may update a shared row, and PostgreSQL accepts the updated row
+    // if it passes any permissive policy. That leaves two ways around the
+    // owner-only rule of `*_shared_delete`:
+    //
+    // - `SET owner = current_user` passes `*_owner_all` and makes the row the
+    //   updater's. A policy cannot stop this, because a `WITH CHECK` sees
+    //   only the new row. Owner changes are left to superusers (who reassign
+    //   a removed user's rows, ADMIN_GUIDE.md §4) and the table owner, plus
+    //   claiming a placeholder `'local'` row for oneself, as the fix-up at
+    //   the top of this function does.
+    // - Moving the row under a folder of one's own (`folder_id`, `parent_id`)
+    //   hides it from everyone else, and deleting that folder deletes it
+    //   too: the foreign keys cascade, and a cascade is not subject to RLS.
+    //   Moves are left to the row's owner, which the app's own move commands
+    //   already require, and to the table owner and superusers.
+    //
+    // The functions run as the updating user, so every name in them is
+    // pinned: a temporary table is found before `pg_catalog` unless the path
+    // says otherwise, and a temp table named `pg_class` would otherwise let
+    // any user claim to own the table. They are replaced on every run so
+    // that a fix to them reaches existing databases; only the table owner
+    // gets this far, the `ALTER TABLE`s above stop everyone else. This step
+    // comes last, so a failure to replace them (a function owned by another
+    // role) leaves the rest of the setup applied.
+    let functions = [
+        (
+            "shellstation_keep_owner",
+            "NEW.owner IS DISTINCT FROM OLD.owner \
+             AND NOT (OLD.owner = 'local' AND NEW.owner = current_user)",
+            "only the table owner can change the owner of a % row",
+        ),
+        (
+            "shellstation_keep_place",
+            "OLD.owner IS DISTINCT FROM current_user",
+            "only its owner can move a % row",
+        ),
+    ];
+    for (name, refuse_when, message) in functions {
+        let sql = format!(
+            "CREATE OR REPLACE FUNCTION {name}() RETURNS trigger \
+             LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp AS $fn$ \
+             BEGIN \
+                 IF {refuse_when} \
+                    AND NOT pg_catalog.pg_has_role(current_user, \
+                        (SELECT relowner FROM pg_catalog.pg_class WHERE oid = TG_RELID), 'MEMBER') \
+                 THEN \
+                     RAISE EXCEPTION '{message}', TG_TABLE_NAME \
+                         USING ERRCODE = 'insufficient_privilege'; \
+                 END IF; \
+                 RETURN NEW; \
+             END $fn$"
+        );
+        sqlx::query(sqlx::AssertSqlSafe(sql.as_str()))
+            .execute(pool)
+            .await
+            .map_err(|e| format!("RLS setup (function {name}): {e}"))?;
+    }
+    let triggers = [
+        (
+            "folders_keep_owner",
+            "folders",
+            "owner",
+            "shellstation_keep_owner",
+        ),
+        (
+            "sessions_keep_owner",
+            "sessions",
+            "owner",
+            "shellstation_keep_owner",
+        ),
+        (
+            "folders_keep_place",
+            "folders",
+            "parent_id",
+            "shellstation_keep_place",
+        ),
+        (
+            "sessions_keep_place",
+            "sessions",
+            "folder_id",
+            "shellstation_keep_place",
+        ),
+    ];
+    for (name, table, column, function) in triggers {
+        let sql = format!(
+            "DO $$ BEGIN \
+                 CREATE TRIGGER {name} BEFORE UPDATE OF {column} ON {table} FOR EACH ROW \
+                     WHEN (OLD.{column} IS DISTINCT FROM NEW.{column}) \
+                     EXECUTE FUNCTION {function}(); \
+             EXCEPTION WHEN duplicate_object THEN NULL; \
+             END $$"
+        );
+        sqlx::query(sqlx::AssertSqlSafe(sql.as_str()))
+            .execute(pool)
+            .await
+            .map_err(|e| format!("RLS setup (trigger {name}): {e}"))?;
     }
 
     tracing::info!("PostgreSQL RLS setup complete");
@@ -937,7 +1028,7 @@ pub fn run() {
                             if let Err(e) =
                                 tauri::async_runtime::block_on(setup_postgres_rls(&pool))
                             {
-                                tracing::warn!("PostgreSQL RLS setup skipped (expected for DML-only users): {e}");
+                                tracing::warn!("PostgreSQL RLS setup skipped; only the role that owns the tables can apply it (ADMIN_GUIDE.md §5): {e}");
                             }
                             // Query current_user for ownership tracking.
                             let pg_user = tauri::async_runtime::block_on(async {
@@ -1250,5 +1341,238 @@ mod tests {
         let s = sanitize_pg_error(raw);
         assert!(s.contains("See application logs"));
         assert!(!s.contains("/var/run/postgresql"));
+    }
+
+    async fn pg_exec(
+        pool: &sqlx::PgPool,
+        sql: &str,
+    ) -> Result<sqlx::postgres::PgQueryResult, sqlx::Error> {
+        sqlx::query(sqlx::AssertSqlSafe(sql)).execute(pool).await
+    }
+
+    /// The refusals of the two triggers; RLS refuses with the same code.
+    const BY_OWNER_TRIGGER: &str = "only the table owner can change the owner";
+    const BY_MOVE_TRIGGER: &str = "only its owner can move";
+
+    fn refused(result: Result<sqlx::postgres::PgQueryResult, sqlx::Error>, by: &str) -> bool {
+        matches!(result, Err(sqlx::Error::Database(e))
+            if e.code().as_deref() == Some("42501") && e.message().contains(by))
+    }
+
+    async fn insert_folder(
+        pool: &sqlx::PgPool,
+        parent: Option<uuid::Uuid>,
+        visibility: &str,
+    ) -> uuid::Uuid {
+        let id = uuid::Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO folders (id, name, parent_id, sort_order, owner, visibility) \
+             VALUES ($1, 'folder', $2, 0, current_user, $3)",
+        )
+        .bind(id)
+        .bind(parent)
+        .bind(visibility)
+        .execute(pool)
+        .await
+        .unwrap();
+        id
+    }
+
+    /// `setup_postgres_rls` against a real server, with the roles the admin
+    /// guide sets up. Needs a superuser URL for a throwaway server in
+    /// `SHELLSTATION_TEST_PG_URL`, for example
+    /// `postgres://postgres:pw@127.0.0.1:55432/postgres` after
+    /// `docker run --rm -e POSTGRES_PASSWORD=pw -p 127.0.0.1:55432:5432 postgres:17`.
+    /// Run with `cargo test -- --ignored shared_rows`. It creates its own
+    /// database and roles and drops them again afterwards.
+    #[tokio::test]
+    #[ignore = "needs a throwaway PostgreSQL server in SHELLSTATION_TEST_PG_URL"]
+    async fn shared_rows_keep_their_owner() {
+        let url = std::env::var("SHELLSTATION_TEST_PG_URL")
+            .expect("SHELLSTATION_TEST_PG_URL must name a throwaway PostgreSQL server");
+        let server = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&url)
+            .await
+            .unwrap();
+        let suffix = &uuid::Uuid::new_v4().simple().to_string()[..8];
+        let (db, admin, alice, bob) = (
+            format!("ss_rls_{suffix}"),
+            format!("ss_admin_{suffix}"),
+            format!("ss_alice_{suffix}"),
+            format!("ss_bob_{suffix}"),
+        );
+        for sql in [
+            format!("CREATE DATABASE {db}"),
+            format!("CREATE ROLE {admin} NOLOGIN"),
+            format!("CREATE ROLE {alice} NOLOGIN"),
+            format!("CREATE ROLE {bob} NOLOGIN"),
+        ] {
+            pg_exec(&server, &sql).await.unwrap();
+        }
+
+        // In a task of their own, so that a failing check still gets the
+        // database and roles dropped before its panic is passed on.
+        let opts: sqlx::postgres::PgConnectOptions = url.parse().unwrap();
+        let checks = tokio::spawn(check_shared_rows_keep_their_owner(
+            opts.database(&db),
+            admin.clone(),
+            alice.clone(),
+            bob.clone(),
+        ))
+        .await;
+        for sql in [
+            format!("DROP DATABASE {db} WITH (FORCE)"),
+            format!("DROP ROLE {admin}, {alice}, {bob}"),
+        ] {
+            pg_exec(&server, &sql).await.unwrap();
+        }
+        if let Err(e) = checks {
+            std::panic::resume_unwind(e.into_panic());
+        }
+    }
+
+    async fn check_shared_rows_keep_their_owner(
+        opts: sqlx::postgres::PgConnectOptions,
+        admin: String,
+        alice: String,
+        bob: String,
+    ) {
+        // One connection, so each SET ROLE holds for the statements after it.
+        let pool = PgPoolOptions::new()
+            .max_connections(1)
+            .connect_with(opts)
+            .await
+            .unwrap();
+        pg_exec(&pool, &format!("GRANT ALL ON SCHEMA public TO {admin}"))
+            .await
+            .unwrap();
+        pg_exec(
+            &pool,
+            &format!("GRANT USAGE ON SCHEMA public TO {alice}, {bob}"),
+        )
+        .await
+        .unwrap();
+
+        // As the admin: migrations and RLS setup, twice to show it is
+        // idempotent, then DML for the users (admin guide, Option A).
+        pg_exec(&pool, &format!("SET ROLE {admin}")).await.unwrap();
+        sqlx::migrate!().run(&pool).await.unwrap();
+        setup_postgres_rls(&pool).await.unwrap();
+        setup_postgres_rls(&pool).await.unwrap();
+        pg_exec(
+            &pool,
+            &format!(
+                "GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public \
+                 TO {alice}, {bob}"
+            ),
+        )
+        .await
+        .unwrap();
+
+        pg_exec(&pool, &format!("SET ROLE {alice}")).await.unwrap();
+        let folder = insert_folder(&pool, None, "shared").await;
+        let subfolder = insert_folder(&pool, Some(folder), "shared").await;
+        let session = uuid::Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO sessions (id, folder_id, name, hostname, username, owner, visibility) \
+             VALUES ($1, $2, 'shared', 'host.example', '', current_user, 'shared')",
+        )
+        .bind(session)
+        .bind(folder)
+        .execute(&pool)
+        .await
+        .unwrap();
+        let id = folder.to_string();
+        let take_folder = format!("UPDATE folders SET owner = current_user WHERE id = '{id}'");
+
+        pg_exec(&pool, &format!("SET ROLE {bob}")).await.unwrap();
+        assert!(refused(
+            pg_exec(&pool, &take_folder).await,
+            BY_OWNER_TRIGGER
+        ));
+        assert!(refused(
+            pg_exec(
+                &pool,
+                &format!("UPDATE sessions SET owner = current_user WHERE id = '{session}'"),
+            )
+            .await,
+            BY_OWNER_TRIGGER
+        ));
+        // A temporary table is found before pg_catalog for an unqualified
+        // name; one named pg_class must not let bob pass as the table owner.
+        pg_exec(&pool, "CREATE TEMP TABLE pg_class (oid oid, relowner oid)")
+            .await
+            .unwrap();
+        pg_exec(
+            &pool,
+            "INSERT INTO pg_class SELECT 'folders'::regclass, oid FROM pg_roles \
+             WHERE rolname = current_user",
+        )
+        .await
+        .unwrap();
+        assert!(refused(
+            pg_exec(&pool, &take_folder).await,
+            BY_OWNER_TRIGGER
+        ));
+        let rename = format!("UPDATE folders SET name = 'renamed' WHERE id = '{id}'");
+        assert_eq!(pg_exec(&pool, &rename).await.unwrap().rows_affected(), 1);
+        let delete = format!("DELETE FROM folders WHERE id = '{id}'");
+        assert_eq!(pg_exec(&pool, &delete).await.unwrap().rows_affected(), 0);
+
+        // Moved under a folder of bob's, alice's rows would be hidden from
+        // everyone else and deleted with it: the foreign keys cascade, and a
+        // cascade is not subject to RLS.
+        let own = insert_folder(&pool, None, "personal").await;
+        assert!(refused(
+            pg_exec(
+                &pool,
+                &format!("UPDATE sessions SET folder_id = '{own}' WHERE id = '{session}'"),
+            )
+            .await,
+            BY_MOVE_TRIGGER
+        ));
+        assert!(refused(
+            pg_exec(
+                &pool,
+                &format!("UPDATE folders SET parent_id = '{own}' WHERE id = '{subfolder}'"),
+            )
+            .await,
+            BY_MOVE_TRIGGER
+        ));
+        let delete_own = format!("DELETE FROM folders WHERE id = '{own}'");
+        assert_eq!(
+            pg_exec(&pool, &delete_own).await.unwrap().rows_affected(),
+            1
+        );
+        let left: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+            "SELECT count(*) FROM sessions WHERE id = '{session}'"
+        )))
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(left, 1);
+
+        // The owner cannot hand the row to someone else either, but can move
+        // it between folders of their own.
+        pg_exec(&pool, &format!("SET ROLE {alice}")).await.unwrap();
+        assert!(refused(
+            pg_exec(
+                &pool,
+                &format!("UPDATE folders SET owner = '{bob}' WHERE id = '{id}'"),
+            )
+            .await,
+            BY_OWNER_TRIGGER
+        ));
+        let other = insert_folder(&pool, None, "personal").await;
+        let move_own = format!("UPDATE sessions SET folder_id = '{other}' WHERE id = '{session}'");
+        assert_eq!(pg_exec(&pool, &move_own).await.unwrap().rows_affected(), 1);
+
+        // The admin, as table owner, reassigns rows (admin guide §4).
+        pg_exec(&pool, &format!("SET ROLE {admin}")).await.unwrap();
+        let reassign = format!("UPDATE folders SET owner = '{admin}' WHERE id = '{id}'");
+        assert_eq!(pg_exec(&pool, &reassign).await.unwrap().rows_affected(), 1);
+
+        pool.close().await;
     }
 }

@@ -45,7 +45,7 @@ Configure one ShellStation instance with the `shellstation_admin` credentials an
 After the admin has initialized the schema, create roles for each team member. There are two permission models to choose from (see [DESIGN.md §4.5.2](DESIGN.md#452-permission-model) for the trade-offs):
 
 - **Option A — Separated roles (recommended for larger teams):** Regular users get DML only. The admin must connect first after each ShellStation upgrade that includes schema changes.
-- **Option B — All users can migrate (simpler for small teams):** Every user gets schema modification rights. Any user can apply migrations automatically — no admin coordination needed.
+- **Option B — All users can migrate (simpler for small teams):** Every user gets schema modification rights. Any user can apply migrations automatically — no admin coordination needed. Their table privileges include `TRIGGER` and `TRUNCATE`, which reach past row-level security. Choose this only for a team whose members you trust with each other's items.
 
 ### 2.1 Group Role (Recommended)
 
@@ -94,6 +94,11 @@ GRANT shellstation_users TO jdoe;
 ```
 
 The PostgreSQL role name becomes the `owner` value in RLS — each user sees their own personal items and all shared items.
+
+Two things to avoid:
+
+- **A role named `local`.** That is the placeholder owner of rows from before RLS was set up. A role with that name would own all such rows, personal ones included. Other users can only claim the shared ones.
+- **Granting `shellstation_admin` to regular users.** Members of the role that owns the tables may change the `owner` of any row they can see, which means their own rows and every shared one.
 
 ### 2.2 Per-User Grants (Alternative)
 
@@ -169,12 +174,18 @@ For older PostgreSQL versions, set a short expiry and coordinate with the user t
 
 ## 4. Removing a User
 
+Run these as a superuser (e.g., `postgres`). Row-level security applies to `shellstation_admin` as well, so as the admin the `UPDATE`s would only reach the user's shared items. Once the triggers from section 5 are installed, only a superuser or the role that owns the tables (or a member of it) can change `owner`, apart from a user claiming a placeholder `'local'` row. If you leave a user's items orphaned instead, never create a role with that name again, because it would own them.
+
 ```sql
--- Reassign their personal items to the admin (optional — or let them be orphaned)
 \c shellstation
+-- Reassign their personal items to the admin (optional — or let them be orphaned)
 UPDATE folders SET owner = 'shellstation_admin' WHERE owner = 'jdoe';
 UPDATE sessions SET owner = 'shellstation_admin' WHERE owner = 'jdoe';
 DELETE FROM session_credentials WHERE user_ident = 'jdoe';
+
+-- If you reassigned them, check that nothing still names them (both return 0)
+SELECT count(*) FROM folders WHERE owner = 'jdoe';
+SELECT count(*) FROM sessions WHERE owner = 'jdoe';
 
 -- Revoke and drop
 REVOKE shellstation_users FROM jdoe;
@@ -199,6 +210,23 @@ When a new ShellStation version includes database schema changes:
 1. Users update ShellStation independently. The **first user to launch the new version** automatically applies pending migrations.
 2. Subsequent users start normally — the migration check detects that all migrations are already applied.
 3. No admin coordination is required. In the unlikely event of two users starting simultaneously during a migration, the migration system uses a lock table to serialize execution — only one instance runs the migration, the other waits.
+
+**Row-level security changes (both options):** The RLS setup (policies, and the triggers that keep shared items with their owner) runs on every startup. Only the role that owns the tables can apply it, though. That is normally `shellstation_admin`, which created the schema in section 1. For any other role the setup gets no further than the first `ALTER TABLE`, and that failure is logged and skipped.
+
+So when a release's notes mention a change to the RLS setup, start one instance with the owning role's credentials once after updating. This applies under Option B too. Until you do, the change is not in effect for anyone. For the release that adds these triggers, that means any user can still take over, move or delete other users' shared items.
+
+Under Option B, too, the triggers are installed by the owning role, as under Option A. They do not stop a user who holds `TRIGGER` or `TRUNCATE` on the tables, though, and Option B grants both ([DESIGN.md §4.5.1](DESIGN.md#451-how-rls-works)).
+
+To check that the triggers are installed and enabled, run the query below. It does not show whether the functions behind them are current; starting the owning role once after an update takes care of that.
+
+```sql
+-- All four should be listed, with tgenabled = 'O'
+SELECT tgrelid::regclass, tgname, tgenabled FROM pg_trigger
+WHERE tgname IN ('folders_keep_owner', 'sessions_keep_owner',
+                 'folders_keep_place', 'sessions_keep_place');
+```
+
+If any is missing, start an instance with the owning role's credentials.
 
 ---
 
