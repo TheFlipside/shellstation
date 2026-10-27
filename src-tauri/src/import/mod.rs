@@ -250,6 +250,8 @@ struct ImportProgress {
 }
 
 fn emit_progress(app: &AppHandle, phase: &'static str, current: u32, total: u32) {
+    // Progress only drives the dialog's bar; a lost event costs nothing the
+    // import result does not report anyway.
     let _ = app.emit(
         IMPORT_PROGRESS_EVENT,
         ImportProgress {

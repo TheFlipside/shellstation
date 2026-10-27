@@ -1267,6 +1267,22 @@ mod tests {
         assert_eq!(app_log_level(""), "info");
     }
 
+    /// The rules for configured paths, which startup and saving the SQLite
+    /// path in Settings share.
+    #[test]
+    fn validate_config_path_wants_absolute_paths_without_parent_components() {
+        let absolute = std::env::temp_dir().join("sessions.db");
+        let raw = absolute.to_string_lossy();
+        assert_eq!(validate_config_path(&raw, "Path"), Ok(absolute.clone()));
+        assert!(validate_config_path("relative/sessions.db", "Path")
+            .unwrap_err()
+            .contains("absolute"));
+        let up = std::env::temp_dir().join("..").join("sessions.db");
+        assert!(validate_config_path(&up.to_string_lossy(), "Path")
+            .unwrap_err()
+            .contains("(..)"));
+    }
+
     fn log_config(dir: &std::path::Path) -> config::AppLoggingConfig {
         config::AppLoggingConfig {
             log_directory: Some(dir.to_string_lossy().into_owned()),

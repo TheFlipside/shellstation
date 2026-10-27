@@ -3,14 +3,14 @@
 //! ## Why this exists
 //!
 //! sqlx is compile-time-checked when the query string is a `&'static str`,
-//! but the session-edit IPC has thirteen `Option<T>` fields where each
+//! but the session-edit IPC has an `Option<T>` field per column, where each
 //! `Some(_)` adds one column to `SET` and `None` skips it. With static
-//! queries you would need 2^13 prepared statements, so the builder
+//! queries you would need 2^n prepared statements for n fields, so the builder
 //! constructs the statement at runtime and binds typed values in order.
 //!
 //! ## Why a builder instead of inline `if let Some(...)` chains
 //!
-//! Before this module, each provider open-coded the same thirteen
+//! Before this module, each provider open-coded the same
 //! `if let Some` branches twice (once to build the `SET` fragment, once
 //! to bind the values), with the only differences being the placeholder
 //! syntax (`?` vs `$N`) and a per-provider WHERE clause. The two copies
@@ -31,7 +31,7 @@
 //! against a table where the only remaining safeguard is `PostgreSQL`
 //! row-level security. `SessionColumn` makes that injection impossible
 //! by construction: the compiler enforces that every column name is one
-//! of the thirteen variants below, each mapped to a hardcoded
+//! of the variants below, each mapped to a hardcoded
 //! `&'static str` in `as_sql()`. Adding a new column is a deliberate
 //! decision — extending the enum — rather than something that can be
 //! introduced accidentally by passing a string somewhere.
@@ -176,12 +176,11 @@ impl UpdateBuilder {
     /// this field at all; the inner `Option` tells us what to set it to.
     pub fn set_optional_uuid(&mut self, col: SessionColumn, val: Option<&Option<Uuid>>) {
         if let Some(inner) = val {
-            let placeholder = self.next_placeholder();
-            self.sets.push(format!("{} = {placeholder}", col.as_sql()));
-            self.values.push(match inner {
+            let bind = match inner {
                 Some(u) => BindVal::Text(u.to_string()),
                 None => BindVal::Null,
-            });
+            };
+            self.push(col, bind);
         }
     }
 

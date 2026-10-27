@@ -306,12 +306,10 @@ pub async fn db_save_config(
 
     // Validate the custom SQLite path before persisting.
     if let Some(ref path_str) = sqlite_path {
-        let path = std::path::Path::new(path_str);
-
-        // Must be an absolute path to prevent ambiguity.
-        if !path.is_absolute() {
-            return Err("SQLite path must be absolute".to_string());
-        }
+        // The same rules as at startup (absolute, no `..`), so that a path
+        // saved here is one the app will also open, rather than one it
+        // replaces with the default database on the next start.
+        let path = crate::validate_config_path(path_str, "SQLite path")?;
 
         // Must not point to an existing directory (needs to be a file path).
         if path.is_dir() {
@@ -322,19 +320,12 @@ pub async fn db_save_config(
         }
 
         // The parent directory must exist so SQLite can create the file.
-        // Canonicalize the parent to resolve symlinks and `..` sequences,
-        // preventing directory traversal attacks.
         if let Some(parent) = path.parent() {
-            if !parent.as_os_str().is_empty() {
-                let canonical_parent = std::fs::canonicalize(parent).map_err(|_| {
-                    format!("Parent directory does not exist: {}", parent.display())
-                })?;
-                if !canonical_parent.is_dir() {
-                    return Err(format!(
-                        "Parent directory does not exist: {}",
-                        parent.display()
-                    ));
-                }
+            if !parent.is_dir() {
+                return Err(format!(
+                    "Parent directory does not exist: {}",
+                    parent.display()
+                ));
             }
         }
     }
