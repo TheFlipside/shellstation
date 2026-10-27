@@ -29,6 +29,22 @@ pub struct NewFolder {
     pub parent_id: Option<Uuid>,
 }
 
+/// The protocols a saved session can use; `commands::session` connects by
+/// Telnet for `"telnet"` and by SSH otherwise.
+pub const SESSION_PROTOCOLS: [&str; 2] = ["ssh", "telnet"];
+
+/// The auth methods a saved session can hold. Sessions saved in the app use
+/// `profile`: the method comes from the session's credential profile at
+/// connect. Telnet sessions from before credential profiles carry `none`.
+/// The rest are methods the SSH layer handles directly.
+pub const SESSION_AUTH_METHODS: [&str; 5] = [
+    "profile",
+    "none",
+    "password",
+    "publickey",
+    "keyboard-interactive",
+];
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Session {
     pub id: Uuid,

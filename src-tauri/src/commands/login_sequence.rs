@@ -15,7 +15,12 @@ fn parse_uuid(s: &str) -> Result<Uuid, String> {
     Uuid::parse_str(s).map_err(|e| format!("Invalid UUID '{s}': {e}"))
 }
 
-fn validate_steps(steps: &[LoginSequenceStep]) -> Result<(), String> {
+/// The size limits on a sequence's steps: how many there are and how long
+/// each pattern and response is. Cheap, so a database import applies them to
+/// every sequence it holds. Compiling the patterns is left to
+/// `validate_steps` here and to connecting: an import file can hold tens of
+/// thousands of them.
+pub(super) fn check_step_limits(steps: &[LoginSequenceStep]) -> Result<(), String> {
     if steps.len() > MAX_STEPS {
         return Err(format!("Too many steps (max {MAX_STEPS})"));
     }
@@ -32,6 +37,13 @@ fn validate_steps(steps: &[LoginSequenceStep]) -> Result<(), String> {
                 i + 1
             ));
         }
+    }
+    Ok(())
+}
+
+fn validate_steps(steps: &[LoginSequenceStep]) -> Result<(), String> {
+    check_step_limits(steps)?;
+    for (i, step) in steps.iter().enumerate() {
         regex::Regex::new(&step.pattern)
             .map_err(|e| format!("Step {}: invalid regex pattern: {e}", i + 1))?;
     }

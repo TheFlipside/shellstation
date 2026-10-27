@@ -9,7 +9,7 @@ use tauri::{AppHandle, Emitter, State};
 use uuid::Uuid;
 
 use crate::commands::{MAX_IMPORT_FOLDERS, MAX_IMPORT_SESSIONS};
-use crate::db::models::{NewFolder, NewSession};
+use crate::db::models::{NewFolder, NewSession, SESSION_PROTOCOLS};
 use crate::db::{DatabaseProvider, DbState};
 
 /// Maximum allowed `XML` file size (100 MB).
@@ -573,6 +573,14 @@ async fn persist_import(
                 warnings.push(format!(
                     "Skipped session \"{}\": invalid port {}",
                     safe_name, session.port
+                ));
+                None
+            }
+            // The parsers only produce known protocols; checked again here so
+            // that a parser change cannot store one the app cannot connect by.
+            Some(_) if !SESSION_PROTOCOLS.contains(&session.protocol.as_str()) => {
+                warnings.push(format!(
+                    "Skipped session \"{safe_name}\": unsupported protocol"
                 ));
                 None
             }

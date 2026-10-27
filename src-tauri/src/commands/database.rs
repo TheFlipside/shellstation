@@ -6,7 +6,10 @@ use tauri::{AppHandle, State};
 use uuid::Uuid;
 
 use crate::config::{self, AppConfig, ConfigState, DbBackend, PostgresConfig};
-use crate::db::models::{Credential, ExportData, Folder, NewFolder, NewSession, Session};
+use crate::db::models::{
+    Credential, ExportData, Folder, NewFolder, NewSession, Session, SESSION_AUTH_METHODS,
+    SESSION_PROTOCOLS,
+};
 use crate::db::{CredentialDbState, DbState};
 
 /// Status of the database backend at startup.
@@ -550,6 +553,27 @@ fn validate_import_data(data: &ExportData) -> Result<(), String> {
                 session.port, session.name
             ));
         }
+        // Only limits the app has always applied to what it stores, so that
+        // an export always imports again; the file size bounds the rest.
+        if session.icon.len() > super::MAX_ICON_LEN {
+            return Err(format!(
+                "Session icon too long (max {} chars)",
+                super::MAX_ICON_LEN
+            ));
+        }
+        // An unknown value would be stored and then fail on every connect.
+        if !SESSION_PROTOCOLS.contains(&session.protocol.as_str()) {
+            return Err(format!(
+                "Unsupported protocol in session \"{}\"",
+                session.name
+            ));
+        }
+        if !SESSION_AUTH_METHODS.contains(&session.auth_method.as_str()) {
+            return Err(format!(
+                "Unsupported auth method in session \"{}\"",
+                session.name
+            ));
+        }
     }
 
     for profile in &data.highlight_profiles {
@@ -559,6 +583,11 @@ fn validate_import_data(data: &ExportData) -> Result<(), String> {
                 "Highlight profile name too long: \"{preview}...\" (max 255 chars)",
             ));
         }
+        // Rules must be a rule list, as every stored profile's are. The size
+        // and count limits of creating one in the app are not applied: a
+        // SecureCRT highlight import stores profiles without them.
+        serde_json::from_str::<Vec<crate::highlight::HighlightRule>>(&profile.rules)
+            .map_err(|e| format!("Highlight profile \"{}\": invalid rules: {e}", profile.name))?;
     }
     for seq in &data.login_sequences {
         if seq.name.len() > 255 {
@@ -567,6 +596,8 @@ fn validate_import_data(data: &ExportData) -> Result<(), String> {
                 "Login sequence name too long: \"{preview}...\" (max 255 chars)",
             ));
         }
+        super::login_sequence::check_step_limits(&seq.steps)
+            .map_err(|e| format!("Login sequence \"{}\": {e}", seq.name))?;
     }
 
     Ok(())
@@ -903,7 +934,7 @@ fn topological_sort_folders(folders: &[Folder]) -> Vec<Folder> {
 mod tests {
     use super::*;
     use crate::db::models::{
-        Credential, ExportData, Folder, HighlightProfile, LoginSequence, Session,
+        Credential, ExportData, Folder, HighlightProfile, LoginSequence, LoginSequenceStep, Session,
     };
     use uuid::Uuid;
 
@@ -1150,6 +1181,116 @@ mod tests {
         };
         let err = validate_import_data(&data).unwrap_err();
         assert!(err.contains("Login sequence name too long"));
+    }
+
+    fn import_of_session(session: Session) -> Result<(), String> {
+        validate_import_data(&ExportData {
+            sessions: vec![session],
+            ..Default::default()
+        })
+    }
+
+    #[test]
+    fn session_protocol_and_auth_method_must_be_known() {
+        // A Telnet session saved before credential profiles.
+        let mut s = session("a", "h", 23);
+        s.protocol = "telnet".to_string();
+        s.auth_method = "none".to_string();
+        assert_eq!(import_of_session(s), Ok(()));
+        let mut s = session("a", "h", 22);
+        s.protocol = "rdp".to_string();
+        assert!(import_of_session(s)
+            .unwrap_err()
+            .contains("Unsupported protocol"));
+        let mut s = session("a", "h", 22);
+        s.auth_method = "agent".to_string();
+        assert!(import_of_session(s)
+            .unwrap_err()
+            .contains("Unsupported auth method"));
+        // Every combination the app writes itself passes.
+        for protocol in SESSION_PROTOCOLS {
+            for auth_method in SESSION_AUTH_METHODS {
+                let mut s = session("a", "h", 22);
+                s.protocol = protocol.to_string();
+                s.auth_method = auth_method.to_string();
+                assert_eq!(import_of_session(s), Ok(()), "{protocol} {auth_method}");
+            }
+        }
+    }
+
+    #[test]
+    fn session_icon_too_long() {
+        let mut s = session("a", "h", 22);
+        s.icon = "i".repeat(129);
+        assert!(import_of_session(s).unwrap_err().contains("icon too long"));
+    }
+
+    #[test]
+    fn session_fields_the_app_never_limited_import_as_stored() {
+        // The app stores usernames of any length, and so does an import.
+        let mut s = session("a", "h", 22);
+        s.username = "u".repeat(1000);
+        assert_eq!(import_of_session(s), Ok(()));
+    }
+
+    #[test]
+    fn highlight_rules_must_be_a_rule_list() {
+        let profile = |rules: String| ExportData {
+            highlight_profiles: vec![HighlightProfile {
+                id: Uuid::new_v4(),
+                name: "p".to_string(),
+                rules,
+                sort_order: 0,
+            }],
+            ..Default::default()
+        };
+        assert_eq!(validate_import_data(&profile("[]".into())), Ok(()));
+        assert!(validate_import_data(&profile("not json".into()))
+            .unwrap_err()
+            .contains("invalid rules"));
+        assert!(validate_import_data(&profile("[{\"pattern\": 1}]".into()))
+            .unwrap_err()
+            .contains("invalid rules"));
+        // More rules than the app's own editor allows, as a SecureCRT
+        // highlight import can store, still import.
+        let rule = r##"{"pattern":"err","color":"#ff0000","case_sensitive":false,"bold":true}"##;
+        let many = format!("[{}]", vec![rule; 600].join(","));
+        assert_eq!(validate_import_data(&profile(many)), Ok(()));
+    }
+
+    #[test]
+    fn login_sequence_steps_are_size_checked() {
+        let sequence = |steps: Vec<LoginSequenceStep>| ExportData {
+            login_sequences: vec![LoginSequence {
+                id: Uuid::new_v4(),
+                name: "s".to_string(),
+                send_initial_cr: true,
+                steps,
+                sort_order: 0,
+            }],
+            ..Default::default()
+        };
+        let step = |pattern: &str| LoginSequenceStep {
+            pattern: pattern.to_string(),
+            response: "admin".to_string(),
+            append_cr: true,
+        };
+        assert_eq!(
+            validate_import_data(&sequence(vec![step("login:")])),
+            Ok(())
+        );
+        // Patterns are compiled when a session uses the sequence, not here.
+        assert_eq!(validate_import_data(&sequence(vec![step("(")])), Ok(()));
+        assert!(
+            validate_import_data(&sequence(vec![step(&"x".repeat(1025))]))
+                .unwrap_err()
+                .contains("pattern too long")
+        );
+        assert!(
+            validate_import_data(&sequence((0..51).map(|_| step("x")).collect()))
+                .unwrap_err()
+                .contains("Too many steps")
+        );
     }
 
     // An import may only change sessions it created. A file that repeats an
