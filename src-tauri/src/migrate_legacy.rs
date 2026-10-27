@@ -12,8 +12,23 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::db::models::{NewCredentialProfile, UpdateSession};
+use crate::db::models::{Credential, NewCredentialProfile, UpdateSession};
 use crate::db::DatabaseProvider;
+
+/// The keychain entry name every legacy writer gave a session's credential.
+/// A database import names the rows it writes the same way.
+pub fn legacy_keychain_ref(session_id: uuid::Uuid) -> String {
+    format!("session-{session_id}")
+}
+
+/// Whether a legacy row names its own session's keychain entry. A row that
+/// names any other entry did not come from a legacy writer — only an import
+/// file could have put it there — and following it would read, and then
+/// delete, an entry the row does not own: a credential profile's secret, or
+/// the `PostgreSQL` password.
+fn owns_its_keychain_entry(cred: &Credential) -> bool {
+    cred.keychain_ref == legacy_keychain_ref(cred.session_id)
+}
 
 /// Group key for deduplicating legacy credentials. We intentionally include
 /// the secret so two sessions that happen to share a username but have
@@ -32,7 +47,26 @@ pub async fn migrate_legacy_credentials(
     sessions_db: &Arc<dyn DatabaseProvider>,
     cred_db: &Arc<dyn DatabaseProvider>,
 ) -> Result<(u32, u32), String> {
-    let legacy = cred_db.list_all_credentials().await?;
+    let (legacy, foreign): (Vec<_>, Vec<_>) = cred_db
+        .list_all_credentials()
+        .await?
+        .into_iter()
+        .partition(owns_its_keychain_entry);
+
+    // Dropped without touching the keychain or linking their session.
+    for cred in &foreign {
+        tracing::warn!(
+            session_id = %cred.session_id,
+            "Dropping legacy credential row that names a keychain entry it does not own"
+        );
+        if let Err(e) = cred_db.delete_credential(cred.session_id).await {
+            tracing::warn!(
+                session_id = %cred.session_id,
+                "Failed to delete legacy credential row: {e}"
+            );
+        }
+    }
+
     if legacy.is_empty() {
         return Ok((0, 0));
     }
@@ -174,4 +208,70 @@ pub async fn migrate_legacy_credentials(
     );
 
     Ok((profiles_created, sessions_linked))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::sqlite::SqliteProvider;
+    use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+    use uuid::Uuid;
+
+    fn credential(session_id: Uuid, keychain_ref: String) -> Credential {
+        Credential {
+            id: Uuid::new_v4(),
+            session_id,
+            username: "admin".to_string(),
+            auth_type: "publickey".to_string(),
+            keychain_ref,
+        }
+    }
+
+    /// A credential store as in `PostgreSQL` mode: local `SQLite` without
+    /// foreign keys, so a row's session need not exist.
+    async fn credential_store() -> Arc<dyn DatabaseProvider> {
+        let opts = SqliteConnectOptions::new()
+            .filename(":memory:")
+            .pragma("foreign_keys", "OFF");
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(opts)
+            .await
+            .unwrap();
+        sqlx::migrate!().run(&pool).await.unwrap();
+        Arc::new(SqliteProvider::new(pool))
+    }
+
+    #[test]
+    fn only_a_row_naming_its_own_session_owns_its_entry() {
+        let session_id = Uuid::new_v4();
+        let other = Uuid::new_v4();
+        assert!(owns_its_keychain_entry(&credential(
+            session_id,
+            legacy_keychain_ref(session_id)
+        )));
+        for foreign in [
+            legacy_keychain_ref(other),
+            format!("credprofile-{other}"),
+            crate::config::PG_PASSWORD_KEYCHAIN_REF.to_string(),
+            String::new(),
+        ] {
+            assert!(!owns_its_keychain_entry(&credential(session_id, foreign)));
+        }
+    }
+
+    #[tokio::test]
+    async fn a_row_naming_another_entry_is_dropped_without_a_profile() {
+        let db = credential_store().await;
+        // Random, so a regression that followed the ref could not reach a
+        // real keychain entry.
+        let foreign = format!("credprofile-{}", Uuid::new_v4());
+        db.upsert_credential(credential(Uuid::new_v4(), foreign))
+            .await
+            .unwrap();
+
+        assert_eq!(migrate_legacy_credentials(&db, &db).await.unwrap(), (0, 0));
+        assert!(db.list_all_credentials().await.unwrap().is_empty());
+        assert!(db.list_credential_profiles().await.unwrap().is_empty());
+    }
 }

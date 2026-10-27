@@ -6,7 +6,7 @@ use tauri::{AppHandle, State};
 use uuid::Uuid;
 
 use crate::config::{self, AppConfig, ConfigState, DbBackend, PostgresConfig};
-use crate::db::models::{ExportData, Folder, NewFolder, NewSession};
+use crate::db::models::{Credential, ExportData, Folder, NewFolder, NewSession, Session};
 use crate::db::{CredentialDbState, DbState};
 
 /// Status of the database backend at startup.
@@ -667,7 +667,11 @@ pub async fn db_import(
 
     // Import sessions — remap folder_id and jump_host_id references.
     // First pass: create all sessions and build an ID remap for jump hosts.
+    // `session_id_map` covers every session in the file, including those
+    // matched to an existing one; `created_sessions` only the ones created
+    // here, the only ones the passes below may change.
     let mut session_id_map: HashMap<Uuid, Uuid> = HashMap::new();
+    let mut created_sessions: HashMap<Uuid, Uuid> = HashMap::new();
     for session in &data.sessions {
         let Some(remapped_folder) = folder_id_map.get(&session.folder_id).copied() else {
             return Err(format!(
@@ -705,46 +709,36 @@ pub async fn db_import(
             .await
             .map_err(|e| format!("Failed to import session '{}': {e}", session.name))?;
         session_id_map.insert(session.id, created.id);
+        created_sessions.insert(session.id, created.id);
         session_count += 1;
     }
 
     // Second pass: wire up jump_host_id references with remapped IDs.
-    for session in &data.sessions {
-        if let Some(jump_id) = session.jump_host_id {
-            // Skip if either the session itself or the jump host wasn't
-            // successfully imported — otherwise we'd write a dangling FK.
-            let Some(new_session_id) = session_id_map.get(&session.id).copied() else {
-                continue;
-            };
-            let Some(new_jump_id) = session_id_map.get(&jump_id).copied() else {
-                continue;
-            };
-            state
-                .0
-                .update_session(
-                    new_session_id,
-                    crate::db::models::UpdateSession {
-                        jump_host_id: Some(Some(new_jump_id)),
-                        ..Default::default()
-                    },
-                )
-                .await
-                .map_err(|e| format!("Failed to set jump host for '{}': {e}", session.name))?;
-        }
+    for (session, new_session_id, new_jump_id) in
+        jump_host_links(&data.sessions, &created_sessions, &session_id_map)
+    {
+        state
+            .0
+            .update_session(
+                new_session_id,
+                crate::db::models::UpdateSession {
+                    jump_host_id: Some(Some(new_jump_id)),
+                    ..Default::default()
+                },
+            )
+            .await
+            .map_err(|e| format!("Failed to set jump host for '{}': {e}", session.name))?;
     }
 
     // Import credential metadata into local store.
     // Secrets are not included in exports (stored in OS keychain) — users
     // must re-enter passwords/keys after import.
-    for cred in &data.credentials {
-        let mut remapped_cred = cred.clone();
-        if let Some(&new_sid) = session_id_map.get(&cred.session_id) {
-            remapped_cred.session_id = new_sid;
-            remapped_cred.keychain_ref = format!("session-{new_sid}");
-        }
+    let (credentials, skipped_credentials) =
+        credentials_to_import(&data.credentials, &created_sessions);
+    for cred in credentials {
         cred_db
             .0
-            .upsert_credential(remapped_cred)
+            .upsert_credential(cred)
             .await
             .map_err(|e| format!("Failed to import credential: {e}"))?;
         credential_count += 1;
@@ -806,16 +800,73 @@ pub async fn db_import(
     let mut summary = format!(
         "Imported {folder_count} folders, {session_count} sessions, {credential_count} credentials, {profile_count} highlight profiles, {login_seq_count} login sequences"
     );
-    let skipped_total = skipped_folders + skipped_sessions + skipped_profiles + skipped_sequences;
+    let skipped_total = skipped_folders
+        + skipped_sessions
+        + skipped_credentials
+        + skipped_profiles
+        + skipped_sequences;
     if skipped_total > 0 {
         use std::fmt::Write as _;
         let _ = write!(
             summary,
             " (skipped {skipped_folders} duplicate folders, {skipped_sessions} duplicate sessions, \
+             {skipped_credentials} credentials for sessions not imported, \
              {skipped_profiles} duplicate highlight profiles, {skipped_sequences} duplicate login sequences)"
         );
     }
     Ok(summary)
+}
+
+/// The jump host links an import sets: each file session with the database
+/// ids of the session and of its jump host.
+///
+/// Only a session this import created gets one. A session matched to one
+/// already present keeps its jump host, as it keeps everything else — a file
+/// could otherwise reroute an existing session through a bastion it adds.
+/// The jump host can be any session the file's reference resolves to,
+/// created here or already present.
+fn jump_host_links<'a>(
+    sessions: &'a [Session],
+    created_sessions: &HashMap<Uuid, Uuid>,
+    session_id_map: &HashMap<Uuid, Uuid>,
+) -> Vec<(&'a Session, Uuid, Uuid)> {
+    sessions
+        .iter()
+        .filter_map(|session| {
+            let new_jump_id = *session_id_map.get(&session.jump_host_id?)?;
+            let new_session_id = *created_sessions.get(&session.id)?;
+            Some((session, new_session_id, new_jump_id))
+        })
+        .collect()
+}
+
+/// The legacy credential rows an import writes, and how many it skips.
+///
+/// Only a credential for a session this import created is written, under the
+/// new session's id, with a fresh id and the keychain ref the legacy writers
+/// used. Any other credential is skipped: written as given, it would attach
+/// itself — and the keychain entry its `keychain_ref` names — to a session
+/// already in the database, and the legacy credential migration at the next
+/// startup would move that entry's secret into a new profile for the session.
+fn credentials_to_import(
+    credentials: &[Credential],
+    created_sessions: &HashMap<Uuid, Uuid>,
+) -> (Vec<Credential>, u32) {
+    let rows: Vec<Credential> = credentials
+        .iter()
+        .filter_map(|cred| {
+            let session_id = *created_sessions.get(&cred.session_id)?;
+            Some(Credential {
+                id: Uuid::new_v4(),
+                session_id,
+                username: cred.username.clone(),
+                auth_type: cred.auth_type.clone(),
+                keychain_ref: crate::migrate_legacy::legacy_keychain_ref(session_id),
+            })
+        })
+        .collect();
+    let skipped = (credentials.len() - rows.len()) as u32;
+    (rows, skipped)
 }
 
 /// Topological sort: parents before children.
@@ -1099,5 +1150,89 @@ mod tests {
         };
         let err = validate_import_data(&data).unwrap_err();
         assert!(err.contains("Login sequence name too long"));
+    }
+
+    // An import may only change sessions it created. A file that repeats an
+    // existing session's folder, host and port has that session matched and
+    // skipped; a jump host or credential it gives such a session must not
+    // reach the existing one.
+
+    fn credential_for(session_id: Uuid, keychain_ref: &str) -> Credential {
+        Credential {
+            id: Uuid::new_v4(),
+            session_id,
+            username: "admin".to_string(),
+            auth_type: "password".to_string(),
+            keychain_ref: keychain_ref.to_string(),
+        }
+    }
+
+    #[test]
+    fn credentials_to_import_writes_only_sessions_created_here() {
+        let (created, matched, absent) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
+        let new_id = Uuid::new_v4();
+        let created_sessions = HashMap::from([(created, new_id)]);
+        let file = [
+            credential_for(created, config::PG_PASSWORD_KEYCHAIN_REF),
+            credential_for(matched, "session-x"),
+            credential_for(absent, "session-y"),
+        ];
+
+        let (rows, skipped) = credentials_to_import(&file, &created_sessions);
+
+        assert_eq!(skipped, 2);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].session_id, new_id);
+        assert_eq!(
+            rows[0].keychain_ref,
+            crate::migrate_legacy::legacy_keychain_ref(new_id)
+        );
+        assert_ne!(rows[0].id, file[0].id);
+        assert_eq!(rows[0].username, "admin");
+    }
+
+    #[test]
+    fn jump_host_links_change_only_sessions_created_here() {
+        // `bastion` and `existing` match sessions already present; `added`,
+        // `web`, `app` and `dangling` are created by the import.
+        let bastion = session("bastion", "bastion.example", 22);
+        let added = session("added", "attacker.example", 22);
+        let mut existing = session("existing", "db.example", 22);
+        existing.jump_host_id = Some(added.id);
+        let mut web = session("web", "web.example", 22);
+        web.jump_host_id = Some(bastion.id);
+        let mut app = session("app", "app.example", 22);
+        app.jump_host_id = Some(added.id);
+        let mut dangling = session("dangling", "other.example", 22);
+        dangling.jump_host_id = Some(Uuid::new_v4());
+
+        let (old_bastion, old_existing) = (Uuid::new_v4(), Uuid::new_v4());
+        let (new_added, new_web, new_app, new_dangling) = (
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+        );
+        let created_sessions = HashMap::from([
+            (added.id, new_added),
+            (web.id, new_web),
+            (app.id, new_app),
+            (dangling.id, new_dangling),
+        ]);
+        let mut session_id_map = created_sessions.clone();
+        session_id_map.insert(bastion.id, old_bastion);
+        session_id_map.insert(existing.id, old_existing);
+
+        let sessions = [bastion, added, existing, web, app, dangling];
+        let links: Vec<(Uuid, Uuid)> =
+            jump_host_links(&sessions, &created_sessions, &session_id_map)
+                .into_iter()
+                .map(|(_, s, j)| (s, j))
+                .collect();
+
+        // `web` may use the bastion already present and `app` one created
+        // here; `existing` keeps its own jump host, and a reference to no
+        // session sets none.
+        assert_eq!(links, [(new_web, old_bastion), (new_app, new_added)]);
     }
 }
