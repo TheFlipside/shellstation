@@ -598,63 +598,84 @@ fn init_tracing(
 
     let stdout_layer = fmt::layer().with_writer(std::io::stdout);
 
-    if cfg.enabled {
-        let log_dir = match &cfg.log_directory {
-            Some(p) if !p.is_empty() => {
-                match validate_config_path(p, "Application log directory") {
-                    Ok(path) => path,
-                    Err(e) => {
-                        eprintln!("{e} — application logging disabled for this session.");
-                        tracing_subscriber::registry()
-                            .with(env_filter)
-                            .with(stdout_layer)
-                            .init();
-                        return None;
-                    }
-                }
-            }
-            _ => config_dir.join("logs"),
-        };
-        if let Err(e) = std::fs::create_dir_all(&log_dir) {
-            // Fall back to stdout-only — we cannot use tracing yet because the
-            // subscriber is not installed, so this goes straight to stderr.
-            eprintln!(
-                "Failed to create application log directory {}: {e} — \
-                 application logging disabled for this session.",
-                log_dir.display()
-            );
-            tracing_subscriber::registry()
-                .with(env_filter)
-                .with(stdout_layer)
-                .init();
-            return None;
-        }
-        let file_appender = tracing_appender::rolling::Builder::new()
-            .rotation(tracing_appender::rolling::Rotation::DAILY)
-            .filename_prefix("shellstation")
-            .filename_suffix("log")
-            .build(&log_dir)
-            .expect("failed to initialize rolling file appender");
-        let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
-        let file_layer = fmt::layer().with_ansi(false).with_writer(non_blocking);
+    let log_file = if cfg.enabled {
+        open_app_log_file(config_dir, cfg)
+    } else {
+        None
+    };
+    let Some((file_appender, log_dir)) = log_file else {
         tracing_subscriber::registry()
             .with(env_filter)
             .with(stdout_layer)
-            .with(file_layer)
             .init();
-        tracing::info!(
-            log_dir = %log_dir.display(),
-            level = %level,
-            "Application file logging enabled (daily rotation)"
-        );
-        return Some(guard);
-    }
+        return None;
+    };
 
+    let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
+    let file_layer = fmt::layer().with_ansi(false).with_writer(non_blocking);
     tracing_subscriber::registry()
         .with(env_filter)
         .with(stdout_layer)
+        .with(file_layer)
         .init();
-    None
+    tracing::info!(
+        log_dir = %log_dir.display(),
+        level = %level,
+        "Application file logging enabled (daily rotation)"
+    );
+    Some(guard)
+}
+
+/// Open the daily-rotating application log file for `init_tracing`, and
+/// return it with the directory it is in.
+///
+/// Returns `None` when the configured directory is invalid or the directory
+/// or the file cannot be created, so that the caller falls back to
+/// stdout-only logging. The reason goes straight to stderr, because the
+/// tracing subscriber is not installed yet.
+fn open_app_log_file(
+    config_dir: &std::path::Path,
+    cfg: &config::AppLoggingConfig,
+) -> Option<(
+    tracing_appender::rolling::RollingFileAppender,
+    std::path::PathBuf,
+)> {
+    let log_dir = match &cfg.log_directory {
+        Some(p) if !p.is_empty() => match validate_config_path(p, "Application log directory") {
+            Ok(path) => path,
+            Err(e) => {
+                eprintln!("{e} — application logging disabled for this session.");
+                return None;
+            }
+        },
+        _ => config_dir.join("logs"),
+    };
+    if let Err(e) = std::fs::create_dir_all(&log_dir) {
+        eprintln!(
+            "Failed to create application log directory {}: {e} — \
+             application logging disabled for this session.",
+            log_dir.display()
+        );
+        return None;
+    }
+    // Creating the directory can succeed and opening the file still fail
+    // (directory not writable, disk full); that falls back the same way.
+    match tracing_appender::rolling::Builder::new()
+        .rotation(tracing_appender::rolling::Rotation::DAILY)
+        .filename_prefix("shellstation")
+        .filename_suffix("log")
+        .build(&log_dir)
+    {
+        Ok(appender) => Some((appender, log_dir)),
+        Err(e) => {
+            eprintln!(
+                "Failed to open application log file in {}: {e} — \
+                 application logging disabled for this session.",
+                log_dir.display()
+            );
+            None
+        }
+    }
 }
 
 /// Application entry point. Initializes the database, logging, Tauri
@@ -1112,6 +1133,51 @@ mod tests {
         assert_eq!(app_log_level("DEBUG"), "debug");
         assert_eq!(app_log_level("trace,sqlx=trace"), "info");
         assert_eq!(app_log_level(""), "info");
+    }
+
+    fn log_config(dir: &std::path::Path) -> config::AppLoggingConfig {
+        config::AppLoggingConfig {
+            log_directory: Some(dir.to_string_lossy().into_owned()),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn open_app_log_file_opens_the_configured_directory() {
+        let dir = std::env::temp_dir().join(format!("ss-applog-{}", uuid::Uuid::new_v4()));
+        let opened = open_app_log_file(&std::env::temp_dir(), &log_config(&dir));
+        assert_eq!(opened.as_ref().map(|(_, d)| d), Some(&dir));
+        drop(opened);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn open_app_log_file_falls_back_when_the_file_cannot_be_opened() {
+        // The directory exists, but the day's file name is taken by a
+        // directory. Today and tomorrow (UTC, as the appender names files)
+        // both, so a run across midnight still hits one.
+        let dir = std::env::temp_dir().join(format!("ss-applog-{}", uuid::Uuid::new_v4()));
+        let today = chrono::Utc::now().date_naive();
+        for day in [today, today + chrono::Days::new(1)] {
+            std::fs::create_dir_all(dir.join(format!("shellstation.{day}.log"))).unwrap();
+        }
+        assert!(open_app_log_file(&std::env::temp_dir(), &log_config(&dir)).is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn open_app_log_file_falls_back_when_the_directory_cannot_be_created() {
+        let blocker = std::env::temp_dir().join(format!("ss-applog-{}", uuid::Uuid::new_v4()));
+        std::fs::write(&blocker, b"").unwrap();
+        let cfg = log_config(&blocker.join("logs"));
+        assert!(open_app_log_file(&std::env::temp_dir(), &cfg).is_none());
+        let _ = std::fs::remove_file(&blocker);
+    }
+
+    #[test]
+    fn open_app_log_file_rejects_a_relative_directory() {
+        let cfg = log_config(std::path::Path::new("relative/logs"));
+        assert!(open_app_log_file(&std::env::temp_dir(), &cfg).is_none());
     }
 
     // sanitize_pg_error converts sqlx / libpq error text into a UX-safe
