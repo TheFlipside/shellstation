@@ -277,15 +277,18 @@ async fn pg_migrations_up_to_date(pool: &sqlx::PgPool) -> Result<bool, Box<dyn s
         return Ok(false);
     }
 
-    let migrator = sqlx::migrate!();
-    let expected = migrator.iter().count() as i64;
-
-    let applied =
-        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM _sqlx_migrations WHERE success = true")
-            .fetch_one(pool)
-            .await?;
-
-    Ok(applied >= expected)
+    // Every migration this build carries must be applied. Comparing counts
+    // would also pass with a different set, such as another build's.
+    let applied: std::collections::HashSet<i64> =
+        sqlx::query_scalar::<_, i64>("SELECT version FROM _sqlx_migrations WHERE success = true")
+            .fetch_all(pool)
+            .await?
+            .into_iter()
+            .collect();
+    Ok(sqlx::migrate!()
+        .iter()
+        .filter(|m| !m.migration_type.is_down_migration())
+        .all(|m| applied.contains(&m.version)))
 }
 
 /// Strip connection `URLs` and credentials from `PostgreSQL` error messages
@@ -732,17 +735,37 @@ fn open_app_log_file(
     tracing_appender::rolling::RollingFileAppender,
     std::path::PathBuf,
 )> {
-    let log_dir = match &cfg.log_directory {
+    // The default directory belongs to the app and is made owner-only on
+    // Unix; the session logger keeps its logs there too. A directory the
+    // user chose is created if it is missing but otherwise left as it is.
+    let (log_dir, created) = match &cfg.log_directory {
         Some(p) if !p.is_empty() => match validate_config_path(p, "Application log directory") {
-            Ok(path) => path,
+            Ok(path) => {
+                let created = std::fs::create_dir_all(&path);
+                (path, created)
+            }
             Err(e) => {
                 eprintln!("{e} — application logging disabled for this session.");
                 return None;
             }
         },
-        _ => config_dir.join("logs"),
+        _ => {
+            let path = config_dir.join("logs");
+            let created = crate::private_fs::create_private_dir(&path);
+            if created.is_ok() {
+                // A file system without Unix modes can refuse this; the
+                // directory is still usable, so logging goes ahead.
+                if let Err(e) = crate::private_fs::restrict_dir_to_owner(&path) {
+                    eprintln!(
+                        "Failed to restrict the application log directory {} to its owner: {e}",
+                        path.display()
+                    );
+                }
+            }
+            (path, created)
+        }
     };
-    if let Err(e) = std::fs::create_dir_all(&log_dir) {
+    if let Err(e) = created {
         eprintln!(
             "Failed to create application log directory {}: {e} — \
              application logging disabled for this session.",
@@ -783,13 +806,28 @@ pub fn run() {
     let config_dir = dirs::config_dir()
         .unwrap_or_else(|| std::path::PathBuf::from("."))
         .join("shellstation");
-    let _ = std::fs::create_dir_all(&config_dir);
+    // Owner-only on Unix: it holds the config, the local database and the
+    // logs. The subscriber is not installed yet, so a problem goes to stderr
+    // now and to the log once there is one.
+    let config_dir_problem = private_fs::create_private_dir(&config_dir)
+        .map_err(|e| format!("Failed to create the config directory: {e}"))
+        .and_then(|()| {
+            private_fs::restrict_dir_to_owner(&config_dir)
+                .map_err(|e| format!("Failed to restrict the config directory to its owner: {e}"))
+        })
+        .err();
+    if let Some(problem) = &config_dir_problem {
+        eprintln!("{problem} ({})", config_dir.display());
+    }
 
     // Load config first so the tracing subscriber can be configured from it.
     // Tracing calls inside load_config itself are no-ops here (no subscriber
     // yet), but we re-emit a confirmation line right after init_tracing.
     let app_config = config::load_config(&config_dir);
     let _log_guard = init_tracing(&config_dir, &app_config.app_logging);
+    if let Some(problem) = config_dir_problem {
+        tracing::warn!(path = %config_dir.display(), "{problem}");
+    }
     tracing::info!(
         backend = ?app_config.db_backend,
         pg_host = %app_config.postgres.host,
@@ -902,7 +940,9 @@ pub fn run() {
             // here via the move closure.
             let config_path = config_dir.join("config.json");
             if !config_path.exists() {
-                let _ = config::save_config(&config_path, &app_config);
+                if let Err(e) = config::save_config(&config_path, &app_config) {
+                    tracing::warn!("Failed to write the default config: {e}");
+                }
             }
 
             app.manage(ConfigState {
@@ -1428,6 +1468,70 @@ mod tests {
         ] {
             pg_exec(&server, &sql).await.unwrap();
         }
+        if let Err(e) = checks {
+            std::panic::resume_unwind(e.into_panic());
+        }
+    }
+
+    /// `pg_migrations_up_to_date` against a real server: it must want every
+    /// migration this build carries, not merely as many. Same server as for
+    /// `shared_rows_keep_their_owner`; run with `--ignored migrations_check`.
+    #[tokio::test]
+    #[ignore = "needs a throwaway PostgreSQL server in SHELLSTATION_TEST_PG_URL"]
+    async fn migrations_check_compares_versions() {
+        let url = std::env::var("SHELLSTATION_TEST_PG_URL")
+            .expect("SHELLSTATION_TEST_PG_URL must name a throwaway PostgreSQL server");
+        let server = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&url)
+            .await
+            .unwrap();
+        let db = format!("ss_mig_{}", &uuid::Uuid::new_v4().simple().to_string()[..8]);
+        pg_exec(&server, &format!("CREATE DATABASE {db}"))
+            .await
+            .unwrap();
+
+        let opts = url
+            .parse::<sqlx::postgres::PgConnectOptions>()
+            .unwrap()
+            .database(&db);
+        let checks = tokio::spawn(async move {
+            let pool = PgPoolOptions::new()
+                .max_connections(1)
+                .connect_with(opts)
+                .await
+                .unwrap();
+            assert!(!pg_migrations_up_to_date(&pool).await.unwrap());
+            sqlx::migrate!().run(&pool).await.unwrap();
+            assert!(pg_migrations_up_to_date(&pool).await.unwrap());
+            // A migration recorded as failed is not applied.
+            pg_exec(
+                &pool,
+                "UPDATE _sqlx_migrations SET success = false \
+                 WHERE version = (SELECT min(version) FROM _sqlx_migrations)",
+            )
+            .await
+            .unwrap();
+            assert!(!pg_migrations_up_to_date(&pool).await.unwrap());
+            pg_exec(&pool, "UPDATE _sqlx_migrations SET success = true")
+                .await
+                .unwrap();
+            assert!(pg_migrations_up_to_date(&pool).await.unwrap());
+            // As many applied rows as before, but one is not this build's.
+            pg_exec(
+                &pool,
+                "UPDATE _sqlx_migrations SET version = version + 1000000000 \
+                 WHERE version = (SELECT max(version) FROM _sqlx_migrations)",
+            )
+            .await
+            .unwrap();
+            assert!(!pg_migrations_up_to_date(&pool).await.unwrap());
+            pool.close().await;
+        })
+        .await;
+        pg_exec(&server, &format!("DROP DATABASE {db} WITH (FORCE)"))
+            .await
+            .unwrap();
         if let Err(e) = checks {
             std::panic::resume_unwind(e.into_panic());
         }

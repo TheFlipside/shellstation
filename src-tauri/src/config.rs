@@ -251,27 +251,14 @@ pub fn load_config(config_dir: &Path) -> AppConfig {
 }
 
 /// Save the application config to the given path.
-/// Sets restrictive file permissions (0600 on Unix) since the config may
-/// contain database credentials.
+/// The file is owner-only (0600 on Unix) from the moment it is created,
+/// since the config names the database server and user.
 pub fn save_config(config_path: &Path, config: &AppConfig) -> Result<(), String> {
     // Clone and strip the password so it never lands on disk.
     let mut safe = config.clone();
     safe.postgres.password.clear();
     let json = serde_json::to_string_pretty(&safe)
         .map_err(|e| format!("Failed to serialize config: {e}"))?;
-    std::fs::write(config_path, &json).map_err(|e| format!("Failed to write config: {e}"))?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        if let Err(e) =
-            std::fs::set_permissions(config_path, std::fs::Permissions::from_mode(0o600))
-        {
-            tracing::warn!(
-                "Failed to set 0600 permissions on config file {}: {e} \
-                 — file may be readable by other users on this system.",
-                config_path.display()
-            );
-        }
-    }
-    Ok(())
+    crate::private_fs::write_private_file(config_path, json.as_bytes())
+        .map_err(|e| format!("Failed to write config: {e}"))
 }
