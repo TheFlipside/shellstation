@@ -7,14 +7,46 @@ use std::time::Duration;
 
 use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
 use tauri::{AppHandle, Emitter};
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 /// Handle to a single PTY session, holding the writer and child process.
-struct PtyHandle {
+pub(crate) struct PtyHandle {
     writer: Box<dyn Write + Send>,
     pair: Box<dyn MasterPty + Send>,
     child: Box<dyn portable_pty::Child + Send>,
     shutdown: Arc<AtomicBool>,
+}
+
+impl PtyHandle {
+    /// Stop the reader thread and kill the shell. Blocks until the shell has
+    /// exited, so call it without holding the manager lock.
+    pub(crate) fn shut_down(mut self, id: &str) {
+        // Signal the reader thread to stop.
+        self.shutdown.store(true, Ordering::Relaxed);
+
+        match self.child.kill() {
+            Ok(()) => {
+                let _ = self.child.wait();
+            }
+            // Usually the shell has already exited. If it has not, waiting
+            // could block for good, so only reap it if it is gone.
+            Err(e) => {
+                info!(session_id = %id, error = %e, "Child kill returned error (may have already exited)");
+                if let Ok(None) = self.child.try_wait() {
+                    warn!(session_id = %id, "Shell still running after a failed kill; closing its terminal anyway");
+                }
+            }
+        }
+
+        // Drop the master PTY handle explicitly. On Windows (ConPTY) this
+        // closes the pseudoconsole output pipe, which unblocks the reader
+        // thread's read() call. On Unix, killing the child already causes
+        // the slave side to hang up, but dropping the master ensures cleanup.
+        drop(self.writer);
+        drop(self.pair);
+
+        info!(session_id = %id, "PTY session killed");
+    }
 }
 
 /// Manages all active PTY sessions, keyed by session `ID`.
@@ -187,31 +219,17 @@ impl PtyManager {
             .map_err(|e| e.to_string())
     }
 
-    /// Kill a PTY session and clean up resources.
-    pub fn kill(&mut self, id: &str) -> Result<(), String> {
-        let mut handle = self
-            .sessions
+    /// Unregister a session so the caller can [`PtyHandle::shut_down`] it
+    /// after releasing the manager lock.
+    pub fn remove(&mut self, id: &str) -> Result<PtyHandle, String> {
+        self.sessions
             .remove(id)
-            .ok_or_else(|| format!("Session {id} not found"))?;
+            .ok_or_else(|| format!("Session {id} not found"))
+    }
 
-        // Signal the reader thread to stop.
-        handle.shutdown.store(true, Ordering::Relaxed);
-
-        // Kill may fail if the child already exited — that's fine.
-        if let Err(e) = handle.child.kill() {
-            info!(session_id = %id, error = %e, "Child kill returned error (may have already exited)");
-        }
-        let _ = handle.child.wait();
-
-        // Drop the master PTY handle explicitly. On Windows (ConPTY) this
-        // closes the pseudoconsole output pipe, which unblocks the reader
-        // thread's read() call. On Unix, killing the child already causes
-        // the slave side to hang up, but dropping the master ensures cleanup.
-        drop(handle.writer);
-        drop(handle.pair);
-
-        info!(session_id = %id, "PTY session killed");
-        Ok(())
+    /// Unregister every session, returning their `ID`s and handles.
+    pub fn take_all(&mut self) -> Vec<(String, PtyHandle)> {
+        self.sessions.drain().collect()
     }
 }
 

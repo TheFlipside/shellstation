@@ -37,7 +37,7 @@ interface TerminalState {
   setActiveTab: (id: string) => void;
   updateTabTitle: (id: string, title: string) => void;
   markTabExited: (id: string) => void;
-  replaceTab: (oldId: string, newId: string) => void;
+  replaceTab: (oldId: string, newId: string, type: SessionType, meta?: TabMeta) => void;
   reorderTabs: (fromIndex: number, toIndex: number) => void;
 }
 
@@ -86,9 +86,14 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
     }));
   },
 
-  replaceTab: (oldId: string, newId: string) => {
+  // `type` is the new session's protocol, which picks the commands that write
+  // to and close it. It, and `meta` with it, can differ from the old one's
+  // if the saved session was edited in between.
+  replaceTab: (oldId: string, newId: string, type: SessionType, meta?: TabMeta) => {
     set((state) => ({
-      tabs: state.tabs.map((t) => (t.id === oldId ? { ...t, id: newId, exited: false } : t)),
+      tabs: state.tabs.map((t) =>
+        t.id === oldId ? { ...t, id: newId, type, meta, exited: false } : t,
+      ),
       activeTabId: state.activeTabId === oldId ? newId : state.activeTabId,
     }));
   },

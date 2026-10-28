@@ -242,6 +242,12 @@ impl SessionLogManager {
         }
     }
 
+    /// Whether a log is open for this connection.
+    #[cfg(test)]
+    pub fn has_log(&self, connection_id: &str) -> bool {
+        self.entries.contains_key(connection_id)
+    }
+
     /// Close and flush the log file for a disconnected session.
     ///
     /// If the entry was still [`LogEntry::Pending`] (no data ever written),

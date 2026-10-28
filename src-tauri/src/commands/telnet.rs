@@ -4,7 +4,10 @@ use uuid::Uuid;
 use crate::session_logger::SessionLogState;
 use crate::telnet::{establish_telnet_connection, TelnetConnectParams, TelnetState};
 
-use super::{validate_dimensions, TerminalReadyState, MAX_WRITE_SIZE};
+use super::{
+    release_session, validate_dimensions, ConnectSetup, TerminalReadyState,
+    MAX_CONNECT_TIMEOUT_SECS, MAX_WRITE_SIZE,
+};
 
 /// Connect to a remote host via Telnet. Returns the session `ID`.
 #[tauri::command]
@@ -21,20 +24,9 @@ pub async fn telnet_connect(
     restrict_private_ips: Option<bool>,
     connect_timeout: Option<u64>,
 ) -> Result<String, String> {
+    let page_load = ready_state.page_load();
     validate_dimensions(cols, rows)?;
     let id = Uuid::new_v4().to_string();
-
-    // Open session log before connecting so output from the start is captured.
-    {
-        let session_name = format!("{host}:{port}");
-        if let Ok(mut mgr) = logger_state.0.lock() {
-            if let Err(e) = mgr.open_log(&id, &session_name) {
-                tracing::warn!("Failed to open session log: {e}");
-            }
-        }
-    }
-
-    let logger = Some(std::sync::Arc::clone(&logger_state.0));
 
     // Brief lock: check capacity only.
     {
@@ -42,24 +34,24 @@ pub async fn telnet_connect(
         manager.check_capacity()?;
     }
 
+    let logger = Some(std::sync::Arc::clone(&logger_state.0));
+    let setup = ConnectSetup::begin(
+        &id,
+        &format!("{host}:{port}"),
+        page_load,
+        &ready_state,
+        &logger_state,
+    );
+
     // Create ready signal so the reader task waits for the frontend listener.
     let (ready_tx, ready_rx) = tokio::sync::oneshot::channel::<()>();
-    {
-        let mut senders = ready_state
-            .0
-            .lock()
-            .map_err(|e| format!("Ready sender lock poisoned: {e}"))?;
-        senders.insert(
-            id.clone(),
-            Box::new(move || {
-                let _ = ready_tx.send(());
-            }),
-        );
-    }
+    setup.add_ready_signal(move || {
+        let _ = ready_tx.send(());
+    });
 
     // Establish connection WITHOUT holding the manager lock so other
     // sessions remain fully usable during the (potentially slow) handshake.
-    let session = match establish_telnet_connection(TelnetConnectParams {
+    let session = establish_telnet_connection(TelnetConnectParams {
         id: id.clone(),
         host,
         port,
@@ -67,31 +59,21 @@ pub async fn telnet_connect(
         rows,
         app_handle,
         restrict_private_ips: restrict_private_ips.unwrap_or(false),
-        connect_timeout_secs: connect_timeout.unwrap_or(10),
+        connect_timeout_secs: connect_timeout.unwrap_or(10).min(MAX_CONNECT_TIMEOUT_SECS),
         logger,
         ready_rx,
         login_sequence: None,
     })
-    .await
-    {
-        Ok(s) => s,
-        Err(e) => {
-            if let Ok(mut senders) = ready_state.0.lock() {
-                senders.remove(&id);
-            }
-            if let Ok(mut mgr) = logger_state.0.lock() {
-                mgr.close_log(&id);
-            }
-            return Err(e);
-        }
-    };
+    .await?;
 
     // Brief lock: re-check capacity and register atomically.
     {
         let mut manager = state.0.lock().await;
+        setup.check_page_unchanged()?;
         manager.register_session(id.clone(), session)?;
     }
 
+    setup.disarm();
     Ok(id)
 }
 
@@ -159,13 +141,16 @@ pub async fn telnet_resize(
 #[tauri::command]
 pub async fn telnet_disconnect(
     state: State<'_, TelnetState>,
+    ready_state: State<'_, TerminalReadyState>,
     logger_state: State<'_, SessionLogState>,
     id: String,
 ) -> Result<(), String> {
-    let mut manager = state.0.lock().await;
-    manager.disconnect(&id)?;
-    if let Ok(mut mgr) = logger_state.0.lock() {
-        mgr.close_log(&id);
-    }
+    let session = state.0.lock().await.remove(&id)?;
+    // See ssh_disconnect for why this comes here.
+    release_session(&id, &ready_state, &logger_state);
+    // Close outside the lock, and wait for the socket to close, so a
+    // reconnect cannot reach the device before this session has ended.
+    session.close().await;
+    tracing::info!(session_id = %id, "Telnet session disconnected");
     Ok(())
 }

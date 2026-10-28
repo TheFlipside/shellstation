@@ -16,7 +16,8 @@ use crate::ssh::{establish_ssh_connection, SshConnectParams, SshState};
 use crate::telnet::{establish_telnet_connection, TelnetConnectParams, TelnetState};
 
 use super::{
-    validate_dimensions, validate_port, validate_session_fields, TerminalReadyState, MAX_JUMP_HOPS,
+    validate_dimensions, validate_port, validate_session_fields, ConnectSetup, TerminalReadyState,
+    MAX_CONNECT_TIMEOUT_SECS, MAX_JUMP_HOPS, MAX_KEEPALIVE_INTERVAL_SECS, MAX_KEEPALIVE_MAX,
 };
 
 // ── Folder commands ──────────────────────────────────────────────────
@@ -595,6 +596,7 @@ pub async fn session_connect(
     keepalive_interval: Option<u64>,
     keepalive_max: Option<u32>,
 ) -> Result<String, String> {
+    let page_load = ready_state.page_load();
     validate_dimensions(cols, rows)?;
 
     let session_id = parse_uuid(&id)?;
@@ -604,9 +606,11 @@ pub async fn session_connect(
             .ok_or_else(|| format!("Session {id} not found"))?;
 
     let restrict = restrict_private_ips.unwrap_or(false);
-    let timeout_secs = connect_timeout.unwrap_or(10).min(300);
-    let keepalive_secs = keepalive_interval.unwrap_or(15).min(3600);
-    let keepalive_missed = keepalive_max.unwrap_or(3).min(100) as usize;
+    let timeout_secs = connect_timeout.unwrap_or(10).min(MAX_CONNECT_TIMEOUT_SECS);
+    let keepalive_secs = keepalive_interval
+        .unwrap_or(15)
+        .min(MAX_KEEPALIVE_INTERVAL_SECS);
+    let keepalive_missed = keepalive_max.unwrap_or(3).min(MAX_KEEPALIVE_MAX) as usize;
 
     // Resolve login sequence (applies to both SSH and Telnet).
     let user_ident_for_ls = pg.0.as_ref().and_then(|_| {
@@ -636,35 +640,25 @@ pub async fn session_connect(
     if session.protocol == "telnet" {
         let conn_id = Uuid::new_v4().to_string();
 
-        // Open session log before connecting.
-        {
-            if let Ok(mut mgr) = logger_state.0.lock() {
-                if let Err(e) = mgr.open_log(&conn_id, &session.name) {
-                    tracing::warn!("Failed to open session log: {e}");
-                }
-            }
-        }
-        let logger = Some(std::sync::Arc::clone(&logger_state.0));
-
         {
             let manager = telnet.0.lock().await;
             manager.check_capacity()?;
         }
 
+        let logger = Some(std::sync::Arc::clone(&logger_state.0));
+        let setup = ConnectSetup::begin(
+            &conn_id,
+            &session.name,
+            page_load,
+            &ready_state,
+            &logger_state,
+        );
+
         // Create ready signal so the reader task waits for the frontend listener.
         let (ready_tx, ready_rx) = tokio::sync::oneshot::channel::<()>();
-        {
-            let mut senders = ready_state
-                .0
-                .lock()
-                .map_err(|e| format!("Ready sender lock poisoned: {e}"))?;
-            senders.insert(
-                conn_id.clone(),
-                Box::new(move || {
-                    let _ = ready_tx.send(());
-                }),
-            );
-        }
+        setup.add_ready_signal(move || {
+            let _ = ready_tx.send(());
+        });
 
         let telnet_login_seq = if let Some(ref seq) = login_sequence {
             Some(crate::login_sequence::resolve_login_sequence(
@@ -676,7 +670,7 @@ pub async fn session_connect(
             None
         };
 
-        let telnet_session = match establish_telnet_connection(TelnetConnectParams {
+        let telnet_session = establish_telnet_connection(TelnetConnectParams {
             id: conn_id.clone(),
             host: session.hostname,
             port: session.port as u16,
@@ -689,25 +683,15 @@ pub async fn session_connect(
             ready_rx,
             login_sequence: telnet_login_seq,
         })
-        .await
-        {
-            Ok(s) => s,
-            Err(e) => {
-                if let Ok(mut senders) = ready_state.0.lock() {
-                    senders.remove(&conn_id);
-                }
-                if let Ok(mut mgr) = logger_state.0.lock() {
-                    mgr.close_log(&conn_id);
-                }
-                return Err(e);
-            }
-        };
+        .await?;
 
         {
             let mut manager = telnet.0.lock().await;
+            setup.check_page_unchanged()?;
             manager.register_session(conn_id.clone(), telnet_session)?;
         }
 
+        setup.disarm();
         return Ok(conn_id);
     }
 
@@ -778,33 +762,24 @@ pub async fn session_connect(
     let conn_id = Uuid::new_v4().to_string();
 
     {
-        if let Ok(mut mgr) = logger_state.0.lock() {
-            if let Err(e) = mgr.open_log(&conn_id, &session.name) {
-                tracing::warn!("Failed to open session log: {e}");
-            }
-        }
-    }
-    let logger = Some(std::sync::Arc::clone(&logger_state.0));
-
-    {
         let manager = ssh.manager.lock().await;
         manager.check_capacity()?;
     }
 
+    let logger = Some(std::sync::Arc::clone(&logger_state.0));
+    let setup = ConnectSetup::begin(
+        &conn_id,
+        &session.name,
+        page_load,
+        &ready_state,
+        &logger_state,
+    );
+
     // Create ready signal so the reader task waits for the frontend listener.
     let (ready_tx, ready_rx) = tokio::sync::oneshot::channel::<()>();
-    {
-        let mut senders = ready_state
-            .0
-            .lock()
-            .map_err(|e| format!("Ready sender lock poisoned: {e}"))?;
-        senders.insert(
-            conn_id.clone(),
-            Box::new(move || {
-                let _ = ready_tx.send(());
-            }),
-        );
-    }
+    setup.add_ready_signal(move || {
+        let _ = ready_tx.send(());
+    });
 
     let ssh_login_seq = if let Some(ref seq) = login_sequence {
         Some(crate::login_sequence::resolve_login_sequence(
@@ -816,7 +791,7 @@ pub async fn session_connect(
         None
     };
 
-    let ssh_session = match establish_ssh_connection(
+    let ssh_session = establish_ssh_connection(
         SshConnectParams {
             id: conn_id.clone(),
             host: session.hostname,
@@ -840,25 +815,15 @@ pub async fn session_connect(
         },
         &ssh.host_verify_senders,
     )
-    .await
-    {
-        Ok(s) => s,
-        Err(e) => {
-            if let Ok(mut senders) = ready_state.0.lock() {
-                senders.remove(&conn_id);
-            }
-            if let Ok(mut mgr) = logger_state.0.lock() {
-                mgr.close_log(&conn_id);
-            }
-            return Err(e);
-        }
-    };
+    .await?;
 
     {
         let mut manager = ssh.manager.lock().await;
+        setup.check_page_unchanged()?;
         manager.register_session(conn_id.clone(), ssh_session)?;
     }
 
+    setup.disarm();
     Ok(conn_id)
 }
 

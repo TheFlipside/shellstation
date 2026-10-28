@@ -840,6 +840,16 @@ pub fn run() {
         .manage(SshState::default())
         .manage(TelnetState::default())
         .manage(TerminalReadyState::default())
+        .on_page_load(|webview, payload| {
+            // Only the main window holds terminal tabs. A load there, a
+            // reload included, starts the frontend over without them. Any
+            // navigation in that window counts, so the frontend must never
+            // navigate it (no in-app routing by URL, no links opened in it).
+            if webview.label() == "main" && payload.event() == tauri::webview::PageLoadEvent::Started
+            {
+                commands::close_all_sessions(webview.app_handle());
+            }
+        })
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())

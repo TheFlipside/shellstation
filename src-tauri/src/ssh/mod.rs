@@ -60,9 +60,134 @@ pub struct ResizeRequest {
     pub rows: u32,
 }
 
+/// How long closing a connection chain (the target, then every jump host)
+/// waits, in all, for its connections to close. Once it has passed, the rest
+/// are still sent `SSH_MSG_DISCONNECT` where it can go out at once, but not
+/// waited for.
+const DISCONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// The connection under a session: the target, and the jump hosts it runs
+/// through, nearest the client first. Shared by the session and its reader
+/// task, so whichever ends first — the user closing the tab, or the session
+/// ending on its own — closes all of it.
+struct SshConnection<H: client::Handler = SshHandler> {
+    target: Arc<client::Handle<H>>,
+    bastions: Vec<client::Handle<H>>,
+}
+
+impl<H: client::Handler> SshConnection<H> {
+    fn is_closed(&self) -> bool {
+        self.target.is_closed() && self.bastions.iter().all(client::Handle::is_closed)
+    }
+
+    /// Disconnect the target, then each jump host back toward the client,
+    /// waiting (within [`DISCONNECT_TIMEOUT`]) for every one of them to
+    /// close. A reconnect that follows cannot reach the device while it
+    /// still counts the old session.
+    async fn close(&self) {
+        let deadline = tokio::time::Instant::now() + DISCONNECT_TIMEOUT;
+        disconnect_handle(&self.target, deadline).await;
+        for bastion in self.bastions.iter().rev() {
+            disconnect_handle(bastion, deadline).await;
+        }
+    }
+}
+
+/// Send `SSH_MSG_DISCONNECT` and wait until the connection has closed, or
+/// `deadline` has passed. russh writes the message out before it closes the
+/// handle's channel, so a closed handle means the server has it.
+async fn disconnect_handle<H: client::Handler>(
+    handle: &client::Handle<H>,
+    deadline: tokio::time::Instant,
+) {
+    if handle.is_closed() {
+        return;
+    }
+    // `timeout_at` tries the send before it looks at the deadline, so it
+    // still goes out once the deadline has passed if it can do so at once.
+    // A failed send means the session has ended already, which the wait
+    // below sees straight away.
+    let _ = tokio::time::timeout_at(
+        deadline,
+        handle.disconnect(Disconnect::ByApplication, "", "en"),
+    )
+    .await;
+    while !handle.is_closed() && tokio::time::Instant::now() < deadline {
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+}
+
+/// The connections of a chain still being set up: the jump hosts nearest the
+/// client first, then the target once it is up. Until the session is open,
+/// dropping this — setup failed, or its future was dropped part way —
+/// disconnects every connection already up, the farthest first, instead of
+/// leaving them to close once russh sees their handles go.
+struct PendingChain<H: client::Handler + 'static = SshHandler>(Vec<client::Handle<H>>);
+
+impl<H: client::Handler + 'static> Default for PendingChain<H> {
+    fn default() -> Self {
+        Self(Vec::new())
+    }
+}
+
+impl<H: client::Handler + 'static> PendingChain<H> {
+    /// Add the connection just made, and return it.
+    fn push(&mut self, hop: client::Handle<H>) -> &mut client::Handle<H> {
+        self.0.push(hop);
+        self.last_mut()
+    }
+
+    /// The connection farthest from the client.
+    fn last(&self) -> &client::Handle<H> {
+        self.0.last().expect("only used once a connection is in")
+    }
+
+    fn last_mut(&mut self) -> &mut client::Handle<H> {
+        self.0
+            .last_mut()
+            .expect("only used once a connection is in")
+    }
+
+    /// Disconnect every connection now, the farthest first, waiting as
+    /// [`SshConnection::close`] does. The connections stay in until then, so
+    /// should this be dropped part way, `Drop` still closes them.
+    async fn close(mut self) {
+        disconnect_all(&self.0).await;
+        self.0.clear();
+    }
+
+    /// The set-up chain as a connection, the last one in being its target.
+    fn into_connection(mut self) -> SshConnection<H> {
+        let mut bastions = std::mem::take(&mut self.0);
+        let target = bastions.pop().expect("only used once the target is in");
+        SshConnection {
+            target: Arc::new(target),
+            bastions,
+        }
+    }
+}
+
+impl<H: client::Handler + 'static> Drop for PendingChain<H> {
+    fn drop(&mut self) {
+        let hops = std::mem::take(&mut self.0);
+        if !hops.is_empty() {
+            tauri::async_runtime::spawn(async move { disconnect_all(&hops).await });
+        }
+    }
+}
+
+/// Disconnect a chain listed nearest the client first, the farthest first,
+/// within one [`DISCONNECT_TIMEOUT`].
+async fn disconnect_all<H: client::Handler>(hops: &[client::Handle<H>]) {
+    let deadline = tokio::time::Instant::now() + DISCONNECT_TIMEOUT;
+    for hop in hops.iter().rev() {
+        disconnect_handle(hop, deadline).await;
+    }
+}
+
 /// Per-connection SSH session state.
 pub(crate) struct SshSession {
-    handle: Arc<client::Handle<SshHandler>>,
+    connection: Arc<SshConnection>,
     channel_id: russh::ChannelId,
     reader_task: JoinHandle<()>,
     /// Watch channel carrying the latest pending resize. `None` is the
@@ -76,11 +201,46 @@ pub(crate) struct SshSession {
     /// `MAX_WRITE_SIZE` bytes) when the SSH socket is congested and russh's
     /// internal channel back-pressures into our spawned tasks.
     write_semaphore: Arc<Semaphore>,
-    /// Bastion handles kept alive for jump host chains. Must be retained for
-    /// their Drop impl, which closes each hop's connection in reverse order
-    /// when the session ends.
-    #[allow(dead_code)]
-    bastion_handles: Vec<client::Handle<SshHandler>>,
+}
+
+impl SshSession {
+    /// Close the session: stop the reader and disconnect the whole chain,
+    /// waiting until it has closed (see [`SshConnection::close`]).
+    pub(crate) async fn close(self) {
+        self.reader_task.abort();
+        self.connection.close().await;
+    }
+}
+
+impl Drop for SshSession {
+    /// A session dropped without [`SshSession::close`] — refused at
+    /// registration, or cleared by a page load — must not stay connected
+    /// where nobody can see it. Dropping a russh handle does not close the
+    /// connection, and a running reader would keep the channel, so stop the
+    /// reader and close the chain in the background.
+    fn drop(&mut self) {
+        self.reader_task.abort();
+        close_in_background(&self.connection);
+    }
+}
+
+/// Close a connection on a task of its own, unless it is closed already.
+fn close_in_background<H: client::Handler + 'static>(connection: &Arc<SshConnection<H>>) {
+    if !connection.is_closed() {
+        let connection = Arc::clone(connection);
+        tauri::async_runtime::spawn(async move { connection.close().await });
+    }
+}
+
+/// The reader task's share of its connection. Should the task stop before
+/// closing the connection itself, by panicking for one, dropping this closes
+/// it.
+struct ReaderConnection(Arc<SshConnection>);
+
+impl Drop for ReaderConnection {
+    fn drop(&mut self) {
+        close_in_background(&self.0);
+    }
 }
 
 /// A single hop in a jump host chain.
@@ -156,6 +316,7 @@ impl SshManager {
 
     /// Register an established SSH session. Re-checks capacity to prevent
     /// TOCTOU races when multiple connections are established concurrently.
+    /// A refused session is dropped, which closes it.
     pub fn register_session(&mut self, id: String, session: SshSession) -> Result<(), String> {
         self.check_capacity()?;
         self.sessions.insert(id, session);
@@ -180,10 +341,10 @@ impl SshManager {
             .sessions
             .get(id)
             .ok_or_else(|| format!("SSH session {id} not found"))?;
-        if session.reader_task.is_finished() || session.handle.is_closed() {
+        if session.reader_task.is_finished() || session.connection.target.is_closed() {
             return Err(SESSION_CLOSED_ERROR.to_string());
         }
-        Ok((Arc::clone(&session.handle), session.channel_id))
+        Ok((Arc::clone(&session.connection.target), session.channel_id))
     }
 
     /// Get the resize sender for a session.
@@ -209,19 +370,17 @@ impl SshManager {
         Ok(Arc::clone(&session.write_semaphore))
     }
 
-    /// Disconnect an SSH session and clean up resources.
-    pub async fn disconnect(&mut self, id: &str) -> Result<(), String> {
-        let session = self
-            .sessions
+    /// Unregister a session so the caller can [`SshSession::close`] it after
+    /// releasing the manager lock.
+    pub fn remove(&mut self, id: &str) -> Result<SshSession, String> {
+        self.sessions
             .remove(id)
-            .ok_or_else(|| format!("SSH session {id} not found"))?;
-        session.reader_task.abort();
-        let _ = session
-            .handle
-            .disconnect(Disconnect::ByApplication, "", "en")
-            .await;
-        info!(session_id = %id, "SSH session disconnected");
-        Ok(())
+            .ok_or_else(|| format!("SSH session {id} not found"))
+    }
+
+    /// Unregister every session, returning their `ID`s and sessions.
+    pub fn take_all(&mut self) -> Vec<(String, SshSession)> {
+        self.sessions.drain().collect()
     }
 }
 
@@ -260,7 +419,7 @@ pub async fn establish_ssh_connection(
 
     info!(session_id = %id, host = %host, port = %port, hops = jump_hops.len(), legacy_algorithms, "Connecting via SSH");
 
-    let (mut handle, bastion_handles) = connect_with_hops(
+    let mut chain = connect_with_hops(
         &id,
         &host,
         port,
@@ -276,46 +435,61 @@ pub async fn establish_ssh_connection(
     )
     .await?;
 
-    // Authenticate.
-    authenticate_handle(
-        &mut handle,
-        &username,
-        &auth_method,
-        &auth_credential,
-        &id,
-        &app_handle,
-        &kbd_interactive_senders,
-    )
-    .await?;
-
-    info!(session_id = %id, "SSH authenticated");
-
-    // Open a session channel with PTY.
-    debug!(session_id = %id, "Opening session channel");
-    let channel = handle
-        .channel_open_session()
-        .await
-        .map_err(|e| format!("Failed to open channel: {e}"))?;
-
-    debug!(session_id = %id, term = "xterm-256color", cols, rows, "Requesting PTY");
-    channel
-        .request_pty(
-            false,
-            "xterm-256color",
-            u32::from(cols),
-            u32::from(rows),
-            0,
-            0,
-            &[],
+    // Authenticate and open a shell. On failure, disconnect the chain that is
+    // already up; should this future be dropped part way, the chain's `Drop`
+    // does.
+    let opened = async {
+        authenticate_handle(
+            chain.last_mut(),
+            &username,
+            &auth_method,
+            &auth_credential,
+            &id,
+            &app_handle,
+            &kbd_interactive_senders,
         )
-        .await
-        .map_err(|e| format!("Failed to request PTY: {e}"))?;
+        .await?;
 
-    debug!(session_id = %id, "Requesting shell");
-    channel
-        .request_shell(false)
-        .await
-        .map_err(|e| format!("Failed to request shell: {e}"))?;
+        info!(session_id = %id, "SSH authenticated");
+
+        // Open a session channel with PTY.
+        debug!(session_id = %id, "Opening session channel");
+        let channel = chain
+            .last()
+            .channel_open_session()
+            .await
+            .map_err(|e| format!("Failed to open channel: {e}"))?;
+
+        debug!(session_id = %id, term = "xterm-256color", cols, rows, "Requesting PTY");
+        channel
+            .request_pty(
+                false,
+                "xterm-256color",
+                u32::from(cols),
+                u32::from(rows),
+                0,
+                0,
+                &[],
+            )
+            .await
+            .map_err(|e| format!("Failed to request PTY: {e}"))?;
+
+        debug!(session_id = %id, "Requesting shell");
+        channel
+            .request_shell(false)
+            .await
+            .map_err(|e| format!("Failed to request shell: {e}"))?;
+
+        Ok::<_, String>(channel)
+    }
+    .await;
+    let channel = match opened {
+        Ok(channel) => channel,
+        Err(e) => {
+            chain.close().await;
+            return Err(e);
+        }
+    };
 
     let channel_id = channel.id();
 
@@ -333,6 +507,10 @@ pub async fn establish_ssh_connection(
     let exit_event = format!("terminal-exit-{id}");
     let session_id = id.clone();
     let app = app_handle;
+
+    // From here the session owns the chain: its `Drop` and the reader close it.
+    let connection = Arc::new(chain.into_connection());
+    let reader_connection = ReaderConnection(Arc::clone(&connection));
 
     let reader_task = tokio::spawn(async move {
         // Wait for the frontend to signal that its event listener is registered.
@@ -420,17 +598,32 @@ pub async fn establish_ssh_connection(
                 }
             }
         }
+
+        // The session is over: the remote closed the channel, the connection
+        // dropped, or output can no longer reach the frontend. Close the
+        // connection and its jump hosts now, not when the tab is closed —
+        // until then their keepalives would tell the device, and every
+        // bastion, that the session is still there. Should the tab be closed
+        // meanwhile, ssh_disconnect stops this task part way and its own
+        // close finishes the job.
+        drop(channel);
+        reader_connection.0.close().await;
+        if let Some(ref lg) = logger {
+            if let Ok(mut mgr) = lg.lock() {
+                mgr.close_log(&session_id);
+            }
+        }
+        info!(session_id = %session_id, "SSH connection closed after the session ended");
     });
 
     info!(session_id = %id, "SSH session established");
 
     Ok(SshSession {
-        handle: Arc::new(handle),
+        connection,
         channel_id,
         reader_task,
         resize_tx,
         write_semaphore: Arc::new(Semaphore::new(crate::limits::MAX_INFLIGHT_WRITES)),
-        bastion_handles,
     })
 }
 
@@ -438,8 +631,8 @@ pub async fn establish_ssh_connection(
 pub struct SshState {
     pub manager: Arc<Mutex<SshManager>>,
     /// Exposed separately so `ssh_host_verify_response` can resolve a pending
-    /// verification without acquiring the main manager `tokio::Mutex` (which is
-    /// held by the `connect()` call waiting for the verification result).
+    /// verification without acquiring the main manager `tokio::Mutex`, and so
+    /// a page load can drop pending prompts for connects it has orphaned.
     pub host_verify_senders: HostVerifySenders,
     /// Same pattern for keyboard-interactive auth prompts.
     pub kbd_interactive_senders: KbdInteractiveSenders,
@@ -971,8 +1164,8 @@ fn validate_ssh_target(host: &str, port: u16) -> Result<(), String> {
 
 /// Establish an SSH connection, optionally through a chain of jump hosts.
 ///
-/// Returns the final `Handle` to the target host, plus a list of intermediate
-/// bastion handles that must be kept alive for the tunnel to remain open.
+/// Returns the chain with the target last; the jump hosts before it must be
+/// kept alive for the tunnel to remain open.
 #[allow(clippy::too_many_arguments)]
 async fn connect_with_hops(
     session_id: &str,
@@ -987,7 +1180,7 @@ async fn connect_with_hops(
     app_handle: &AppHandle,
     verify_senders: &HostVerifySenders,
     kbd_interactive_senders: &KbdInteractiveSenders,
-) -> Result<(client::Handle<SshHandler>, Vec<client::Handle<SshHandler>>), String> {
+) -> Result<PendingChain, String> {
     // Validate all targets against restricted IP ranges (SSRF prevention).
     if restrict_private_ips {
         validate_ssh_target(target_host, target_port)?;
@@ -1053,7 +1246,9 @@ async fn connect_with_hops(
             port = target_port,
             "TCP connected, handshake complete"
         );
-        return Ok((handle, Vec::new()));
+        let mut chain = PendingChain::default();
+        chain.push(handle);
+        return Ok(chain);
     }
 
     // Jump host chain: connect to each hop in order, then tunnel to target.
@@ -1062,7 +1257,9 @@ async fn connect_with_hops(
         hops = jump_hops.len(),
         "Starting jump host chain"
     );
-    let mut bastion_handles: Vec<client::Handle<SshHandler>> = Vec::new();
+    // Every hop is added as soon as it connects, so a failure further along
+    // disconnects the hops already up.
+    let mut chain = PendingChain::default();
 
     // Connect to the first hop directly.
     let first_hop = &jump_hops[0];
@@ -1083,7 +1280,7 @@ async fn connect_with_hops(
     };
 
     trace!(session_id, hop = 0, host = %first_hop.host, port = first_hop.port, timeout_secs = connect_timeout_secs, "TCP connect attempt to first hop");
-    let mut current_handle = tokio::time::timeout(
+    let first_handle = tokio::time::timeout(
         std::time::Duration::from_secs(connect_timeout_secs),
         client::connect(config, (first_hop.host.as_str(), first_hop.port), handler),
     )
@@ -1109,7 +1306,7 @@ async fn connect_with_hops(
     {
         let hop_id = format!("{session_id}-hop0");
         authenticate_handle(
-            &mut current_handle,
+            chain.push(first_handle),
             &first_hop.username,
             &first_hop.auth_method,
             &first_hop.auth_credential,
@@ -1128,7 +1325,9 @@ async fn connect_with_hops(
         let hop_timeout = std::time::Duration::from_secs(connect_timeout_secs);
         let tunnel = tokio::time::timeout(
             hop_timeout,
-            current_handle.channel_open_direct_tcpip(&hop.host, hop.port.into(), "127.0.0.1", 0),
+            chain
+                .last()
+                .channel_open_direct_tcpip(&hop.host, hop.port.into(), "127.0.0.1", 0),
         )
         .await
         .map_err(|_| format!("Tunnel to {}:{} timed out", hop.host, hop.port))?
@@ -1151,9 +1350,7 @@ async fn connect_with_hops(
             verify_rx: Arc::new(Mutex::new(Some(verify_rx))),
         };
 
-        bastion_handles.push(current_handle);
-
-        current_handle = tokio::time::timeout(
+        let hop_handle = tokio::time::timeout(
             hop_timeout,
             client::connect_stream(config, stream, handler),
         )
@@ -1175,7 +1372,7 @@ async fn connect_with_hops(
         })?;
 
         authenticate_handle(
-            &mut current_handle,
+            chain.push(hop_handle),
             &hop.username,
             &hop.auth_method,
             &hop.auth_credential,
@@ -1199,7 +1396,9 @@ async fn connect_with_hops(
 
     let tunnel = tokio::time::timeout(
         timeout,
-        current_handle.channel_open_direct_tcpip(target_host, target_port.into(), "127.0.0.1", 0),
+        chain
+            .last()
+            .channel_open_direct_tcpip(target_host, target_port.into(), "127.0.0.1", 0),
     )
     .await
     .map_err(|_| format!("Tunnel to {target_host}:{target_port} timed out"))?
@@ -1220,8 +1419,6 @@ async fn connect_with_hops(
         app_handle: app_handle.clone(),
         verify_rx: Arc::new(Mutex::new(Some(verify_rx))),
     };
-
-    bastion_handles.push(current_handle);
 
     let target_handle = tokio::time::timeout(
         timeout,
@@ -1244,7 +1441,8 @@ async fn connect_with_hops(
         port = target_port,
         "Target connected through tunnel"
     );
-    Ok((target_handle, bastion_handles))
+    chain.push(target_handle);
+    Ok(chain)
 }
 
 /// Authenticate an SSH handle using the specified method.
@@ -1853,5 +2051,218 @@ mod tests {
         // the toast.
         let s = sanitize_ssh_error("/home/user/.ssh/id_rsa: permission denied (oserror 13)");
         assert_eq!(s, "SSH connection failed");
+    }
+
+    // ── Closing connections ──────────────────────────────────────────────
+    // An in-process russh server stands in for the remote device. Its
+    // session future finishing is the device seeing the connection end; until
+    // then the device counts the session as in use.
+
+    struct TestServer;
+
+    impl russh::server::Handler for TestServer {
+        type Error = russh::Error;
+
+        fn auth_none(
+            &mut self,
+            _: &str,
+        ) -> impl std::future::Future<Output = Result<russh::server::Auth, Self::Error>> + Send
+        {
+            std::future::ready(Ok(russh::server::Auth::Accept))
+        }
+
+        async fn channel_open_session(
+            &mut self,
+            _: russh::Channel<russh::server::Msg>,
+            reply: russh::server::ChannelOpenHandle,
+            _: &mut russh::server::Session,
+        ) -> Result<(), Self::Error> {
+            reply.accept().await;
+            Ok(())
+        }
+    }
+
+    struct TestClient;
+
+    impl client::Handler for TestClient {
+        type Error = russh::Error;
+
+        fn check_server_key(
+            &mut self,
+            _: &PublicKey,
+        ) -> impl std::future::Future<Output = Result<bool, Self::Error>> + Send {
+            std::future::ready(Ok(true))
+        }
+    }
+
+    /// An authenticated client connected to a new in-process server, and a
+    /// receiver that resolves once the server's side of the connection ends.
+    async fn test_connection() -> (client::Handle<TestClient>, oneshot::Receiver<()>) {
+        use russh::keys::ssh_key::private::Ed25519Keypair;
+
+        let mut config = russh::server::Config {
+            inactivity_timeout: None,
+            auth_rejection_time: std::time::Duration::ZERO,
+            ..Default::default()
+        };
+        config
+            .keys
+            .push(russh::keys::PrivateKey::from(Ed25519Keypair::from_seed(
+                &[7; 32],
+            )));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (ended_tx, ended_rx) = oneshot::channel();
+        tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.unwrap();
+            let running = russh::server::run_stream(Arc::new(config), socket, TestServer)
+                .await
+                .unwrap();
+            let _ = running.await;
+            let _ = ended_tx.send(());
+        });
+
+        let mut handle = client::connect(Arc::new(client::Config::default()), addr, TestClient)
+            .await
+            .unwrap();
+        assert!(handle.authenticate_none("test").await.unwrap().success());
+        (handle, ended_rx)
+    }
+
+    const ENDED_WITHIN: std::time::Duration = std::time::Duration::from_secs(5);
+
+    #[tokio::test]
+    async fn held_channel_keeps_connection_open_after_handle_drop() {
+        // The leak `Drop for SshSession` guards against: dropping the handle
+        // alone does not close the connection while a reader task still
+        // holds the channel.
+        let (handle, mut ended) = test_connection().await;
+        let channel = handle.channel_open_session().await.unwrap();
+        let reader = tokio::spawn(async move {
+            let _channel = channel;
+            std::future::pending::<()>().await;
+        });
+        drop(handle);
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(500), &mut ended)
+                .await
+                .is_err(),
+            "the connection closed although the channel is still held"
+        );
+
+        // Stopping the reader, as the `Drop` impl does, closes it.
+        reader.abort();
+        tokio::time::timeout(ENDED_WITHIN, ended)
+            .await
+            .expect("the connection is still open")
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn close_disconnects_target_and_bastions() {
+        let (target, target_ended) = test_connection().await;
+        let (bastion, bastion_ended) = test_connection().await;
+        let target = Arc::new(target);
+        // Held, as the reader task would hold it.
+        let _channel = target.channel_open_session().await.unwrap();
+        let connection = SshConnection {
+            target: Arc::clone(&target),
+            bastions: vec![bastion],
+        };
+
+        connection.close().await;
+
+        // close() returns only once every connection in the chain is closed.
+        assert!(connection.is_closed());
+        tokio::time::timeout(ENDED_WITHIN, target_ended)
+            .await
+            .expect("the target connection is still open")
+            .unwrap();
+        tokio::time::timeout(ENDED_WITHIN, bastion_ended)
+            .await
+            .expect("the bastion connection is still open")
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn close_of_closed_connection_returns_at_once() {
+        let (handle, _ended) = test_connection().await;
+        let connection = SshConnection {
+            target: Arc::new(handle),
+            bastions: Vec::new(),
+        };
+        connection.close().await;
+
+        let started = std::time::Instant::now();
+        connection.close().await;
+        assert!(started.elapsed() < std::time::Duration::from_millis(500));
+    }
+
+    #[tokio::test]
+    async fn failed_chain_disconnects_the_hops_already_up() {
+        let (first, first_ended) = test_connection().await;
+        let (second, second_ended) = test_connection().await;
+        let mut chain = PendingChain::default();
+        chain.push(first);
+        chain.push(second);
+
+        // As a `?` part way through `connect_with_hops` would. The close runs
+        // on Tauri's own global runtime, which works inside a test as well.
+        drop(chain);
+
+        tokio::time::timeout(ENDED_WITHIN, first_ended)
+            .await
+            .expect("the first hop is still connected")
+            .unwrap();
+        tokio::time::timeout(ENDED_WITHIN, second_ended)
+            .await
+            .expect("the second hop is still connected")
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn chain_handed_to_the_session_stays_connected() {
+        let (bastion, mut bastion_ended) = test_connection().await;
+        let (target, mut target_ended) = test_connection().await;
+        let mut chain = PendingChain::default();
+        chain.push(bastion);
+        chain.push(target);
+
+        let connection = chain.into_connection();
+        assert_eq!(connection.bastions.len(), 1);
+        let settle = std::time::Duration::from_millis(300);
+        assert!(
+            tokio::time::timeout(settle, &mut bastion_ended)
+                .await
+                .is_err(),
+            "handing over the chain closed the bastion"
+        );
+        assert!(
+            tokio::time::timeout(settle, &mut target_ended)
+                .await
+                .is_err(),
+            "handing over the chain closed the target"
+        );
+        drop(connection);
+    }
+
+    #[tokio::test]
+    async fn closing_a_chain_returns_once_all_are_closed() {
+        let (bastion, bastion_ended) = test_connection().await;
+        let (target, target_ended) = test_connection().await;
+        let mut chain = PendingChain::default();
+        chain.push(bastion);
+        chain.push(target);
+
+        chain.close().await;
+
+        tokio::time::timeout(ENDED_WITHIN, target_ended)
+            .await
+            .expect("the target is still connected")
+            .unwrap();
+        tokio::time::timeout(ENDED_WITHIN, bastion_ended)
+            .await
+            .expect("the bastion is still connected")
+            .unwrap();
     }
 }

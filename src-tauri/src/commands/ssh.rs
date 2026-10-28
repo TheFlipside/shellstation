@@ -5,7 +5,11 @@ use zeroize::Zeroizing;
 use crate::session_logger::SessionLogState;
 use crate::ssh::{establish_ssh_connection, JumpHop, SshConnectParams, SshState};
 
-use super::{validate_dimensions, TerminalReadyState, MAX_JUMP_HOPS, MAX_WRITE_SIZE};
+use super::{
+    release_session, validate_dimensions, ConnectSetup, TerminalReadyState,
+    MAX_CONNECT_TIMEOUT_SECS, MAX_JUMP_HOPS, MAX_KEEPALIVE_INTERVAL_SECS, MAX_KEEPALIVE_MAX,
+    MAX_WRITE_SIZE,
+};
 
 /// Connect to a remote host via SSH. Returns the session `ID`.
 #[tauri::command]
@@ -28,6 +32,7 @@ pub async fn ssh_connect(
     keepalive_interval: Option<u64>,
     keepalive_max: Option<u32>,
 ) -> Result<String, String> {
+    let page_load = ready_state.page_load();
     validate_dimensions(cols, rows)?;
     let hops = jump_hops.unwrap_or_default();
     if hops.len() > MAX_JUMP_HOPS {
@@ -42,35 +47,23 @@ pub async fn ssh_connect(
     }
 
     let logger = Some(std::sync::Arc::clone(&logger_state.0));
-
-    // Open the log file before connecting so output from the start is captured.
-    {
-        let session_name = format!("{username}@{host}");
-        if let Ok(mut mgr) = logger_state.0.lock() {
-            if let Err(e) = mgr.open_log(&id, &session_name) {
-                tracing::warn!("Failed to open session log: {e}");
-            }
-        }
-    }
+    let setup = ConnectSetup::begin(
+        &id,
+        &format!("{username}@{host}"),
+        page_load,
+        &ready_state,
+        &logger_state,
+    );
 
     // Create ready signal so the reader task waits for the frontend listener.
     let (ready_tx, ready_rx) = tokio::sync::oneshot::channel::<()>();
-    {
-        let mut senders = ready_state
-            .0
-            .lock()
-            .map_err(|e| format!("Ready sender lock poisoned: {e}"))?;
-        senders.insert(
-            id.clone(),
-            Box::new(move || {
-                let _ = ready_tx.send(());
-            }),
-        );
-    }
+    setup.add_ready_signal(move || {
+        let _ = ready_tx.send(());
+    });
 
     // Establish connection WITHOUT holding the manager lock so other
     // sessions remain fully usable during the (potentially slow) handshake.
-    let session = match establish_ssh_connection(
+    let session = establish_ssh_connection(
         SshConnectParams {
             id: id.clone(),
             host,
@@ -84,9 +77,11 @@ pub async fn ssh_connect(
             jump_hops: hops,
             legacy_algorithms: false,
             restrict_private_ips: restrict_private_ips.unwrap_or(false),
-            connect_timeout_secs: connect_timeout.unwrap_or(10),
-            keepalive_interval_secs: keepalive_interval.unwrap_or(15),
-            keepalive_max: keepalive_max.unwrap_or(3) as usize,
+            connect_timeout_secs: connect_timeout.unwrap_or(10).min(MAX_CONNECT_TIMEOUT_SECS),
+            keepalive_interval_secs: keepalive_interval
+                .unwrap_or(15)
+                .min(MAX_KEEPALIVE_INTERVAL_SECS),
+            keepalive_max: keepalive_max.unwrap_or(3).min(MAX_KEEPALIVE_MAX) as usize,
             logger,
             kbd_interactive_senders: std::sync::Arc::clone(&state.kbd_interactive_senders),
             ready_rx,
@@ -94,27 +89,16 @@ pub async fn ssh_connect(
         },
         &state.host_verify_senders,
     )
-    .await
-    {
-        Ok(s) => s,
-        Err(e) => {
-            // Clean up ready sender on connection failure.
-            if let Ok(mut senders) = ready_state.0.lock() {
-                senders.remove(&id);
-            }
-            if let Ok(mut mgr) = logger_state.0.lock() {
-                mgr.close_log(&id);
-            }
-            return Err(e);
-        }
-    };
+    .await?;
 
     // Brief lock: re-check capacity and register atomically.
     {
         let mut manager = state.manager.lock().await;
+        setup.check_page_unchanged()?;
         manager.register_session(id.clone(), session)?;
     }
 
+    setup.disarm();
     Ok(id)
 }
 
@@ -180,14 +164,21 @@ pub async fn ssh_resize(
 #[tauri::command]
 pub async fn ssh_disconnect(
     state: State<'_, SshState>,
+    ready_state: State<'_, TerminalReadyState>,
     logger_state: State<'_, SessionLogState>,
     id: String,
 ) -> Result<(), String> {
-    let mut manager = state.manager.lock().await;
-    manager.disconnect(&id).await?;
-    if let Ok(mut mgr) = logger_state.0.lock() {
-        mgr.close_log(&id);
-    }
+    let session = state.manager.lock().await.remove(&id)?;
+    // Released only for a session found here, so an id of another protocol
+    // cannot close that session's log; one cleared by a page load was
+    // released then. Released before the close below, which can take a few
+    // seconds, so a command dropped meanwhile cannot skip it.
+    release_session(&id, &ready_state, &logger_state);
+    // Close outside the lock: waiting for the server must not stall the
+    // other sessions. Waiting at all means a reconnect cannot reach the
+    // device before it has seen this session end.
+    session.close().await;
+    tracing::info!(session_id = %id, "SSH session disconnected");
     Ok(())
 }
 

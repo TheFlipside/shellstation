@@ -2,7 +2,7 @@ import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
 import { useAppStore } from "./appStore";
 import { useSettingsStore } from "./settingsStore";
-import { useTerminalStore } from "./terminalStore";
+import { useTerminalStore, type TabMeta } from "./terminalStore";
 
 export interface Folder {
   id: string;
@@ -438,13 +438,21 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       keepaliveMax,
     });
 
-    const isTelnet = session.protocol === "telnet";
-    const tabType = isTelnet ? "telnet" : "ssh";
-    const tabTitle = session.name;
-    const meta = isTelnet
-      ? { host: session.hostname, port: session.port }
-      : { host: session.hostname, username: session.username };
-
-    useTerminalStore.getState().addTab(connId, tabTitle, tabType, meta, session.id);
+    const { type, meta } = sessionTabKind(session);
+    useTerminalStore.getState().addTab(connId, session.name, type, meta, session.id);
   },
 }));
+
+/**
+ * The tab type and meta for a connection to a saved session. session_connect
+ * picks the protocol from the saved session, so it, not an existing tab,
+ * decides how the connection is written to and closed.
+ */
+export function sessionTabKind(session: Session): {
+  type: "ssh" | "telnet";
+  meta: TabMeta;
+} {
+  return session.protocol === "telnet"
+    ? { type: "telnet", meta: { host: session.hostname, port: session.port } }
+    : { type: "ssh", meta: { host: session.hostname, username: session.username } };
+}

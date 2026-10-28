@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { useTerminalStore, type SessionType } from "../stores/terminalStore";
-import { useSessionStore } from "../stores/sessionStore";
+import { sessionTabKind, useSessionStore } from "../stores/sessionStore";
 import { Terminal } from "./Terminal";
 import { QuickConnect, type QuickConnectParams } from "./QuickConnect";
 import { HostVerifyDialog, type HostVerifyRequest } from "./HostVerifyDialog";
@@ -365,7 +365,7 @@ export function TerminalTabs({ uiScale }: TerminalTabsProps): React.JSX.Element 
     (tabId: string) => {
       const tab = tabs.find((tb) => tb.id === tabId);
       if (!tab?.sessionDbId || !tab.exited) return;
-      if (reconnectingRef.current.has(tabId)) return;
+      if (reconnectingRef.current.has(tabId) || closingRef.current.has(tabId)) return;
       const session = useSessionStore.getState().sessions.find((s) => s.id === tab.sessionDbId);
       if (!session) {
         addToast(t("terminal.connectionFailed", { message: "Session not found" }));
@@ -373,26 +373,36 @@ export function TerminalTabs({ uiScale }: TerminalTabsProps): React.JSX.Element 
       }
 
       reconnectingRef.current.add(tabId);
-      const settings = useSettingsStore.getState();
-      invoke<string>("session_connect", {
-        id: tab.sessionDbId,
-        cols: 80,
-        rows: 24,
-        restrictPrivateIps: settings.restrictPrivateIps,
-        connectTimeout: settings.connectTimeout,
-        keepaliveInterval: settings.keepaliveInterval,
-        keepaliveMax: settings.keepaliveMax,
-      })
+      const { type: newType, meta: newMeta } = sessionTabKind(session);
+      const tabGone = (): boolean =>
+        closingRef.current.has(tabId) ||
+        !useTerminalStore.getState().tabs.some((tb) => tb.id === tabId);
+      // The old session has ended, but the backend holds it until it is told
+      // to close it. Close it before connecting again, so that a device which
+      // counts sessions has seen it end before the new one arrives. The tab
+      // still holds the old session, so its own type picks the command.
+      disconnectSession(tabId, tab.type)
+        .then(() => {
+          // Closed meanwhile: there is no tab left to reconnect.
+          if (tabGone()) return null;
+          const settings = useSettingsStore.getState();
+          return invoke<string>("session_connect", {
+            id: tab.sessionDbId,
+            cols: 80,
+            rows: 24,
+            restrictPrivateIps: settings.restrictPrivateIps,
+            connectTimeout: settings.connectTimeout,
+            keepaliveInterval: settings.keepaliveInterval,
+            keepaliveMax: settings.keepaliveMax,
+          });
+        })
         .then((newConnId) => {
+          if (newConnId === null) return;
           // The tab was closed, or is being closed, while connecting. Nothing
           // would ever show or close this session, so tear it down instead of
-          // leaking it. session_connect picks the protocol from the saved
-          // session, so that decides the teardown command, not the tab.
-          const tabGone =
-            closingRef.current.has(tabId) ||
-            !useTerminalStore.getState().tabs.some((tb) => tb.id === tabId);
-          if (tabGone) {
-            void disconnectSession(newConnId, session.protocol === "telnet" ? "telnet" : "ssh");
+          // leaking it.
+          if (tabGone()) {
+            void disconnectSession(newConnId, newType);
             return;
           }
           // Update stableTabIdsRef so the terminal keeps its DOM position.
@@ -401,7 +411,7 @@ export function TerminalTabs({ uiScale }: TerminalTabsProps): React.JSX.Element 
           if (idx !== -1) {
             stableIds[idx] = newConnId;
           }
-          replaceTab(tabId, newConnId);
+          replaceTab(tabId, newConnId, newType, newMeta);
         })
         .catch((err: unknown) => {
           const msg = err instanceof Error ? err.message : String(err);

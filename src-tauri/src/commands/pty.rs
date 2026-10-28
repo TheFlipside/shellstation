@@ -4,7 +4,10 @@ use uuid::Uuid;
 use crate::pty::PtyState;
 use crate::session_logger::SessionLogState;
 
-use super::{validate_dimensions, TerminalReadyState, MAX_WRITE_SIZE};
+use super::{
+    lock_or_recover, release_session, validate_dimensions, ConnectSetup, TerminalReadyState,
+    MAX_WRITE_SIZE,
+};
 
 /// Spawn a new local PTY session. Returns the session `ID`.
 #[tauri::command]
@@ -16,36 +19,25 @@ pub fn pty_spawn(
     cols: u16,
     rows: u16,
 ) -> Result<String, String> {
+    let page_load = ready_state.page_load();
     validate_dimensions(cols, rows)?;
     let id = Uuid::new_v4().to_string();
 
-    // Open session log before spawning so output from the start is captured.
-    {
-        if let Ok(mut mgr) = logger_state.0.lock() {
-            if let Err(e) = mgr.open_log(&id, "local") {
-                tracing::warn!("Failed to open session log: {e}");
-            }
-        }
-    }
+    let setup = ConnectSetup::begin(&id, "local", page_load, &ready_state, &logger_state);
 
     // Create ready signal so the reader thread waits for the frontend listener.
     let (ready_tx, ready_rx) = std::sync::mpsc::channel::<()>();
-    {
-        let mut senders = ready_state
-            .0
-            .lock()
-            .map_err(|e| format!("Ready sender lock poisoned: {e}"))?;
-        senders.insert(
-            id.clone(),
-            Box::new(move || {
-                let _ = ready_tx.send(());
-            }),
-        );
-    }
+    setup.add_ready_signal(move || {
+        let _ = ready_tx.send(());
+    });
 
     let logger = Some(std::sync::Arc::clone(&logger_state.0));
-    let mut manager = state.0.lock().map_err(|e| e.to_string())?;
-    manager.spawn(&id, cols, rows, app_handle, logger, ready_rx)?;
+    {
+        let mut manager = state.0.lock().map_err(|e| e.to_string())?;
+        setup.check_page_unchanged()?;
+        manager.spawn(&id, cols, rows, app_handle, logger, ready_rx)?;
+    }
+    setup.disarm();
     Ok(id)
 }
 
@@ -74,17 +66,35 @@ pub fn pty_resize(
 
 /// Kill a PTY session and free resources.
 #[tauri::command]
-pub fn pty_kill(
+pub async fn pty_kill(
     state: State<'_, PtyState>,
+    ready_state: State<'_, TerminalReadyState>,
     logger_state: State<'_, SessionLogState>,
     id: String,
 ) -> Result<(), String> {
-    {
-        let mut manager = state.0.lock().map_err(|e| e.to_string())?;
-        manager.kill(&id)?;
+    // The manager lock is a blocking one, which a stuck write to a shell can
+    // hold, and killing waits for the shell to exit: do both on a blocking
+    // thread, off the async workers. The kill comes before the release, so
+    // the shell's reader cannot start reading on the way out.
+    let manager = std::sync::Arc::clone(&state.0);
+    let kill_id = id.clone();
+    let killed = tauri::async_runtime::spawn_blocking(move || {
+        let shell = lock_or_recover(&manager).remove(&kill_id)?;
+        shell.shut_down(&kill_id);
+        Ok::<_, String>(())
+    })
+    .await;
+    match killed {
+        // Not a session of this manager: nothing of it to release.
+        Ok(Err(not_found)) => Err(not_found),
+        Ok(Ok(())) => {
+            release_session(&id, &ready_state, &logger_state);
+            Ok(())
+        }
+        // Removed, then the kill panicked: release it all the same.
+        Err(e) => {
+            release_session(&id, &ready_state, &logger_state);
+            Err(format!("Failed to stop the shell: {e}"))
+        }
     }
-    if let Ok(mut mgr) = logger_state.0.lock() {
-        mgr.close_log(&id);
-    }
-    Ok(())
 }

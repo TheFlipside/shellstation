@@ -60,6 +60,30 @@ pub(crate) struct TelnetSession {
     write_semaphore: Arc<Semaphore>,
 }
 
+impl TelnetSession {
+    /// Close the session and wait until the socket is closed. The I/O task
+    /// owns the socket, so it closes when the stopped task is dropped.
+    pub(crate) async fn close(mut self) {
+        self.reader_task.abort();
+        // Cancelled is the expected outcome; anything else is a panic.
+        if let Err(e) = (&mut self.reader_task).await {
+            if !e.is_cancelled() {
+                warn!(error = %e, "Telnet I/O task panicked");
+            }
+        }
+    }
+}
+
+impl Drop for TelnetSession {
+    /// A session dropped without [`TelnetSession::close`] — refused at
+    /// registration, or cleared by a page load — must not stay connected
+    /// where nobody can see it. Dropping a `JoinHandle` leaves its task
+    /// running, so stop it explicitly.
+    fn drop(&mut self) {
+        self.reader_task.abort();
+    }
+}
+
 /// Manages all active Telnet sessions.
 #[derive(Default)]
 pub struct TelnetManager {
@@ -82,6 +106,7 @@ impl TelnetManager {
 
     /// Register an established Telnet session. Re-checks capacity to prevent
     /// TOCTOU races when multiple connections are established concurrently.
+    /// A refused session is dropped, which closes it.
     pub fn register_session(&mut self, id: String, session: TelnetSession) -> Result<(), String> {
         self.check_capacity()?;
         self.sessions.insert(id, session);
@@ -129,15 +154,17 @@ impl TelnetManager {
         Ok(Arc::clone(&session.write_semaphore))
     }
 
-    /// Disconnect a Telnet session.
-    pub fn disconnect(&mut self, id: &str) -> Result<(), String> {
-        let session = self
-            .sessions
+    /// Unregister a session so the caller can [`TelnetSession::close`] it
+    /// after releasing the manager lock.
+    pub fn remove(&mut self, id: &str) -> Result<TelnetSession, String> {
+        self.sessions
             .remove(id)
-            .ok_or_else(|| format!("Telnet session {id} not found"))?;
-        session.reader_task.abort();
-        info!(session_id = %id, "Telnet session disconnected");
-        Ok(())
+            .ok_or_else(|| format!("Telnet session {id} not found"))
+    }
+
+    /// Unregister every session, returning their `ID`s and sessions.
+    pub fn take_all(&mut self) -> Vec<(String, TelnetSession)> {
+        self.sessions.drain().collect()
     }
 }
 
@@ -597,15 +624,99 @@ mod tests {
 
     /// A session whose write channel receiver stands in for the I/O task.
     fn session_with_receiver() -> (TelnetSession, mpsc::Receiver<Vec<u8>>) {
+        session_with_task(tokio::spawn(async {}))
+    }
+
+    /// A session around a given I/O task.
+    fn session_with_task(task: JoinHandle<()>) -> (TelnetSession, mpsc::Receiver<Vec<u8>>) {
         let (write_tx, write_rx) = mpsc::channel(1);
         let (resize_tx, _) = watch::channel(None);
         let session = TelnetSession {
-            reader_task: tokio::spawn(async {}),
+            reader_task: task,
             write_tx,
             resize_tx,
             write_semaphore: Arc::new(Semaphore::new(1)),
         };
         (session, write_rx)
+    }
+
+    /// A session whose I/O task runs until stopped, standing in for one that
+    /// holds a live socket, and a receiver that resolves once it stops.
+    fn session_with_live_task() -> (TelnetSession, tokio::sync::oneshot::Receiver<()>) {
+        let (stopped_tx, stopped_rx) = tokio::sync::oneshot::channel::<()>();
+        let task = tokio::spawn(async move {
+            let _stopped = stopped_tx; // dropped with the task
+            std::future::pending::<()>().await;
+        });
+        (session_with_task(task).0, stopped_rx)
+    }
+
+    const STOPPED_WITHIN: std::time::Duration = std::time::Duration::from_secs(5);
+
+    // ── Closing sessions ─────────────────────────────────────────────────
+    // A session's I/O task owns its socket, so a task left running is a
+    // connection left open.
+
+    #[tokio::test]
+    async fn refused_session_stops_its_io_task() {
+        let mut manager = TelnetManager::default();
+        for i in 0..TelnetManager::MAX_SESSIONS {
+            let (session, _) = session_with_receiver();
+            manager.register_session(i.to_string(), session).unwrap();
+        }
+
+        let (session, stopped) = session_with_live_task();
+        assert!(manager
+            .register_session("over".to_string(), session)
+            .is_err());
+        assert!(tokio::time::timeout(STOPPED_WITHIN, stopped).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn dropped_session_stops_its_io_task() {
+        let (session, stopped) = session_with_live_task();
+        drop(session);
+        assert!(tokio::time::timeout(STOPPED_WITHIN, stopped).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn close_returns_after_the_io_task_stopped() {
+        let (session, mut stopped) = session_with_live_task();
+        session.close().await;
+        assert!(matches!(
+            stopped.try_recv(),
+            Err(tokio::sync::oneshot::error::TryRecvError::Closed)
+        ));
+    }
+
+    #[tokio::test]
+    async fn remove_hands_back_the_session() {
+        let mut manager = TelnetManager::default();
+        let (session, stopped) = session_with_live_task();
+        manager.register_session("s".to_string(), session).unwrap();
+
+        let removed = manager.remove("s").unwrap();
+        assert!(manager.get_write_sender("s").is_err());
+        removed.close().await;
+        assert!(tokio::time::timeout(STOPPED_WITHIN, stopped).await.is_ok());
+
+        assert_eq!(
+            manager.remove("s").err().as_deref(),
+            Some("Telnet session s not found")
+        );
+    }
+
+    #[tokio::test]
+    async fn take_all_empties_the_manager() {
+        let mut manager = TelnetManager::default();
+        let (session, stopped) = session_with_live_task();
+        manager.register_session("s".to_string(), session).unwrap();
+
+        let taken = manager.take_all();
+        assert_eq!(taken.len(), 1);
+        assert!(manager.get_write_sender("s").is_err());
+        drop(taken);
+        assert!(tokio::time::timeout(STOPPED_WITHIN, stopped).await.is_ok());
     }
 
     #[tokio::test]

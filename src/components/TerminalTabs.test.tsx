@@ -115,6 +115,14 @@ function connectCalls(): number {
   return vi.mocked(invoke).mock.calls.filter(([cmd]) => cmd === "session_connect").length;
 }
 
+function sshDisconnectsOf(id: string): number {
+  return vi
+    .mocked(invoke)
+    .mock.calls.filter(
+      ([cmd, args]) => cmd === "ssh_disconnect" && (args as { id?: string } | undefined)?.id === id,
+    ).length;
+}
+
 function tabIds(): string[] {
   return useTerminalStore.getState().tabs.map((tb) => tb.id);
 }
@@ -150,13 +158,40 @@ async function finish(cmd: string, outcome: { value: unknown } | { error: string
   });
 }
 
+/** Let the work already triggered run, e.g. a reconnect's first teardown. */
+async function settle(): Promise<void> {
+  await act(async () => {
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 0);
+    });
+  });
+}
+
 describe("TerminalTabs reconnect", () => {
+  it("closes the old session before connecting again", async () => {
+    // The backend holds an ended session until it is told to close it, and a
+    // device that counts sessions must see it end before the new one arrives.
+    deferred.add("ssh_disconnect");
+    render(<TerminalTabs uiScale={100} />);
+
+    pressReconnect();
+    expect(sshDisconnectsOf(OLD_CONN)).toBe(1);
+    expect(connectCalls()).toBe(0);
+
+    await finish("ssh_disconnect", { value: undefined });
+    expect(connectCalls()).toBe(1);
+    await finish("session_connect", { value: NEW_CONN });
+    expect(tabIds()).toEqual([NEW_CONN]);
+  });
+
   it("ignores a second reconnect while the first is still connecting", async () => {
     render(<TerminalTabs uiScale={100} />);
 
     pressReconnect();
     pressReconnect();
+    await settle();
 
+    expect(sshDisconnectsOf(OLD_CONN)).toBe(1);
     expect(connectCalls()).toBe(1);
     await finish("session_connect", { value: NEW_CONN });
     expect(tabIds()).toEqual([NEW_CONN]);
@@ -166,6 +201,7 @@ describe("TerminalTabs reconnect", () => {
     render(<TerminalTabs uiScale={100} />);
 
     pressReconnect();
+    await settle();
     await finish("session_connect", { error: "connection refused" });
 
     expect(useToastStore.getState().toasts.map((toast) => toast.message)).toEqual([
@@ -174,7 +210,49 @@ describe("TerminalTabs reconnect", () => {
     expect(tabIds()).toEqual([OLD_CONN]);
 
     pressReconnect();
+    await settle();
     expect(connectCalls()).toBe(2);
+    await finish("session_connect", { value: NEW_CONN });
+    expect(tabIds()).toEqual([NEW_CONN]);
+  });
+
+  it("does not connect for a tab closed while its old session is torn down", async () => {
+    deferred.add("ssh_disconnect");
+    render(<TerminalTabs uiScale={100} />);
+
+    pressReconnect();
+    pressClose();
+    await finish("ssh_disconnect", { value: undefined });
+    await finish("ssh_disconnect", { value: undefined });
+
+    expect(connectCalls()).toBe(0);
+    expect(tabIds()).toEqual([]);
+  });
+
+  it("does not reconnect a tab that is already being closed", async () => {
+    deferred.add("ssh_disconnect");
+    render(<TerminalTabs uiScale={100} />);
+
+    pressClose();
+    pressReconnect();
+    await finish("ssh_disconnect", { value: undefined });
+
+    // Only the close's own teardown, and no connect.
+    expect(sshDisconnectsOf(OLD_CONN)).toBe(1);
+    expect(connectCalls()).toBe(0);
+    expect(tabIds()).toEqual([]);
+  });
+
+  it("still reconnects when tearing down the old session fails", async () => {
+    // The old session may be gone from the backend already, e.g. after a
+    // failed earlier attempt, and its teardown then reports an error.
+    deferred.add("ssh_disconnect");
+    render(<TerminalTabs uiScale={100} />);
+
+    pressReconnect();
+    await finish("ssh_disconnect", { error: "SSH session conn-old not found" });
+
+    expect(connectCalls()).toBe(1);
     await finish("session_connect", { value: NEW_CONN });
     expect(tabIds()).toEqual([NEW_CONN]);
   });
@@ -183,6 +261,7 @@ describe("TerminalTabs reconnect", () => {
     render(<TerminalTabs uiScale={100} />);
 
     pressReconnect();
+    await settle();
     act(() => {
       useTerminalStore.getState().removeTab(OLD_CONN);
     });
@@ -200,12 +279,16 @@ describe("TerminalTabs reconnect", () => {
     render(<TerminalTabs uiScale={100} />);
 
     pressReconnect();
+    await finish("ssh_disconnect", { value: undefined });
     pressClose();
     await finish("session_connect", { value: NEW_CONN });
+    // The close's teardown of the old session, then the orphan's.
+    await finish("ssh_disconnect", { value: undefined });
     await finish("ssh_disconnect", { value: undefined });
 
-    expect(invoke).toHaveBeenCalledWith("ssh_disconnect", { id: NEW_CONN });
+    expect(sshDisconnectsOf(NEW_CONN)).toBe(1);
     expect(tabIds()).toEqual([]);
+    expect(pending).toEqual([]);
   });
 
   it("tears a closing tab down only once when it is closed again", async () => {
@@ -228,6 +311,7 @@ describe("TerminalTabs reconnect", () => {
     render(<TerminalTabs uiScale={100} />);
 
     pressReconnect();
+    await settle();
     act(() => {
       useTerminalStore.getState().removeTab(OLD_CONN);
     });
@@ -235,6 +319,22 @@ describe("TerminalTabs reconnect", () => {
 
     expect(invoke).toHaveBeenCalledWith("telnet_disconnect", { id: NEW_CONN });
     expect(invoke).not.toHaveBeenCalledWith("ssh_disconnect", { id: NEW_CONN });
+  });
+
+  it("gives the tab the protocol of the session it reconnected", async () => {
+    // Writes and the eventual close go by the tab's type. Keeping the old
+    // one would send them to the wrong backend, and closing the tab would
+    // never close the new session.
+    useSessionStore.setState({ sessions: [{ ...SESSION, protocol: "telnet" }] });
+    render(<TerminalTabs uiScale={100} />);
+
+    pressReconnect();
+    await settle();
+    await finish("session_connect", { value: NEW_CONN });
+
+    expect(useTerminalStore.getState().tabs).toMatchObject([
+      { id: NEW_CONN, type: "telnet", meta: { host: SESSION.hostname, port: SESSION.port } },
+    ]);
   });
 });
 
