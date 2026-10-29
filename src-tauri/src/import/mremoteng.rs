@@ -59,7 +59,7 @@ pub fn parse(xml: &str) -> Result<ParseResult, String> {
         check_parsed_counts(folders.len(), sessions.len(), skipped.len(), warnings.len())?;
         match reader.read_event() {
             Ok(Event::Start(ref e)) => {
-                if e.local_name().as_ref() != b"Node" {
+                if e.local_name().as_ref() != "Node" {
                     open_elements += 1;
                     continue;
                 }
@@ -97,7 +97,7 @@ pub fn parse(xml: &str) -> Result<ParseResult, String> {
                             }
                         }
                         // Consume until matching </Node>.
-                        skip_to_end(&mut reader, b"Node")?;
+                        skip_to_end(&mut reader, "Node")?;
                     }
                     _ => {
                         let dropped = skip_dropped_node(&mut reader, &mut skipped)?;
@@ -106,7 +106,7 @@ pub fn parse(xml: &str) -> Result<ParseResult, String> {
                 }
             }
             Ok(Event::Empty(ref e)) => {
-                if e.local_name().as_ref() != b"Node" {
+                if e.local_name().as_ref() != "Node" {
                     continue;
                 }
                 let attrs = parse_attributes(e)?;
@@ -141,7 +141,7 @@ pub fn parse(xml: &str) -> Result<ParseResult, String> {
                     _ => warnings.push(unsupported_node_warning(&name, node_type, 0)),
                 }
             }
-            Ok(Event::End(ref e)) if e.local_name().as_ref() == b"Node" => {
+            Ok(Event::End(ref e)) if e.local_name().as_ref() == "Node" => {
                 folder_stack.pop();
             }
             Ok(Event::End(_)) => open_elements = open_elements.saturating_sub(1),
@@ -185,14 +185,14 @@ fn skip_dropped_node(
         // Only `skipped` grows here; the caller checks the other counts.
         check_parsed_counts(0, 0, skipped.len(), 0)?;
         match reader.read_event() {
-            Ok(Event::Start(ref e)) if e.local_name().as_ref() == b"Node" => {
+            Ok(Event::Start(ref e)) if e.local_name().as_ref() == "Node" => {
                 depth += 1;
                 record_dropped_connection(e, skipped)?;
             }
-            Ok(Event::Empty(ref e)) if e.local_name().as_ref() == b"Node" => {
+            Ok(Event::Empty(ref e)) if e.local_name().as_ref() == "Node" => {
                 record_dropped_connection(e, skipped)?;
             }
-            Ok(Event::End(ref e)) if e.local_name().as_ref() == b"Node" => {
+            Ok(Event::End(ref e)) if e.local_name().as_ref() == "Node" => {
                 depth -= 1;
                 if depth == 0 {
                     return Ok(skipped.len() - before);
@@ -226,7 +226,7 @@ fn record_dropped_connection(
 }
 
 /// Skip events until the matching end tag for `tag` is consumed.
-fn skip_to_end(reader: &mut Reader<&[u8]>, tag: &[u8]) -> Result<(), String> {
+fn skip_to_end(reader: &mut Reader<&[u8]>, tag: &str) -> Result<(), String> {
     let mut depth = 1u32;
     loop {
         match reader.read_event() {
@@ -256,7 +256,7 @@ fn parse_attributes(
     let mut map = HashMap::new();
     for attr in e.attributes() {
         let attr = attr.map_err(|err| format!("Failed to parse XML attribute: {err}"))?;
-        let key = String::from_utf8_lossy(attr.key.as_ref()).to_string();
+        let key = attr.key.as_ref().to_string();
         let value = attr
             .normalized_value(quick_xml::XmlVersion::Implicit1_0)
             .map_err(|err| format!("Failed to decode attribute '{key}': {err}"))?

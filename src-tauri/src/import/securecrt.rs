@@ -83,12 +83,12 @@ pub fn parse(xml: &str) -> Result<ParseResult, String> {
 fn find_sessions_key(reader: &mut Reader<&[u8]>) -> Result<bool, String> {
     loop {
         match reader.read_event() {
-            Ok(Event::Start(ref e)) if e.local_name().as_ref() == b"key" => {
+            Ok(Event::Start(ref e)) if e.local_name().as_ref() == "key" => {
                 if get_attr(e, "name").as_deref() == Some("Sessions") {
                     return Ok(true);
                 }
                 // Not the Sessions key — skip its entire subtree.
-                skip_through_end(reader, b"key")?;
+                skip_through_end(reader, "key")?;
             }
             Ok(Event::Eof) => return Ok(false),
             Err(e) => {
@@ -120,7 +120,7 @@ fn parse_key_children(
         check_parsed_counts(folders.len(), sessions.len(), skipped.len(), warnings.len())?;
         match reader.read_event() {
             Ok(Event::Start(ref e)) => {
-                if e.local_name().as_ref() == b"key" {
+                if e.local_name().as_ref() == "key" {
                     if let Some(key_name) = get_attr(e, "name") {
                         parse_key_block(
                             reader,
@@ -194,7 +194,7 @@ fn parse_key_block(
             Ok(Event::Start(ref e)) => {
                 let local = e.local_name();
                 match local.as_ref() {
-                    b"key" => {
+                    "key" => {
                         // On the first child <key>, this block is definitively a
                         // folder — register it before recursing so children can
                         // resolve their parent temp_id during persistence
@@ -228,23 +228,23 @@ fn parse_key_block(
                             ));
                         }
                     }
-                    b"string" => {
+                    "string" => {
                         let Some(attr_name) = get_attr(e, "name") else {
                             warnings.push(format!(
                                 "In \"{key_name}\": ignored <string> element without name attribute"
                             ));
-                            skip_through_end(reader, b"string")?;
+                            skip_through_end(reader, "string")?;
                             continue;
                         };
-                        let value = read_text(reader, b"string")?;
+                        let value = read_text(reader, "string")?;
                         props.set_string(&attr_name, &value);
                     }
-                    b"dword" => {
+                    "dword" => {
                         let Some(attr_name) = get_attr(e, "name") else {
-                            skip_through_end(reader, b"dword")?;
+                            skip_through_end(reader, "dword")?;
                             continue;
                         };
-                        let value = read_text(reader, b"dword")?;
+                        let value = read_text(reader, "dword")?;
                         props.set_dword(&attr_name, &value);
                     }
                     _ => {
@@ -254,7 +254,7 @@ fn parse_key_block(
             }
             Ok(Event::Empty(ref e)) => {
                 let local = e.local_name();
-                if local.as_ref() == b"string" {
+                if local.as_ref() == "string" {
                     if let Some(attr_name) = get_attr(e, "name") {
                         props.set_string(&attr_name, "");
                     } else {
@@ -264,7 +264,7 @@ fn parse_key_block(
                     }
                 }
             }
-            Ok(Event::End(ref e)) if e.local_name().as_ref() == b"key" => {
+            Ok(Event::End(ref e)) if e.local_name().as_ref() == "key" => {
                 break;
             }
             Ok(Event::Eof) => return Err("Unexpected end of XML".to_string()),
@@ -334,13 +334,13 @@ fn skip_dropped_key(
             Ok(Event::Start(ref e)) => {
                 let local = e.local_name();
                 match local.as_ref() {
-                    b"key" => {
+                    "key" => {
                         check_depth(depth + open.len())?;
                         open.push((get_attr(e, "name"), SessionProps::default()));
                     }
-                    b"dword" => {
+                    "dword" => {
                         let attr_name = get_attr(e, "name");
-                        let value = read_text(reader, b"dword")?;
+                        let value = read_text(reader, "dword")?;
                         if let (Some(attr_name), Some((_, props))) = (attr_name, open.last_mut()) {
                             props.set_dword(&attr_name, &value);
                         }
@@ -348,7 +348,7 @@ fn skip_dropped_key(
                     _ => skip_through_end(reader, local.as_ref())?,
                 }
             }
-            Ok(Event::End(ref e)) if e.local_name().as_ref() == b"key" => {
+            Ok(Event::End(ref e)) if e.local_name().as_ref() == "key" => {
                 if let Some((Some(name), props)) = open.pop() {
                     if props.is_session {
                         skipped.push(SkippedSession {
@@ -467,7 +467,7 @@ fn build_session(
 }
 
 /// Read text content until the matching end tag.
-fn read_text(reader: &mut Reader<&[u8]>, end_tag: &[u8]) -> Result<String, String> {
+fn read_text(reader: &mut Reader<&[u8]>, end_tag: &str) -> Result<String, String> {
     let mut text = String::new();
     loop {
         match reader.read_event() {
@@ -480,11 +480,7 @@ fn read_text(reader: &mut Reader<&[u8]>, end_tag: &[u8]) -> Result<String, Strin
                 // SecureCRT session text and never appear in real exports; using
                 // XML 1.0 rules matches what the file's own version declaration
                 // says it should be parsed under.
-                text.push_str(
-                    e.xml_content(quick_xml::XmlVersion::Implicit1_0)
-                        .map_err(|err| format!("Failed to decode text: {err}"))?
-                        .as_ref(),
-                );
+                text.push_str(&e.xml_content(quick_xml::XmlVersion::Implicit1_0));
             }
             Ok(Event::GeneralRef(ref e)) => {
                 // quick-xml reports `&amp;`, `&#38;` and the like as separate
@@ -493,16 +489,14 @@ fn read_text(reader: &mut Reader<&[u8]>, end_tag: &[u8]) -> Result<String, Strin
                 // DTD, so only character references and the five predefined
                 // entities are well-formed here. Anything else is kept
                 // verbatim rather than silently dropped.
-                let name = e
-                    .decode()
-                    .map_err(|err| format!("Failed to decode entity reference: {err}"))?;
+                let name: &str = e;
                 if let Ok(Some(ch)) = e.resolve_char_ref() {
                     text.push(ch);
-                } else if let Some(resolved) = quick_xml::escape::resolve_xml_entity(&name) {
+                } else if let Some(resolved) = quick_xml::escape::resolve_xml_entity(name) {
                     text.push_str(resolved);
                 } else {
                     text.push('&');
-                    text.push_str(&name);
+                    text.push_str(name);
                     text.push(';');
                 }
             }
@@ -521,7 +515,7 @@ fn read_text(reader: &mut Reader<&[u8]>, end_tag: &[u8]) -> Result<String, Strin
 
 /// Advance the reader through and past the matching end tag, consuming
 /// any nested elements with the same tag name along the way.
-fn skip_through_end(reader: &mut Reader<&[u8]>, tag: &[u8]) -> Result<(), String> {
+fn skip_through_end(reader: &mut Reader<&[u8]>, tag: &str) -> Result<(), String> {
     let mut depth = 1u32;
     loop {
         match reader.read_event() {
@@ -547,7 +541,7 @@ fn skip_through_end(reader: &mut Reader<&[u8]>, tag: &[u8]) -> Result<(), String
 /// Get an attribute value by name from a `BytesStart` element.
 fn get_attr(e: &quick_xml::events::BytesStart<'_>, name: &str) -> Option<String> {
     for attr in e.attributes().flatten() {
-        if attr.key.as_ref() == name.as_bytes() {
+        if attr.key.as_ref() == name {
             return attr
                 .normalized_value(quick_xml::XmlVersion::Implicit1_0)
                 .ok()

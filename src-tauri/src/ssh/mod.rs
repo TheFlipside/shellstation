@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use base64::Engine;
 use russh::client::KeyboardInteractiveAuthResponse;
-use russh::keys::{PrivateKeyWithHashAlg, PublicKey};
+use russh::keys::{PrivateKeyWithHashAlg, PublicKeyOrCertificate};
 use russh::{client, ChannelMsg, Disconnect};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
@@ -1014,6 +1014,10 @@ fn log_algorithm_proposal(pref: &russh::Preferred, legacy: bool) {
 /// Extend the defaults with secure algorithms that russh implements but
 /// excludes from `Preferred::DEFAULT`. Devices like Cisco IOS XE may only
 /// offer ecdh-sha2-nistp384 for kex or aes128-gcm for cipher.
+///
+/// No host certificates are asked for: they are trusted through a certificate
+/// authority, and the app has no list of those, so a server is always asked
+/// for a plain host key that known_hosts or the user can vouch for.
 fn base_preferred() -> russh::Preferred {
     use std::borrow::Cow;
     let base = russh::Preferred::DEFAULT;
@@ -1037,6 +1041,7 @@ fn base_preferred() -> russh::Preferred {
     russh::Preferred {
         kex: Cow::Owned(kex),
         cipher: Cow::Owned(cipher),
+        host_key_certificates: Cow::Borrowed(&[]),
         ..base
     }
 }
@@ -1089,6 +1094,7 @@ fn legacy_preferred() -> russh::Preferred {
         cipher: Cow::Owned(cipher),
         mac: Cow::Owned(mac),
         compression: base.compression.clone(),
+        host_key_certificates: base.host_key_certificates.clone(),
     }
 }
 
@@ -1904,8 +1910,25 @@ impl client::Handler for SshHandler {
 
     async fn check_server_key(
         &mut self,
-        server_public_key: &PublicKey,
+        server_key: &PublicKeyOrCertificate,
     ) -> Result<bool, Self::Error> {
+        // `base_preferred` asks for no host certificates, so russh never
+        // negotiates one; should one arrive anyway, it is refused rather than
+        // trusted for the plain key inside it.
+        let PublicKeyOrCertificate::PublicKey {
+            key: server_public_key,
+            ..
+        } = server_key
+        else {
+            warn!(
+                session_id = %self.session_id,
+                host = %self.host,
+                port = self.port,
+                "Server sent a host certificate that was not asked for — refused"
+            );
+            return Ok(false);
+        };
+
         let kh_path = match known_hosts_path() {
             Ok(p) => Some(p),
             Err(e) => {
@@ -2108,6 +2131,17 @@ mod tests {
             b"example.com ssh-ed25519 AAAA\n"
         );
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    // ── Algorithm preferences ────────────────────────────────────────────
+    // Offering a host certificate algorithm would let the server answer
+    // with a certificate, which `check_server_key` refuses: the connection
+    // would fail where a plain host key would have worked.
+
+    #[test]
+    fn no_host_certificates_are_asked_for() {
+        assert!(base_preferred().host_key_certificates.is_empty());
+        assert!(legacy_preferred().host_key_certificates.is_empty());
     }
 
     // ── is_restricted_ip ─────────────────────────────────────────────────
@@ -2438,7 +2472,7 @@ mod tests {
 
         fn check_server_key(
             &mut self,
-            _: &PublicKey,
+            _: &PublicKeyOrCertificate,
         ) -> impl std::future::Future<Output = Result<bool, Self::Error>> + Send {
             std::future::ready(Ok(true))
         }

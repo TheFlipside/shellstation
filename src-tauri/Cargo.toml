@@ -20,7 +20,7 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 tauri = { version = "2", features = ["image-png"] }
 tauri-plugin-opener = "2"
-base64 = "0.22"
+base64 = "0.23"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # russh pulls in the `rsa` crate which has an open advisory (RUSTSEC-2023-0071,
@@ -33,7 +33,7 @@ serde_json = "1"
 # toggle can negotiate with old network gear that only speaks 3DES. It is NOT
 # in russh's default cipher list and is only appended to `Preferred` when a
 # session explicitly opts in — see `legacy_preferred()` in src/ssh/mod.rs.
-russh = { version = "0.62", features = ["des"] }
+russh = { version = "0.65", features = ["des"] }
 # default-features disabled to exclude sqlx-mysql, which is unused and
 # otherwise pulls in the `rsa` crate (see RUSTSEC-2023-0071 above).
 #
@@ -62,11 +62,11 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing-appender = "0.2"
 async-trait = "0.1"
-dirs = "6"
+dirs = "7"
 sha2 = "0.11.0"
 zeroize = { version = "1", features = ["serde"] }
 tauri-plugin-dialog = "2.6.0"
-quick-xml = "0.41.0"
+quick-xml = "0.42.0"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 tauri-plugin-clipboard-manager = "2.3.2"
 tauri-plugin-updater = "2"
