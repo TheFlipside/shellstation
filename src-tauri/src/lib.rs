@@ -850,7 +850,15 @@ pub fn run() {
                 commands::close_all_sessions(webview.app_handle());
             }
         })
-        .plugin(tauri_plugin_opener::init())
+        // Only the Help menu opens URLs, from Rust, so the webview is given
+        // no opener permission (see `no_capability_grants_the_opener`). The
+        // link-click handler the plugin injects by default calls the opener
+        // from the webview, so it is left out.
+        .plugin(
+            tauri_plugin_opener::Builder::new()
+                .open_js_links_on_click(false)
+                .build(),
+        )
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
@@ -1279,6 +1287,27 @@ mod tests {
         assert_eq!(app_log_level("DEBUG"), "debug");
         assert_eq!(app_log_level("trace,sqlx=trace"), "info");
         assert_eq!(app_log_level(""), "info");
+    }
+
+    /// The opener's commands would let a compromised webview open any web
+    /// link in the browser or reveal any file in the file manager, and the
+    /// webview needs neither: the Help menu opens its links from Rust.
+    #[test]
+    fn no_capability_grants_the_opener() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("capabilities");
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            let capability: serde_json::Value =
+                serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+            for permission in capability["permissions"].as_array().unwrap() {
+                // Either the identifier alone, or an object with a scope.
+                let id = permission
+                    .as_str()
+                    .or_else(|| permission["identifier"].as_str())
+                    .unwrap();
+                assert!(!id.starts_with("opener:"), "{} grants {id}", path.display());
+            }
+        }
     }
 
     /// The rules for configured paths, which startup and saving the SQLite
