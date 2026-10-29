@@ -252,10 +252,9 @@ async function handOver(): Promise<void> {
   if (legacy === null) return;
   // The check is only ever carried over as "on". Switching it off takes the
   // user's confirmation, and off is the backend's default anyway, so
-  // nothing written to this key can weaken it. Switching it on asks
-  // nothing, so the dialog's language does not matter here.
+  // nothing written to this key can weaken it.
   if (legacy.restrictPrivateIps === true) {
-    await invoke("connection_set_restrict_private_ips", { enabled: true, language: "en" });
+    await invoke("connection_set_restrict_private_ips", { enabled: true });
   }
   const { keepaliveInterval, keepaliveMax } = legacy;
   // Older versions stored up to 3600 s but connected with at most 300 s, so
@@ -419,9 +418,10 @@ export const useSettingsStore = create<SettingsState>()(
         set({ confirmMultilinePaste: value });
       },
       setRestrictPrivateIps: async (value: boolean) => {
+        // Switching the check off opens a dialog the backend words in the
+        // operating system's language, not the UI's.
         const on = await invoke<boolean>("connection_set_restrict_private_ips", {
           enabled: value,
-          language: i18n.resolvedLanguage ?? "en",
         });
         set({ restrictPrivateIps: on });
       },

@@ -5,9 +5,10 @@
 //! them as arguments, so a compromised webview cannot pass its own values.
 //! It can still call the commands below, which is why switching the
 //! private-address check off asks the user first, in a native dialog that
-//! the backend opens and words itself: the webview can neither answer it
-//! nor choose what it says. Switching the check on, or changing a timeout
-//! within its limits, weakens nothing and needs no confirmation.
+//! the backend opens and words itself, in the operating system's language:
+//! the webview can neither answer it nor choose what it says, or in which
+//! language. Switching the check on, or changing a timeout within its
+//! limits, weakens nothing and needs no confirmation.
 //!
 //! The webview does choose when the dialog appears, for instance just as
 //! the user presses Enter in a terminal. The button that keeps the check on
@@ -134,7 +135,7 @@ fn update(
 /// dialog comes back as the last one: with only two buttons, the plugin
 /// would report Escape as a click on the second, so the second could not be
 /// `allow` and the safe button could not be the first.
-async fn confirm_allow_private(window: &Window, language: &str) -> Result<bool, String> {
+async fn confirm_allow_private(window: &Window) -> Result<bool, String> {
     let guard = PromptGuard::acquire()?;
     // Checked only once the guard is held: a decline is recorded before its
     // dialog lets go of the guard, so no request can slip in between.
@@ -151,7 +152,7 @@ async fn confirm_allow_private(window: &Window, language: &str) -> Result<bool, 
             wait.as_secs().max(1)
         ));
     }
-    let prompt = connection_prompt::for_language(language);
+    let prompt = connection_prompt::for_system_language();
     let (tx, rx) = tokio::sync::oneshot::channel();
     window
         .dialog()
@@ -224,19 +225,14 @@ pub async fn connection_save_config(
 
 /// Switch the private-address check on or off, and return whether it is on
 /// afterwards. Switching it off asks the user first, and is refused for a
-/// while after they said no; `language` is the UI language, which picks the
-/// dialog's wording and nothing else.
+/// while after they said no.
 #[tauri::command]
 pub async fn connection_set_restrict_private_ips(
     window: Window,
     state: State<'_, ConfigState>,
     enabled: bool,
-    language: String,
 ) -> Result<bool, String> {
-    if !enabled
-        && current(&state)?.restrict_private_ips
-        && !confirm_allow_private(&window, &language).await?
-    {
+    if !enabled && current(&state)?.restrict_private_ips && !confirm_allow_private(&window).await? {
         // Many refusals in one session suggest something keeps asking.
         tracing::info!(
             declines = declines().count,

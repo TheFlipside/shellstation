@@ -310,10 +310,9 @@ describe("connection settings", () => {
     backend.userAllowsOff = false;
     await useSettingsStore.getState().setRestrictPrivateIps(false);
     expect(useSettingsStore.getState().restrictPrivateIps).toBe(true);
-    // The UI language picks the dialog's wording.
-    expect(callsTo("connection_set_restrict_private_ips")).toEqual([
-      { enabled: false, language: "de" },
-    ]);
+    // The UI language ("de" in the i18n mock) is not sent: the backend words
+    // the dialog in the operating system's language.
+    expect(callsTo("connection_set_restrict_private_ips")).toStrictEqual([{ enabled: false }]);
 
     backend.userAllowsOff = true;
     await useSettingsStore.getState().setRestrictPrivateIps(false);
@@ -379,6 +378,8 @@ describe("connection settings", () => {
       expect(useSettingsStore.getState().themeMode).toBe("light");
 
       await startUp();
+      // Switching the check on opens no dialog, and sends no language either.
+      expect(callsTo("connection_set_restrict_private_ips")).toStrictEqual([{ enabled: true }]);
       expect(backend.connection).toEqual({
         restrict_private_ips: true,
         connect_timeout_secs: 30,

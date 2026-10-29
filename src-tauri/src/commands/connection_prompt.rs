@@ -2,8 +2,10 @@
 //! switched off, in every language the UI ships.
 //!
 //! The text lives in the backend rather than in the locale files, because
-//! the webview must not be able to choose what the dialog says. It only
-//! names a language; anything unknown gets English.
+//! the webview must not be able to choose what the dialog says. For the
+//! same reason the language is the operating system's rather than the UI's:
+//! the webview names the UI language, so it could pick one the user does
+//! not read. A system language without its own text here gets English.
 
 /// One language's dialog text. `keep` is the default button and leaves the
 /// check on, `allow` switches it off, and `cancel` is what closing the
@@ -198,14 +200,31 @@ static PROMPTS: [(&str, Prompt); 14] = [
     ),
 ];
 
-/// The prompt for a UI language such as `"de"`. A region (`"pt-BR"`) is
-/// ignored, and a language without its own text gets English.
-pub(super) fn for_language(language: &str) -> &'static Prompt {
+/// The prompt in the operating system's language: the first of the user's
+/// preferred languages that has one, or English. On Linux these come from
+/// `LANGUAGE`, `LC_ALL`, `LC_MESSAGES` and `LANG`, which the app inherits
+/// at launch and never changes, so the webview cannot set them either.
+pub(super) fn for_system_language() -> &'static Prompt {
+    for_languages(sys_locale::get_locales())
+}
+
+/// The prompt for the first of `languages` (most preferred first) that has
+/// one, or English.
+fn for_languages(languages: impl IntoIterator<Item = impl AsRef<str>>) -> &'static Prompt {
+    languages
+        .into_iter()
+        .find_map(|language| for_language(language.as_ref()))
+        .unwrap_or(&ENGLISH)
+}
+
+/// The prompt for a language such as `"de"`, if it has one. A region
+/// (`"pt-BR"`) is ignored.
+fn for_language(language: &str) -> Option<&'static Prompt> {
     let primary = language.split(['-', '_']).next().unwrap_or_default();
     PROMPTS
         .iter()
         .find(|(code, _)| code.eq_ignore_ascii_case(primary))
-        .map_or(&ENGLISH, |(_, prompt)| prompt)
+        .map(|(_, prompt)| prompt)
 }
 
 #[cfg(test)]
@@ -263,15 +282,27 @@ mod tests {
 
     #[test]
     fn language_lookup_ignores_region_and_case() {
-        assert_eq!(for_language("de").allow, "Nicht mehr blockieren");
-        assert_eq!(for_language("pt-BR").allow, "Deixar de bloquear");
-        assert_eq!(for_language("ZH_cn").allow, "不再阻止");
+        assert_eq!(for_languages(["de"]).allow, "Nicht mehr blockieren");
+        assert_eq!(for_languages(["pt-BR"]).allow, "Deixar de bloquear");
+        assert_eq!(for_languages(["ZH_cn"]).allow, "不再阻止");
+    }
+
+    #[test]
+    fn the_first_preferred_language_with_a_prompt_wins() {
+        assert_eq!(
+            for_languages(["cs-CZ", "de-DE", "fr-FR"]).allow,
+            "Nicht mehr blockieren"
+        );
+        // English has a prompt of its own, so it ends the search.
+        assert_eq!(for_languages(["en-US", "de-DE"]).allow, ENGLISH.allow);
     }
 
     #[test]
     fn unknown_language_gets_english() {
-        for language in ["", "xx", "-", "\u{202e}de"] {
-            assert_eq!(for_language(language).allow, ENGLISH.allow);
+        assert_eq!(for_languages([""; 0]).allow, ENGLISH.allow);
+        for language in ["", "xx", "-", "C", "\u{202e}de"] {
+            assert_eq!(for_languages([language]).allow, ENGLISH.allow);
         }
+        assert_eq!(for_languages(["xx", "C"]).allow, ENGLISH.allow);
     }
 }
