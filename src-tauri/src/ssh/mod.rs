@@ -1092,30 +1092,59 @@ fn legacy_preferred() -> russh::Preferred {
     }
 }
 
-/// Check whether an IP address belongs to a restricted (non-routable) range.
+/// Check whether an IP address belongs to a restricted (non-routable) range:
+/// one that reaches this machine or its local network rather than the
+/// internet.
 fn is_restricted_ip(addr: &IpAddr) -> bool {
     match addr {
-        IpAddr::V4(ip) => {
-            ip.is_loopback()                                     // 127.0.0.0/8
-                || ip.is_link_local()                            // 169.254.0.0/16
-                || ip.octets()[0] == 10                          // 10.0.0.0/8
-                || (ip.octets()[0] == 172
-                    && (16..=31).contains(&ip.octets()[1]))      // 172.16.0.0/12
-                || (ip.octets()[0] == 192 && ip.octets()[1] == 168) // 192.168.0.0/16
-                || ip.is_unspecified()                           // 0.0.0.0
-                || ip.is_broadcast()                             // 255.255.255.255
-                || *ip == Ipv4Addr::new(100, 64, 0, 0)          // shared address (100.64/10 start)
-                || (ip.octets()[0] == 100
-                    && (64..=127).contains(&ip.octets()[1])) // 100.64.0.0/10 (CGNAT)
+        IpAddr::V4(ip) => is_restricted_ipv4(*ip),
+        IpAddr::V6(ip) => is_restricted_ipv6(*ip),
+    }
+}
+
+fn is_restricted_ipv4(ip: Ipv4Addr) -> bool {
+    let [a, b, ..] = ip.octets();
+    ip.is_loopback() // 127.0.0.0/8
+        || ip.is_private() // 10/8, 172.16/12, 192.168/16
+        || ip.is_link_local() // 169.254.0.0/16
+        || ip.is_broadcast() // 255.255.255.255
+        || a == 0 // 0.0.0.0/8, "this network"
+        || (a == 100 && (64..=127).contains(&b)) // 100.64.0.0/10 (CGNAT)
+}
+
+/// Besides its own ranges, an IPv6 address is restricted when it stands for
+/// a restricted IPv4 address, or for one that only the local network can
+/// tell (the local-use NAT64 prefix). A NAT64 network-specific prefix looks
+/// like any other address and cannot be recognised here.
+fn is_restricted_ipv6(ip: Ipv6Addr) -> bool {
+    let first = ip.segments()[0];
+    ip.is_loopback() // ::1
+        || ip.is_unspecified() // ::
+        || first & 0xffc0 == 0xfe80 // fe80::/10, link-local
+        || first & 0xffc0 == 0xfec0 // fec0::/10, site-local (deprecated)
+        || first & 0xfe00 == 0xfc00 // fc00::/7, unique local
+        || matches!(ip.segments(), [0x64, 0xff9b, 1, ..]) // 64:ff9b:1::/48, local-use NAT64
+        || embedded_ipv4(ip).into_iter().flatten().any(is_restricted_ipv4)
+}
+
+/// The IPv4 addresses an IPv6 address carries, and which a connection to it
+/// may reach: the system connects to an IPv4-mapped, IPv4-translated or
+/// IPv4-compatible address over IPv4, a NAT64 gateway forwards to the
+/// address under its well-known prefix, and 6to4 and Teredo send IPv6
+/// inside IPv4 packets to the address they carry. Teredo carries two: its
+/// server's, and its client's with every bit inverted.
+fn embedded_ipv4(ip: Ipv6Addr) -> [Option<Ipv4Addr>; 2] {
+    let v4 = |hi: u16, lo: u16| Some(Ipv4Addr::from((u32::from(hi) << 16) | u32::from(lo)));
+    match ip.segments() {
+        [0, 0, 0, 0, 0, 0xffff | 0, hi, lo] // ::ffff:0:0/96 mapped, ::/96 compatible
+        | [0, 0, 0, 0, 0xffff, 0, hi, lo] // ::ffff:0:0:0/96 translated
+        | [0x64, 0xff9b, 0, 0, 0, 0, hi, lo] // 64:ff9b::/96, NAT64
+        | [0x2002, hi, lo, ..] => [v4(hi, lo), None], // 2002::/16, 6to4
+        // 2001::/32, Teredo
+        [0x2001, 0, server_hi, server_lo, _, _, client_hi, client_lo] => {
+            [v4(server_hi, server_lo), v4(!client_hi, !client_lo)]
         }
-        IpAddr::V6(ip) => {
-            ip.is_loopback()                                     // ::1
-                || ip.is_unspecified()                           // ::
-                || *ip == Ipv6Addr::new(0xfe80, 0, 0, 0, 0, 0, 0, 0) // simplified link-local check
-                || ip.segments()[0] == 0xfe80                    // fe80::/10
-                || ip.segments()[0] == 0xfc00                    // fc00::/7 (ULA)
-                || ip.segments()[0] == 0xfd00 // fd00::/8 (ULA)
-        }
+        _ => [None, None],
     }
 }
 
@@ -1955,6 +1984,7 @@ mod tests {
     fn restricted_ipv4_link_local_and_specials() {
         assert!(is_restricted_ip(&v4(169, 254, 0, 1)));
         assert!(is_restricted_ip(&v4(0, 0, 0, 0)));
+        assert!(is_restricted_ip(&v4(0, 255, 255, 255))); // all of 0.0.0.0/8
         assert!(is_restricted_ip(&v4(255, 255, 255, 255)));
     }
 
@@ -1970,6 +2000,7 @@ mod tests {
         // edge addresses just outside private blocks.
         assert!(!is_restricted_ip(&v4(8, 8, 8, 8)));
         assert!(!is_restricted_ip(&v4(1, 1, 1, 1)));
+        assert!(!is_restricted_ip(&v4(1, 0, 0, 0))); // just outside 0/8
         assert!(!is_restricted_ip(&v4(172, 15, 255, 254))); // just outside 172.16/12
         assert!(!is_restricted_ip(&v4(172, 32, 0, 1))); // just outside 172.16/12
         assert!(!is_restricted_ip(&v4(192, 167, 255, 254))); // just outside 192.168/16
@@ -1989,6 +2020,56 @@ mod tests {
         assert!(is_restricted_ip(&v6("fe80::1")));
         assert!(is_restricted_ip(&v6("fc00::1")));
         assert!(is_restricted_ip(&v6("fd00::1")));
+    }
+
+    #[test]
+    fn restricted_ipv6_ranges_are_matched_by_prefix() {
+        // The whole of each range, not just its first address.
+        assert!(is_restricted_ip(&v6("fe80:1234::1"))); // fe80::/10
+        assert!(is_restricted_ip(&v6("febf:ffff::1"))); // end of fe80::/10
+        assert!(is_restricted_ip(&v6("fec0::1"))); // fec0::/10
+        assert!(is_restricted_ip(&v6("feff:ffff::1"))); // end of fec0::/10
+        assert!(is_restricted_ip(&v6("fc12:3456::1"))); // fc00::/7
+        assert!(is_restricted_ip(&v6("fd12:3456::1"))); // fc00::/7
+        assert!(is_restricted_ip(&v6("fdff:ffff::1"))); // end of fc00::/7
+        assert!(is_restricted_ip(&v6("64:ff9b:1::808:808"))); // local-use NAT64
+
+        assert!(!is_restricted_ip(&v6("fbff:ffff::1"))); // just below fc00::/7
+        assert!(!is_restricted_ip(&v6("fe7f:ffff::1"))); // just below fe80::/10
+        assert!(!is_restricted_ip(&v6("64:ff9b:2::1"))); // just past 64:ff9b:1::/48
+    }
+
+    #[test]
+    fn restricted_ipv6_carrying_a_restricted_ipv4() {
+        assert!(is_restricted_ip(&v6("::ffff:10.0.0.1"))); // IPv4-mapped
+        assert!(is_restricted_ip(&v6("::ffff:127.0.0.1")));
+        assert!(is_restricted_ip(&v6("::ffff:192.168.1.1")));
+        assert!(is_restricted_ip(&v6("::ffff:0:172.16.0.1"))); // IPv4-translated
+        assert!(is_restricted_ip(&v6("::10.0.0.1"))); // IPv4-compatible
+        assert!(is_restricted_ip(&v6("::0.0.0.2"))); // IPv4-compatible, 0.0.0.0/8
+        assert!(is_restricted_ip(&v6("64:ff9b::10.0.0.1"))); // NAT64
+        assert!(is_restricted_ip(&v6("64:ff9b::100.64.0.1")));
+        assert!(is_restricted_ip(&v6("2002:a00:1::1"))); // 6to4 of 10.0.0.1
+        assert!(is_restricted_ip(&v6("2002:7f00:1::1"))); // 6to4 of 127.0.0.1
+                                                          // Teredo, client 10.0.0.1 (inverted: f5ff:fffe) behind a public server.
+        assert!(is_restricted_ip(&v6(
+            "2001:0:4136:e378:8000:63bf:f5ff:fffe"
+        )));
+        // Teredo, server 10.0.0.1 for a public client.
+        assert!(is_restricted_ip(&v6("2001:0:a00:1:8000:63bf:3fff:fdd2")));
+    }
+
+    #[test]
+    fn allowed_ipv6_carrying_a_public_ipv4() {
+        assert!(!is_restricted_ip(&v6("::ffff:8.8.8.8")));
+        assert!(!is_restricted_ip(&v6("::ffff:0:8.8.8.8")));
+        assert!(!is_restricted_ip(&v6("::8.8.8.8")));
+        assert!(!is_restricted_ip(&v6("64:ff9b::8.8.8.8")));
+        assert!(!is_restricted_ip(&v6("2002:808:808::1")));
+        // RFC 4380's example: server 65.54.227.120, client 192.0.2.45.
+        assert!(!is_restricted_ip(&v6(
+            "2001:0:4136:e378:8000:63bf:3fff:fdd2"
+        )));
     }
 
     #[test]
