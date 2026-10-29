@@ -1,3 +1,4 @@
+import { invoke } from "@tauri-apps/api/core";
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import i18n from "../i18n";
@@ -44,14 +45,15 @@ const MAX_BUTTON_COMMAND_LENGTH = 1024;
 const HEX_COLOR_RE = /^#[\da-f]{6}$/i;
 const UUID_RE = /^[\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12}$/i;
 
-// The connection settings reach the backend as Rust integers (u64 / u32).
-// A fraction or an oversized number fails IPC deserialization there, which
-// would break every connection attempt, so only whole numbers in range pass.
+// The connection settings are Rust integers (u64 / u32) in the backend's
+// config, which checks the same ranges (`ConnectionConfig` in
+// src-tauri/src/config.rs). Checking here first keeps a value the backend
+// would refuse from ever being sent, so only whole numbers in range pass.
 function isWholeNumberInRange(value: unknown, min: number, max: number): value is number {
   return typeof value === "number" && Number.isInteger(value) && value >= min && value <= max;
 }
 function isConnectTimeout(seconds: unknown): seconds is number {
-  return isWholeNumberInRange(seconds, 1, 3600);
+  return isWholeNumberInRange(seconds, 1, 300);
 }
 function isKeepaliveInterval(seconds: unknown): seconds is number {
   return isWholeNumberInRange(seconds, 0, 3600);
@@ -99,6 +101,11 @@ interface SettingsState {
   copyOnSelect: boolean;
   pasteOnRightClick: boolean;
   confirmMultilinePaste: boolean;
+  /**
+   * This and the other three connection settings are the backend's: the
+   * store only shows them (see `loadConnectionSettings`), and their setters
+   * change them in the backend.
+   */
   restrictPrivateIps: boolean;
   autoRefreshInterval: number;
   connectTimeout: number;
@@ -129,15 +136,148 @@ interface SettingsState {
   setCopyOnSelect: (value: boolean) => void;
   setPasteOnRightClick: (value: boolean) => void;
   setConfirmMultilinePaste: (value: boolean) => void;
-  setRestrictPrivateIps: (value: boolean) => void;
+  /**
+   * Switching the check off makes the backend ask in a native dialog; the
+   * store follows whatever the user chose there.
+   */
+  setRestrictPrivateIps: (value: boolean) => Promise<void>;
   setAutoRefreshInterval: (seconds: number) => void;
-  setConnectTimeout: (seconds: number) => void;
-  setKeepaliveInterval: (seconds: number) => void;
-  setKeepaliveMax: (count: number) => void;
+  setConnectTimeout: (seconds: number) => Promise<void>;
+  setKeepaliveInterval: (seconds: number) => Promise<void>;
+  setKeepaliveMax: (count: number) => Promise<void>;
   setSidebarWidth: (width: number) => void;
   setToastAutoDismiss: (value: boolean) => void;
   setToastDismissSeconds: (seconds: number) => void;
   setAutoCheckForUpdates: (value: boolean) => void;
+}
+
+/** The backend's `ConnectionConfig` (src-tauri/src/config.rs). */
+interface ConnectionConfig {
+  restrict_private_ips: boolean;
+  connect_timeout_secs: number;
+  keepalive_interval_secs: number;
+  keepalive_max: number;
+}
+
+/** Settings the backend keeps. The store shows them, but never persists them. */
+const BACKEND_SETTING_KEYS = [
+  "restrictPrivateIps",
+  "connectTimeout",
+  "keepaliveInterval",
+  "keepaliveMax",
+] as const satisfies readonly (keyof SettingsState)[];
+const BACKEND_SETTING_KEY_SET: ReadonlySet<string> = new Set(BACKEND_SETTING_KEYS);
+
+type PersistedSettings = Omit<SettingsState, (typeof BACKEND_SETTING_KEYS)[number]>;
+
+function withoutBackendSettings(state: SettingsState): PersistedSettings {
+  return Object.fromEntries(
+    Object.entries(state).filter(([key]) => !BACKEND_SETTING_KEY_SET.has(key)),
+  ) as PersistedSettings;
+}
+
+/** Change the given connection settings; a value left out keeps its setting. */
+function saveConnectionConfig(values: {
+  connectTimeoutSecs?: number | undefined;
+  keepaliveIntervalSecs?: number | undefined;
+  keepaliveMax?: number | undefined;
+}): Promise<ConnectionConfig> {
+  return invoke<ConnectionConfig>("connection_save_config", values);
+}
+
+/**
+ * Older versions kept the connection settings in localStorage. Migrating the
+ * persisted state parks them under this key until
+ * `handOverLegacyConnectionSettings` has given them to the backend, so a
+ * launch that fails to do that tries again on the next one.
+ */
+const LEGACY_CONNECTION_KEY = "shellstation-legacy-connection";
+
+/**
+ * The parked settings, also kept here for when localStorage refuses them:
+ * the migrated state no longer holds them, so they would otherwise be lost
+ * before this launch could hand them over.
+ */
+let parkedConnectionSettings: Record<string, unknown> | null = null;
+
+function stashLegacyConnectionSettings(state: Readonly<Record<string, unknown>>): void {
+  const legacy = Object.fromEntries(
+    Object.entries(state).filter(([key]) => BACKEND_SETTING_KEY_SET.has(key)),
+  );
+  if (Object.keys(legacy).length === 0) return;
+  parkedConnectionSettings = legacy;
+  try {
+    localStorage.setItem(LEGACY_CONNECTION_KEY, JSON.stringify(legacy));
+  } catch {
+    // No storage: this launch still hands over the copy above.
+  }
+}
+
+function readParkedConnectionSettings(): Record<string, unknown> | null {
+  let raw: string | null = null;
+  try {
+    raw = localStorage.getItem(LEGACY_CONNECTION_KEY);
+  } catch {
+    // No storage: fall back to the copy kept in memory.
+  }
+  if (raw === null) return parkedConnectionSettings;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    return typeof parsed === "object" && parsed !== null ? (parsed as Record<string, unknown>) : {};
+  } catch {
+    // Unreadable: there is nothing to hand over.
+    return {};
+  }
+}
+
+let handOverInFlight: Promise<void> | null = null;
+
+/**
+ * Give the backend the connection settings an older version left in
+ * localStorage, if any. Call once at startup, before
+ * `loadConnectionSettings`. If it fails, an older "on" for the private-address
+ * check has not reached the backend yet, so the caller should say so; it is
+ * tried again on the next launch.
+ */
+export function handOverLegacyConnectionSettings(): Promise<void> {
+  // React's StrictMode runs the startup effect twice in development.
+  handOverInFlight ??= handOver().finally(() => {
+    handOverInFlight = null;
+  });
+  return handOverInFlight;
+}
+
+async function handOver(): Promise<void> {
+  const legacy = readParkedConnectionSettings();
+  if (legacy === null) return;
+  // The check is only ever carried over as "on". Switching it off takes the
+  // user's confirmation, and off is the backend's default anyway, so
+  // nothing written to this key can weaken it. Switching it on asks
+  // nothing, so the dialog's language does not matter here.
+  if (legacy.restrictPrivateIps === true) {
+    await invoke("connection_set_restrict_private_ips", { enabled: true, language: "en" });
+  }
+  const { keepaliveInterval, keepaliveMax } = legacy;
+  // Older versions stored up to 3600 s but connected with at most 300 s, so
+  // a longer timeout carries over as the 300 s it already was.
+  const connectTimeout =
+    typeof legacy.connectTimeout === "number" && legacy.connectTimeout <= 3600
+      ? Math.min(legacy.connectTimeout, 300)
+      : legacy.connectTimeout;
+  const values = {
+    connectTimeoutSecs: isConnectTimeout(connectTimeout) ? connectTimeout : undefined,
+    keepaliveIntervalSecs: isKeepaliveInterval(keepaliveInterval) ? keepaliveInterval : undefined,
+    keepaliveMax: isKeepaliveMax(keepaliveMax) ? keepaliveMax : undefined,
+  };
+  if (Object.values(values).some((value) => value !== undefined)) {
+    await saveConnectionConfig(values);
+  }
+  parkedConnectionSettings = null;
+  try {
+    localStorage.removeItem(LEGACY_CONNECTION_KEY);
+  } catch {
+    // No storage: there is no key to remove.
+  }
 }
 
 export const useSettingsStore = create<SettingsState>()(
@@ -278,8 +418,12 @@ export const useSettingsStore = create<SettingsState>()(
       setConfirmMultilinePaste: (value: boolean) => {
         set({ confirmMultilinePaste: value });
       },
-      setRestrictPrivateIps: (value: boolean) => {
-        set({ restrictPrivateIps: value });
+      setRestrictPrivateIps: async (value: boolean) => {
+        const on = await invoke<boolean>("connection_set_restrict_private_ips", {
+          enabled: value,
+          language: i18n.resolvedLanguage ?? "en",
+        });
+        set({ restrictPrivateIps: on });
       },
       setAutoRefreshInterval: (seconds: number) => {
         // 0 disables polling; any active interval must be >= 5s to prevent
@@ -289,20 +433,22 @@ export const useSettingsStore = create<SettingsState>()(
           set({ autoRefreshInterval: seconds });
         }
       },
-      setConnectTimeout: (seconds: number) => {
-        if (isConnectTimeout(seconds)) {
-          set({ connectTimeout: seconds });
-        }
+      // Each sends only its own value, so two changes in flight at once
+      // cannot overwrite each other with a stale copy.
+      setConnectTimeout: async (seconds: number) => {
+        if (!isConnectTimeout(seconds)) return;
+        const saved = await saveConnectionConfig({ connectTimeoutSecs: seconds });
+        set({ connectTimeout: saved.connect_timeout_secs });
       },
-      setKeepaliveInterval: (seconds: number) => {
-        if (isKeepaliveInterval(seconds)) {
-          set({ keepaliveInterval: seconds });
-        }
+      setKeepaliveInterval: async (seconds: number) => {
+        if (!isKeepaliveInterval(seconds)) return;
+        const saved = await saveConnectionConfig({ keepaliveIntervalSecs: seconds });
+        set({ keepaliveInterval: saved.keepalive_interval_secs });
       },
-      setKeepaliveMax: (count: number) => {
-        if (isKeepaliveMax(count)) {
-          set({ keepaliveMax: count });
-        }
+      setKeepaliveMax: async (count: number) => {
+        if (!isKeepaliveMax(count)) return;
+        const saved = await saveConnectionConfig({ keepaliveMax: count });
+        set({ keepaliveMax: saved.keepalive_max });
       },
       setSidebarWidth: (width: number) => {
         if (Number.isFinite(width) && width >= 160 && width <= 600) {
@@ -323,6 +469,22 @@ export const useSettingsStore = create<SettingsState>()(
     }),
     {
       name: "shellstation-settings",
+      // Version 1 moved the connection settings to the backend.
+      version: 1,
+      partialize: withoutBackendSettings,
+      // Never read them back either, even from storage that holds them.
+      merge: (persisted, current) => ({
+        ...current,
+        ...(typeof persisted === "object" && persisted !== null
+          ? withoutBackendSettings(persisted as SettingsState)
+          : {}),
+      }),
+      migrate: (persisted, version) => {
+        const state: Record<string, unknown> =
+          typeof persisted === "object" && persisted !== null ? { ...persisted } : {};
+        if (version < 1) stashLegacyConnectionSettings(state);
+        return withoutBackendSettings(state as unknown as SettingsState);
+      },
       onRehydrateStorage: () => {
         return (state?: SettingsState) => {
           if (!state) return;
@@ -335,16 +497,6 @@ export const useSettingsStore = create<SettingsState>()(
             } else {
               state.language = "";
             }
-          }
-          // Sanitize persisted connection values against corrupted storage.
-          if (!isConnectTimeout(state.connectTimeout)) {
-            state.connectTimeout = 10;
-          }
-          if (!isKeepaliveInterval(state.keepaliveInterval)) {
-            state.keepaliveInterval = 15;
-          }
-          if (!isKeepaliveMax(state.keepaliveMax)) {
-            state.keepaliveMax = 3;
           }
           // Clamp uiScale to the supported range (75-125). 150% used to be
           // selectable but was dropped because dnd-kit overlay positioning
@@ -427,6 +579,17 @@ export const useSettingsStore = create<SettingsState>()(
   ),
 );
 
+/** Fill the store with the backend's connection settings. */
+export async function loadConnectionSettings(): Promise<void> {
+  const config = await invoke<ConnectionConfig>("connection_get_config");
+  useSettingsStore.setState({
+    restrictPrivateIps: config.restrict_private_ips,
+    connectTimeout: config.connect_timeout_secs,
+    keepaliveInterval: config.keepalive_interval_secs,
+    keepaliveMax: config.keepalive_max,
+  });
+}
+
 // ── Data export / import ─────────────────────────────────────────────────
 
 /** The persisted values of SettingsState, without its actions. */
@@ -439,17 +602,19 @@ type SettingsData = {
 /** Settings carried by a data export. Command buttons are a section of their own. */
 export type ExportableSettingKey = Exclude<keyof SettingsData, "commandButtons">;
 
-type SettingImporter = (state: SettingsState, value: unknown) => void;
+/** What an importer applies a value with: a setter, which may be async. */
+type ApplySetting<T> = (state: SettingsState, value: T) => void | Promise<void>;
+type SettingImporter = (state: SettingsState, value: unknown) => Promise<void>;
 
-function importBoolean(apply: (state: SettingsState, value: boolean) => void): SettingImporter {
-  return (state, value) => {
-    if (typeof value === "boolean") apply(state, value);
+function importBoolean(apply: ApplySetting<boolean>): SettingImporter {
+  return async (state, value) => {
+    if (typeof value === "boolean") await apply(state, value);
   };
 }
 
-function importNumber(apply: (state: SettingsState, value: number) => void): SettingImporter {
-  return (state, value) => {
-    if (typeof value === "number" && Number.isFinite(value)) apply(state, value);
+function importNumber(apply: ApplySetting<number>): SettingImporter {
+  return async (state, value) => {
+    if (typeof value === "number" && Number.isFinite(value)) await apply(state, value);
   };
 }
 
@@ -458,21 +623,21 @@ function importNumber(apply: (state: SettingsState, value: number) => void): Set
  * never off, so importing a file from someone else cannot quietly weaken
  * this machine. Turning one off stays a deliberate change in Settings.
  */
-function importEnableOnly(apply: (state: SettingsState) => void): SettingImporter {
-  return (state, value) => {
-    if (value === true) apply(state);
+function importEnableOnly(apply: (state: SettingsState) => void | Promise<void>): SettingImporter {
+  return async (state, value) => {
+    if (value === true) await apply(state);
   };
 }
 
-function importString(apply: (state: SettingsState, value: string) => void): SettingImporter {
-  return (state, value) => {
-    if (typeof value === "string") apply(state, value);
+function importString(apply: ApplySetting<string>): SettingImporter {
+  return async (state, value) => {
+    if (typeof value === "string") await apply(state, value);
   };
 }
 
-function importColor(apply: (state: SettingsState, value: string | null) => void): SettingImporter {
-  return (state, value) => {
-    if (value === null || typeof value === "string") apply(state, value);
+function importColor(apply: ApplySetting<string | null>): SettingImporter {
+  return async (state, value) => {
+    if (value === null || typeof value === "string") await apply(state, value);
   };
 }
 
@@ -531,21 +696,13 @@ const SETTING_IMPORTERS: Readonly<Record<ExportableSettingKey, SettingImporter>>
   confirmMultilinePaste: importEnableOnly((s) => {
     s.setConfirmMultilinePaste(true);
   }),
-  restrictPrivateIps: importEnableOnly((s) => {
-    s.setRestrictPrivateIps(true);
-  }),
+  restrictPrivateIps: importEnableOnly((s) => s.setRestrictPrivateIps(true)),
   autoRefreshInterval: importNumber((s, v) => {
     s.setAutoRefreshInterval(v);
   }),
-  connectTimeout: importNumber((s, v) => {
-    s.setConnectTimeout(v);
-  }),
-  keepaliveInterval: importNumber((s, v) => {
-    s.setKeepaliveInterval(v);
-  }),
-  keepaliveMax: importNumber((s, v) => {
-    s.setKeepaliveMax(v);
-  }),
+  connectTimeout: importNumber((s, v) => s.setConnectTimeout(v)),
+  keepaliveInterval: importNumber((s, v) => s.setKeepaliveInterval(v)),
+  keepaliveMax: importNumber((s, v) => s.setKeepaliveMax(v)),
   sidebarWidth: importNumber((s, v) => {
     s.setSidebarWidth(v);
   }),
@@ -573,14 +730,20 @@ export function getExportableSettings(): Record<ExportableSettingKey, unknown> {
 /**
  * Apply settings read from an export file. Keys this version does not know
  * and values its setters reject are ignored, leaving the current value.
+ * Every setting is tried; if the backend fails one of its own, the first
+ * such error is thrown once the rest are done.
  */
-export function importSettings(raw: Readonly<Record<string, unknown>>): void {
+export async function importSettings(raw: Readonly<Record<string, unknown>>): Promise<void> {
   // Only the setters are used from this snapshot; each one updates the
   // live store itself.
   const state = useSettingsStore.getState();
-  for (const key of EXPORTABLE_SETTING_KEYS) {
-    if (Object.prototype.hasOwnProperty.call(raw, key)) SETTING_IMPORTERS[key](state, raw[key]);
-  }
+  const applied = EXPORTABLE_SETTING_KEYS.filter((key) =>
+    Object.prototype.hasOwnProperty.call(raw, key),
+  ).map((key) => SETTING_IMPORTERS[key](state, raw[key]));
+  const failed = (await Promise.allSettled(applied)).find(
+    (result): result is PromiseRejectedResult => result.status === "rejected",
+  );
+  if (failed) throw failed.reason;
 }
 
 /** The current command buttons as they go into an export file. */

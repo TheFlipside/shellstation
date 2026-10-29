@@ -1,7 +1,6 @@
 import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
 import { useAppStore } from "./appStore";
-import { useSettingsStore } from "./settingsStore";
 import { useTerminalStore, type TabMeta } from "./terminalStore";
 
 export interface Folder {
@@ -426,17 +425,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     const session = get().sessions.find((s) => s.id === id);
     if (!session) return;
 
-    const { restrictPrivateIps, connectTimeout, keepaliveInterval, keepaliveMax } =
-      useSettingsStore.getState();
-    const connId = await invoke<string>("session_connect", {
-      id,
-      cols: 80,
-      rows: 24,
-      restrictPrivateIps,
-      connectTimeout,
-      keepaliveInterval,
-      keepaliveMax,
-    });
+    // The connection settings are read by the backend itself.
+    const connId = await invoke<string>("session_connect", { id, cols: 80, rows: 24 });
 
     const { type, meta } = sessionTabKind(session);
     useTerminalStore.getState().addTab(connId, session.name, type, meta, session.id);

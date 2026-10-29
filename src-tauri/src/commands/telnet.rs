@@ -1,12 +1,13 @@
 use tauri::{AppHandle, State};
 use uuid::Uuid;
 
+use crate::config::ConfigState;
 use crate::session_logger::SessionLogState;
 use crate::telnet::{establish_telnet_connection, TelnetConnectParams, TelnetState};
 
 use super::{
-    release_session, validate_dimensions, ConnectSetup, TerminalReadyState,
-    MAX_CONNECT_TIMEOUT_SECS, MAX_WRITE_SIZE,
+    connection, release_session, validate_dimensions, ConnectSetup, TerminalReadyState,
+    MAX_WRITE_SIZE,
 };
 
 /// Connect to a remote host via Telnet. Returns the session `ID`.
@@ -17,15 +18,15 @@ pub async fn telnet_connect(
     state: State<'_, TelnetState>,
     ready_state: State<'_, TerminalReadyState>,
     logger_state: State<'_, SessionLogState>,
+    config: State<'_, ConfigState>,
     host: String,
     port: u16,
     cols: u16,
     rows: u16,
-    restrict_private_ips: Option<bool>,
-    connect_timeout: Option<u64>,
 ) -> Result<String, String> {
     let page_load = ready_state.page_load();
     validate_dimensions(cols, rows)?;
+    let settings = connection::current(&config)?;
     let id = Uuid::new_v4().to_string();
 
     // Brief lock: check capacity only.
@@ -58,8 +59,8 @@ pub async fn telnet_connect(
         cols,
         rows,
         app_handle,
-        restrict_private_ips: restrict_private_ips.unwrap_or(false),
-        connect_timeout_secs: connect_timeout.unwrap_or(10).min(MAX_CONNECT_TIMEOUT_SECS),
+        restrict_private_ips: settings.restrict_private_ips,
+        connect_timeout_secs: settings.connect_timeout_secs,
         logger,
         ready_rx,
         login_sequence: None,

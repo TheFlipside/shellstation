@@ -333,15 +333,6 @@ pub async fn db_save_config(
     let ssl = ssl_mode.unwrap_or_else(|| "prefer".to_string());
     PostgresConfig::validate_ssl_mode(&ssl)?;
 
-    // Preserve existing logging configs when saving DB settings.
-    let (existing_logging, existing_app_logging) = {
-        let cfg = state
-            .config
-            .lock()
-            .map_err(|e| format!("Config lock poisoned: {e}"))?;
-        (cfg.logging.clone(), cfg.app_logging.clone())
-    };
-
     // Store the PostgreSQL password in the OS keychain, not in config.json.
     // An empty password from the frontend means "keep the existing keychain
     // entry" — the settings UI does not display the stored password, so a
@@ -395,14 +386,14 @@ pub async fn db_save_config(
         password
     };
 
-    // Preserve user_ident across config saves.
-    let existing_user_ident = state
+    // Everything but the database settings is kept as it is. It is read
+    // under the lock that also writes the file, so a change made while this
+    // command ran (such as switching the private-address check on) is kept
+    // rather than undone.
+    let mut config = state
         .config
         .lock()
-        .map_err(|e| format!("Config lock poisoned: {e}"))?
-        .user_ident
-        .clone();
-
+        .map_err(|e| format!("Config lock poisoned: {e}"))?;
     let new_config = AppConfig {
         db_backend,
         sqlite_path,
@@ -414,17 +405,13 @@ pub async fn db_save_config(
             password: resolved_password,
             ssl_mode: ssl,
         },
-        logging: existing_logging,
-        app_logging: existing_app_logging,
-        user_ident: existing_user_ident,
+        logging: config.logging.clone(),
+        app_logging: config.app_logging.clone(),
+        user_ident: config.user_ident.clone(),
+        connection: config.connection.clone(),
     };
 
     config::save_config(&state.config_path, &new_config)?;
-
-    let mut config = state
-        .config
-        .lock()
-        .map_err(|e| format!("Config lock poisoned: {e}"))?;
     *config = new_config;
 
     Ok(())

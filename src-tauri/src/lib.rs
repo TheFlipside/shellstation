@@ -1248,6 +1248,10 @@ pub fn run() {
             // Application logging
             commands::app_logging_get_config,
             commands::app_logging_save_config,
+            // Connection settings
+            commands::connection_get_config,
+            commands::connection_save_config,
+            commands::connection_set_restrict_private_ips,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

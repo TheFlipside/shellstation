@@ -1,3 +1,5 @@
+mod connection;
+mod connection_prompt;
 mod credential_profile;
 mod data_transfer;
 mod database;
@@ -11,6 +13,7 @@ mod session_login_sequences;
 mod ssh;
 mod telnet;
 
+pub use connection::*;
 pub use credential_profile::*;
 pub use data_transfer::*;
 pub use database::*;
@@ -252,12 +255,6 @@ pub fn close_all_sessions(app: &tauri::AppHandle) {
         }
     });
 }
-
-/// Upper limits for the connection settings the webview passes to the
-/// connect commands.
-const MAX_CONNECT_TIMEOUT_SECS: u64 = 300;
-const MAX_KEEPALIVE_INTERVAL_SECS: u64 = 3600;
-const MAX_KEEPALIVE_MAX: u32 = 100;
 
 /// Maximum terminal dimensions to prevent resource exhaustion.
 const MAX_COLS: u16 = 500;

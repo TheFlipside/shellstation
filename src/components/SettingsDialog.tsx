@@ -6,7 +6,11 @@ import { open, save } from "@tauri-apps/plugin-dialog";
 import { DialogKeys } from "./DialogKeys";
 import { useAppStore } from "../stores/appStore";
 import { useSessionStore } from "../stores/sessionStore";
-import { useSettingsStore, ALLOWED_TERMINAL_FONTS } from "../stores/settingsStore";
+import {
+  useSettingsStore,
+  ALLOWED_TERMINAL_FONTS,
+  loadConnectionSettings,
+} from "../stores/settingsStore";
 import { XTERM_THEMES, resolveTerminalTheme } from "../terminalTheme";
 import { pickFile } from "../pickFile";
 import { useTheme } from "../hooks/useTheme";
@@ -39,6 +43,11 @@ import {
 
 // eslint-disable-next-line @typescript-eslint/no-empty-function
 const noop = (): void => {};
+
+/** A setting the backend keeps could not be loaded from it or saved there. */
+function reportBackendError(err: unknown): void {
+  useToastStore.getState().addToast(String(err), "error");
+}
 
 const AVAILABLE_LANGUAGES = [
   { code: "en", label: "English" },
@@ -328,6 +337,16 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
       .catch(() => {
         // Config load failed — keep defaults
       });
+  }, []);
+
+  // The connection settings are the backend's; show what it holds now. Until
+  // it has answered, the private-address box stays disabled, so it never
+  // shows a default as if it were the real state. A failure is shown too.
+  const [connectionLoaded, setConnectionLoaded] = useState(false);
+  useEffect(() => {
+    loadConnectionSettings().then(() => {
+      setConnectionLoaded(true);
+    }, reportBackendError);
   }, []);
 
   // Load logging config from backend on mount
@@ -793,7 +812,7 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
             id="settings-connect-timeout"
             value={String(connectTimeout)}
             onChange={(v) => {
-              setConnectTimeout(Number(v));
+              setConnectTimeout(Number(v)).catch(reportBackendError);
             }}
             options={[
               { value: "5", label: "5s" },
@@ -817,7 +836,7 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
             id="settings-keepalive-interval"
             value={String(keepaliveInterval)}
             onChange={(v) => {
-              setKeepaliveInterval(Number(v));
+              setKeepaliveInterval(Number(v)).catch(reportBackendError);
             }}
             options={[
               { value: "0", label: t("settings.keepaliveOff") },
@@ -840,7 +859,7 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
               id="settings-keepalive-max"
               value={String(keepaliveMax)}
               onChange={(v) => {
-                setKeepaliveMax(Number(v));
+                setKeepaliveMax(Number(v)).catch(reportBackendError);
               }}
               options={[
                 { value: "1", label: "1" },
@@ -1029,8 +1048,10 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
             type="checkbox"
             id="settings-restrict-private-ips"
             checked={restrictPrivateIps}
+            disabled={!connectionLoaded}
             onChange={(e) => {
-              setRestrictPrivateIps(e.target.checked);
+              // Unticking makes the backend ask first; the box follows the answer.
+              setRestrictPrivateIps(e.target.checked).catch(reportBackendError);
             }}
           />
           <label htmlFor="settings-restrict-private-ips">

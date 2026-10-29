@@ -13,8 +13,13 @@ import { UpdateDialog } from "./components/UpdateDialog";
 import { UserIdentDialog } from "./components/UserIdentDialog";
 import { useTheme } from "./hooks/useTheme";
 import { useAppStore } from "./stores/appStore";
-import { useSettingsStore } from "./stores/settingsStore";
+import {
+  handOverLegacyConnectionSettings,
+  loadConnectionSettings,
+  useSettingsStore,
+} from "./stores/settingsStore";
 import { useTerminalStore } from "./stores/terminalStore";
+import { useToastStore } from "./stores/toastStore";
 
 interface DbStatus {
   backend: string;
@@ -33,6 +38,19 @@ function App(): React.JSX.Element {
   const [dbStatus, setDbStatus] = useState<DbStatus | null>(null);
   const [showSettingsFromBanner, setShowSettingsFromBanner] = useState(false);
   const dragging = useRef(false);
+
+  // The connection settings live in the backend. Hand over any that an older
+  // version kept in localStorage, then show the backend's. Either failure is
+  // shown: the first may mean the private-address check is not on yet.
+  useEffect(() => {
+    const reportError = (err: unknown): void => {
+      useToastStore.getState().addToast(String(err), "error");
+    };
+    void handOverLegacyConnectionSettings()
+      .catch(reportError)
+      .then(loadConnectionSettings)
+      .catch(reportError);
+  }, []);
 
   // Check DB status on mount and populate app store
   useEffect(() => {

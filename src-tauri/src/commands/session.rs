@@ -16,8 +16,8 @@ use crate::ssh::{establish_ssh_connection, SshConnectParams, SshState};
 use crate::telnet::{establish_telnet_connection, TelnetConnectParams, TelnetState};
 
 use super::{
-    validate_dimensions, validate_port, validate_session_fields, ConnectSetup, TerminalReadyState,
-    MAX_CONNECT_TIMEOUT_SECS, MAX_JUMP_HOPS, MAX_KEEPALIVE_INTERVAL_SECS, MAX_KEEPALIVE_MAX,
+    connection, validate_dimensions, validate_port, validate_session_fields, ConnectSetup,
+    TerminalReadyState, MAX_JUMP_HOPS,
 };
 
 // ── Folder commands ──────────────────────────────────────────────────
@@ -591,10 +591,6 @@ pub async fn session_connect(
     id: String,
     cols: u16,
     rows: u16,
-    restrict_private_ips: Option<bool>,
-    connect_timeout: Option<u64>,
-    keepalive_interval: Option<u64>,
-    keepalive_max: Option<u32>,
 ) -> Result<String, String> {
     let page_load = ready_state.page_load();
     validate_dimensions(cols, rows)?;
@@ -605,12 +601,7 @@ pub async fn session_connect(
             .await?
             .ok_or_else(|| format!("Session {id} not found"))?;
 
-    let restrict = restrict_private_ips.unwrap_or(false);
-    let timeout_secs = connect_timeout.unwrap_or(10).min(MAX_CONNECT_TIMEOUT_SECS);
-    let keepalive_secs = keepalive_interval
-        .unwrap_or(15)
-        .min(MAX_KEEPALIVE_INTERVAL_SECS);
-    let keepalive_missed = keepalive_max.unwrap_or(3).min(MAX_KEEPALIVE_MAX) as usize;
+    let settings = connection::current(&config)?;
 
     // Resolve login sequence (applies to both SSH and Telnet).
     let user_ident_for_ls = pg.0.as_ref().and_then(|_| {
@@ -677,8 +668,8 @@ pub async fn session_connect(
             cols,
             rows,
             app_handle,
-            restrict_private_ips: restrict,
-            connect_timeout_secs: timeout_secs,
+            restrict_private_ips: settings.restrict_private_ips,
+            connect_timeout_secs: settings.connect_timeout_secs,
             logger,
             ready_rx,
             login_sequence: telnet_login_seq,
@@ -804,10 +795,10 @@ pub async fn session_connect(
             app_handle,
             jump_hops,
             legacy_algorithms: session.legacy_algorithms,
-            restrict_private_ips: restrict,
-            connect_timeout_secs: timeout_secs,
-            keepalive_interval_secs: keepalive_secs,
-            keepalive_max: keepalive_missed,
+            restrict_private_ips: settings.restrict_private_ips,
+            connect_timeout_secs: settings.connect_timeout_secs,
+            keepalive_interval_secs: settings.keepalive_interval_secs,
+            keepalive_max: settings.keepalive_max as usize,
             logger,
             kbd_interactive_senders: std::sync::Arc::clone(&ssh.kbd_interactive_senders),
             ready_rx,

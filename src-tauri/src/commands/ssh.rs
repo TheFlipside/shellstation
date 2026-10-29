@@ -2,13 +2,13 @@ use tauri::{AppHandle, State};
 use uuid::Uuid;
 use zeroize::Zeroizing;
 
+use crate::config::ConfigState;
 use crate::session_logger::SessionLogState;
 use crate::ssh::{establish_ssh_connection, JumpHop, SshConnectParams, SshState};
 
 use super::{
-    release_session, validate_dimensions, ConnectSetup, TerminalReadyState,
-    MAX_CONNECT_TIMEOUT_SECS, MAX_JUMP_HOPS, MAX_KEEPALIVE_INTERVAL_SECS, MAX_KEEPALIVE_MAX,
-    MAX_WRITE_SIZE,
+    connection, release_session, validate_dimensions, ConnectSetup, TerminalReadyState,
+    MAX_JUMP_HOPS, MAX_WRITE_SIZE,
 };
 
 /// Connect to a remote host via SSH. Returns the session `ID`.
@@ -19,6 +19,7 @@ pub async fn ssh_connect(
     state: State<'_, SshState>,
     ready_state: State<'_, TerminalReadyState>,
     logger_state: State<'_, SessionLogState>,
+    config: State<'_, ConfigState>,
     host: String,
     port: u16,
     username: String,
@@ -27,13 +28,10 @@ pub async fn ssh_connect(
     cols: u16,
     rows: u16,
     jump_hops: Option<Vec<JumpHop>>,
-    restrict_private_ips: Option<bool>,
-    connect_timeout: Option<u64>,
-    keepalive_interval: Option<u64>,
-    keepalive_max: Option<u32>,
 ) -> Result<String, String> {
     let page_load = ready_state.page_load();
     validate_dimensions(cols, rows)?;
+    let settings = connection::current(&config)?;
     let hops = jump_hops.unwrap_or_default();
     if hops.len() > MAX_JUMP_HOPS {
         return Err(format!("Too many jump hops (max {MAX_JUMP_HOPS})"));
@@ -76,12 +74,10 @@ pub async fn ssh_connect(
             app_handle,
             jump_hops: hops,
             legacy_algorithms: false,
-            restrict_private_ips: restrict_private_ips.unwrap_or(false),
-            connect_timeout_secs: connect_timeout.unwrap_or(10).min(MAX_CONNECT_TIMEOUT_SECS),
-            keepalive_interval_secs: keepalive_interval
-                .unwrap_or(15)
-                .min(MAX_KEEPALIVE_INTERVAL_SECS),
-            keepalive_max: keepalive_max.unwrap_or(3).min(MAX_KEEPALIVE_MAX) as usize,
+            restrict_private_ips: settings.restrict_private_ips,
+            connect_timeout_secs: settings.connect_timeout_secs,
+            keepalive_interval_secs: settings.keepalive_interval_secs,
+            keepalive_max: settings.keepalive_max as usize,
             logger,
             kbd_interactive_senders: std::sync::Arc::clone(&state.kbd_interactive_senders),
             ready_rx,

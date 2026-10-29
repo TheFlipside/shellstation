@@ -165,15 +165,7 @@ export function TerminalTabs({ uiScale }: TerminalTabsProps): React.JSX.Element 
     },
     [getTabIndexAtX, reorderTabs],
   );
-  const {
-    closeOnDisconnect,
-    openLocalOnStartup,
-    restrictPrivateIps,
-    confirmOnCloseTab,
-    connectTimeout,
-    keepaliveInterval,
-    keepaliveMax,
-  } = useSettingsStore();
+  const { closeOnDisconnect, openLocalOnStartup, confirmOnCloseTab } = useSettingsStore();
   const [showQuickConnect, setShowQuickConnect] = useState(false);
   const [tabCtx, setTabCtx] = useState<{ x: number; y: number; tabId: string } | null>(null);
   const [confirmClose, setConfirmClose] = useState<{
@@ -203,8 +195,6 @@ export function TerminalTabs({ uiScale }: TerminalTabsProps): React.JSX.Element 
             port: params.port,
             cols: 80,
             rows: 24,
-            restrictPrivateIps: restrictPrivateIps,
-            connectTimeout: connectTimeout,
           });
           addTab(id, `${params.host}:${String(params.port)}`, "telnet", {
             host: params.host,
@@ -219,10 +209,6 @@ export function TerminalTabs({ uiScale }: TerminalTabsProps): React.JSX.Element 
             authCredential: params.authCredential,
             cols: 80,
             rows: 24,
-            restrictPrivateIps: restrictPrivateIps,
-            connectTimeout: connectTimeout,
-            keepaliveInterval: keepaliveInterval,
-            keepaliveMax: keepaliveMax,
           });
           addTab(id, `${params.username}@${params.host}`, "ssh", {
             host: params.host,
@@ -234,7 +220,7 @@ export function TerminalTabs({ uiScale }: TerminalTabsProps): React.JSX.Element 
         addToast(t("terminal.connectionFailed", { message }));
       }
     },
-    [addTab, t, restrictPrivateIps, connectTimeout, keepaliveInterval, keepaliveMax, addToast],
+    [addTab, t, addToast],
   );
 
   const showNextVerifyRequest = useCallback(() => {
@@ -385,15 +371,10 @@ export function TerminalTabs({ uiScale }: TerminalTabsProps): React.JSX.Element 
         .then(() => {
           // Closed meanwhile: there is no tab left to reconnect.
           if (tabGone()) return null;
-          const settings = useSettingsStore.getState();
           return invoke<string>("session_connect", {
             id: tab.sessionDbId,
             cols: 80,
             rows: 24,
-            restrictPrivateIps: settings.restrictPrivateIps,
-            connectTimeout: settings.connectTimeout,
-            keepaliveInterval: settings.keepaliveInterval,
-            keepaliveMax: settings.keepaliveMax,
           });
         })
         .then((newConnId) => {

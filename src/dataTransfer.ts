@@ -236,7 +236,7 @@ export async function importData(
 
   if (selection.settings && file.settings) {
     try {
-      importSettings(file.settings);
+      await importSettings(file.settings);
       results.push({ section: "settings", ok: true });
     } catch (e) {
       results.push({ section: "settings", ok: false, error: errorText(e) });
