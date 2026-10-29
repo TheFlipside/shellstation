@@ -38,6 +38,8 @@ Download the latest release for your platform from the [Releases](https://git.fi
 - **macOS**: `.dmg`
 - **Windows**: `.msi`
 
+> **Linux: blank white window?** Some GPU drivers, especially virtual GPUs in VMs, break WebKitGTK's DMABUF renderer. Add `export WEBKIT_DISABLE_DMABUF_RENDERER=1` to `~/.profile` and log out and back in; this applies to all WebKitGTK apps in your session. See [Common Issues (Linux)](docs/DEVELOPMENT.md#blank-white-window-on-linux).
+
 ### Building from Source
 
 Prerequisites: [Rust](https://rustup.rs/), [Node.js](https://nodejs.org/) (v18+), and the [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/) for your OS.

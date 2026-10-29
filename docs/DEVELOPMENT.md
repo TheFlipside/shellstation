@@ -511,6 +511,33 @@ Then ensure a keyring daemon is running in your session.
 
 Some Linux environments (particularly VMs or Wayland sessions) may not expose WebGL to the webview. xterm.js will automatically fall back to the canvas renderer. This is not a bug — the application handles it gracefully.
 
+### Blank white window on Linux
+
+The window opens with its title bar and native menu (Edit, Help), but the content area stays white. WebKitGTK's DMABUF renderer fails on some GPU drivers, and virtual GPUs are a common case (e.g. VMware SVGA with `vmwgfx`, seen with WebKitGTK 2.52). The app itself is fine; WebKitGTK simply draws nothing.
+
+Disable the DMABUF renderer for one run to confirm:
+
+```bash
+WEBKIT_DISABLE_DMABUF_RENDERER=1 npm run tauri dev
+```
+
+If the UI appears, set it permanently for your session and log out and back in:
+
+```bash
+echo 'export WEBKIT_DISABLE_DMABUF_RENDERER=1' >> ~/.profile
+```
+
+Not every desktop session reads `~/.profile`. If `echo "$WEBKIT_DISABLE_DMABUF_RENDERER"` in a new terminal prints nothing after logging back in, use a systemd user environment file instead:
+
+```bash
+mkdir -p ~/.config/environment.d
+echo 'WEBKIT_DISABLE_DMABUF_RENDERER=1' >> ~/.config/environment.d/webkit.conf
+```
+
+Either way the variable applies to every WebKitGTK application in your session, not just ShellStation. To limit it to ShellStation, prefix the launch command with it as in the test above.
+
+ShellStation deliberately does not set this variable itself: it costs every Linux user the zero-copy GPU path to fix a problem only some drivers have. If the window is still blank, try `WEBKIT_DISABLE_COMPOSITING_MODE=1` instead, which turns off accelerated compositing entirely.
+
 ---
 
 ## 10. macOS Prerequisites
