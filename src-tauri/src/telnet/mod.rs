@@ -200,17 +200,31 @@ pub async fn establish_telnet_connection(
         login_sequence,
     } = params;
 
-    // Validate against restricted IP ranges if enabled.
-    if restrict_private_ips {
-        crate::ssh::validate_ssh_target_public(&host, port)?;
-    }
+    // The lookup and the connection share one timeout, as they do when the
+    // name is connected to.
+    let deadline =
+        tokio::time::Instant::now() + std::time::Duration::from_secs(connect_timeout_secs);
+
+    // Check against restricted IP ranges if enabled, and then connect to the
+    // addresses checked rather than resolving the name again.
+    let checked = if restrict_private_ips {
+        Some(
+            tokio::time::timeout_at(deadline, crate::ssh::resolve_unrestricted(&host, port))
+                .await
+                .map_err(|_| format!("Cannot resolve host '{host}': timed out"))??,
+        )
+    } else {
+        None
+    };
 
     info!(session_id = %id, host = %host, port = %port, "Connecting via Telnet");
 
-    let stream = tokio::time::timeout(
-        std::time::Duration::from_secs(connect_timeout_secs),
-        TcpStream::connect((host.as_str(), port)),
-    )
+    let stream = tokio::time::timeout_at(deadline, async {
+        match checked {
+            Some(addrs) => TcpStream::connect(&addrs[..]).await,
+            None => TcpStream::connect((host.as_str(), port)).await,
+        }
+    })
     .await
     .map_err(|_| format!("Telnet connection to {host}:{port} timed out"))?
     .map_err(|e| sanitize_telnet_error(&e.to_string()))?;

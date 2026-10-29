@@ -1,5 +1,5 @@
-use std::collections::HashMap;
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, ToSocketAddrs};
+use std::collections::{HashMap, VecDeque};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, ToSocketAddrs};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -1094,7 +1094,8 @@ fn legacy_preferred() -> russh::Preferred {
 
 /// Check whether an IP address belongs to a restricted (non-routable) range:
 /// one that reaches this machine or its local network rather than the
-/// internet.
+/// internet, or that is no single host on the internet at all (multicast,
+/// reserved and special-purpose ranges).
 fn is_restricted_ip(addr: &IpAddr) -> bool {
     match addr {
         IpAddr::V4(ip) => is_restricted_ipv4(*ip),
@@ -1102,14 +1103,20 @@ fn is_restricted_ip(addr: &IpAddr) -> bool {
     }
 }
 
+/// Besides the local ranges, 198.18.0.0/15 is where a local proxy in
+/// "fake-IP" mode answers names it then forwards itself, so a name resolving
+/// there can reach a service on this machine.
 fn is_restricted_ipv4(ip: Ipv4Addr) -> bool {
-    let [a, b, ..] = ip.octets();
+    let [a, b, c, _] = ip.octets();
     ip.is_loopback() // 127.0.0.0/8
         || ip.is_private() // 10/8, 172.16/12, 192.168/16
         || ip.is_link_local() // 169.254.0.0/16
-        || ip.is_broadcast() // 255.255.255.255
+        || ip.is_multicast() // 224.0.0.0/4
+        || a >= 240 // 240.0.0.0/4, reserved, with 255.255.255.255 broadcast
         || a == 0 // 0.0.0.0/8, "this network"
         || (a == 100 && (64..=127).contains(&b)) // 100.64.0.0/10 (CGNAT)
+        || (a == 192 && b == 0 && c == 0) // 192.0.0.0/24, IETF protocol assignments
+        || (a == 198 && (b == 18 || b == 19)) // 198.18.0.0/15, benchmarking
 }
 
 /// Besides its own ranges, an IPv6 address is restricted when it stands for
@@ -1120,6 +1127,7 @@ fn is_restricted_ipv6(ip: Ipv6Addr) -> bool {
     let first = ip.segments()[0];
     ip.is_loopback() // ::1
         || ip.is_unspecified() // ::
+        || ip.is_multicast() // ff00::/8
         || first & 0xffc0 == 0xfe80 // fe80::/10, link-local
         || first & 0xffc0 == 0xfec0 // fec0::/10, site-local (deprecated)
         || first & 0xfe00 == 0xfc00 // fc00::/7, unique local
@@ -1148,47 +1156,172 @@ fn embedded_ipv4(ip: Ipv6Addr) -> [Option<Ipv4Addr>; 2] {
     }
 }
 
-/// Validate that a hostname does not resolve to a restricted IP range.
-/// This prevents SSRF attacks through tunnels targeting internal services.
+/// Resolve a hostname and refuse it when any address it resolves to is in a
+/// restricted range. This prevents SSRF attacks through tunnels targeting
+/// internal services.
 ///
-/// Public alias used by other connection modules (e.g. Telnet).
-pub fn validate_ssh_target_public(host: &str, port: u16) -> Result<(), String> {
-    validate_ssh_target(host, port)
-}
-
-/// Validate that a hostname does not resolve to a restricted IP range.
-/// This prevents SSRF attacks through SSH tunnels targeting internal services.
-fn validate_ssh_target(host: &str, port: u16) -> Result<(), String> {
-    // Try parsing as a literal IP first.
+/// The caller must connect to the addresses returned, not to the name: a
+/// second lookup could get a different answer (DNS rebinding) and reach an
+/// address that was never checked. Also used by Telnet.
+pub async fn resolve_unrestricted(host: &str, port: u16) -> Result<Vec<SocketAddr>, String> {
+    // A literal IP needs no lookup.
     if let Ok(ip) = host.parse::<IpAddr>() {
         if is_restricted_ip(&ip) {
             return Err(format!(
                 "Connection to restricted address {host} is not allowed"
             ));
         }
-        return Ok(());
+        return Ok(vec![SocketAddr::new(ip, port)]);
     }
 
-    // Resolve hostname and check all resulting addresses.
-    let addrs: Vec<_> = format!("{host}:{port}")
-        .to_socket_addrs()
-        .map_err(|e| format!("Cannot resolve host '{host}': {e}"))?
-        .collect();
+    // Resolve hostname and check all resulting addresses. The resolver's
+    // error and the restricted address go to the log only: in the message,
+    // they would let a compromised webview read DNS answers.
+    let addrs = lookup(host, port).await.map_err(|e| {
+        warn!(host, error = %e, "Cannot resolve host");
+        format!("Cannot resolve host '{host}'")
+    })?;
 
     if addrs.is_empty() {
         return Err(format!("Host '{host}' did not resolve to any address"));
     }
 
-    for addr in &addrs {
-        if is_restricted_ip(&addr.ip()) {
-            return Err(format!(
-                "Host '{host}' resolves to restricted address {} — connection not allowed",
-                addr.ip()
-            ));
-        }
+    if let Some(addr) = addrs.iter().find(|addr| is_restricted_ip(&addr.ip())) {
+        warn!(host, address = %addr.ip(), "Host resolves to a restricted address");
+        return Err(format!(
+            "Host '{host}' resolves to a restricted address — connection not allowed"
+        ));
     }
 
-    Ok(())
+    Ok(addrs)
+}
+
+/// The most lookups [`lookup`] runs at once.
+const MAX_CONCURRENT_LOOKUPS: usize = 16;
+static LOOKUPS: Semaphore = Semaphore::const_new(MAX_CONCURRENT_LOOKUPS);
+
+/// Resolve `host` on Tokio's blocking thread pool. A lookup keeps its
+/// thread until the resolver answers, even once the connection it was for
+/// has timed out, so lookups hold a [`LOOKUPS`] permit until then: names
+/// that never answer cannot tie up the threads the rest of the app shares.
+async fn lookup(host: &str, port: u16) -> std::io::Result<Vec<SocketAddr>> {
+    let host = host.to_string();
+    run_lookup(&LOOKUPS, move || {
+        (host.as_str(), port)
+            .to_socket_addrs()
+            .map(Iterator::collect)
+    })
+    .await
+}
+
+/// Run `resolve` on Tokio's blocking thread pool with a permit from
+/// `permits`, held until `resolve` returns.
+async fn run_lookup(
+    permits: &'static Semaphore,
+    resolve: impl FnOnce() -> std::io::Result<Vec<SocketAddr>> + Send + 'static,
+) -> std::io::Result<Vec<SocketAddr>> {
+    let permit = permits.acquire().await.map_err(std::io::Error::other)?;
+    tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        resolve()
+    })
+    .await
+    .unwrap_or_else(|e| Err(std::io::Error::other(e)))
+}
+
+/// The addresses the next host in a chain was checked at, or `None` to
+/// connect by name when nothing is checked. While checking, running out is
+/// an error, never a fallback to the name.
+fn next_checked(
+    checked: &mut Option<VecDeque<Vec<SocketAddr>>>,
+) -> Result<Option<Vec<SocketAddr>>, String> {
+    match checked {
+        None => Ok(None),
+        Some(queue) => queue.pop_front().map(Some).ok_or_else(|| {
+            "A host in the chain was not checked against restricted addresses".to_string()
+        }),
+    }
+}
+
+/// Connect to `host`: to the addresses it was checked at when given, so
+/// nothing resolves it again, and by name otherwise.
+async fn connect_checked<H: client::Handler + Send + 'static>(
+    config: Arc<client::Config>,
+    host: &str,
+    port: u16,
+    checked: Option<Vec<SocketAddr>>,
+    handler: H,
+) -> Result<client::Handle<H>, H::Error> {
+    match checked {
+        Some(addrs) => client::connect(config, &addrs[..], handler).await,
+        None => client::connect(config, (host, port), handler).await,
+    }
+}
+
+/// The most addresses a bastion is asked to open one tunnel to, so a name
+/// with a long list of addresses cannot make it try them all.
+const MAX_TUNNEL_ATTEMPTS: usize = 8;
+
+/// Open a direct-tcpip channel from `via` to `host`. Given the addresses
+/// `host` was checked at, the channel goes to the first of them the bastion
+/// can reach, so the bastion has no name left to resolve. Without, the
+/// bastion resolves `host` itself, which also reaches names only it knows.
+///
+/// All attempts share `timeout`. As when the bastion tries a name's
+/// addresses itself, one it cannot get an answer from can use it all up
+/// before the next is tried.
+async fn open_tunnel(
+    via: &client::Handle<impl client::Handler>,
+    host: &str,
+    port: u16,
+    checked: Option<Vec<SocketAddr>>,
+    timeout: std::time::Duration,
+) -> Result<russh::Channel<client::Msg>, String> {
+    let destinations = match checked {
+        Some(addrs) => addrs
+            .iter()
+            .take(MAX_TUNNEL_ATTEMPTS)
+            .map(|addr| addr.ip().to_string())
+            .collect(),
+        None => vec![host.to_string()],
+    };
+    let deadline = tokio::time::Instant::now() + timeout;
+    let mut failure = None;
+    for destination in destinations {
+        match tokio::time::timeout_at(
+            deadline,
+            via.channel_open_direct_tcpip(destination.as_str(), port.into(), "127.0.0.1", 0),
+        )
+        .await
+        {
+            Ok(Ok(channel)) => return Ok(channel),
+            Ok(Err(e)) => {
+                // Debug, so text from the bastion cannot break the log line.
+                warn!(host, destination, error = ?e, "Tunnel not opened");
+                failure = Some(e);
+            }
+            Err(_) => return Err(format!("Tunnel to {host}:{port} timed out")),
+        }
+    }
+    let reason = failure.map_or_else(|| "no address to try".to_string(), |e| tunnel_failure(&e));
+    Err(format!("Failed to open tunnel to {host}:{port}: {reason}"))
+}
+
+/// Why a tunnel was not opened, in words of our own: a refusal can carry a
+/// reason text from the bastion, which goes to the log only.
+fn tunnel_failure(error: &russh::Error) -> String {
+    use russh::ChannelOpenFailure as Refused;
+    match error {
+        russh::Error::ChannelOpenFailure(reason) => match reason {
+            Refused::AdministrativelyProhibited => "the jump host does not allow it",
+            Refused::ConnectFailed => "the jump host could not connect",
+            Refused::UnknownChannelType => "the jump host does not support tunnels",
+            Refused::ResourceShortage => "the jump host is out of resources",
+            Refused::Other { .. } => "the jump host refused it",
+        }
+        .to_string(),
+        other => sanitize_ssh_error(&other.to_string()),
+    }
 }
 
 /// Establish an SSH connection, optionally through a chain of jump hosts.
@@ -1210,12 +1343,26 @@ async fn connect_with_hops(
     verify_senders: &HostVerifySenders,
     kbd_interactive_senders: &KbdInteractiveSenders,
 ) -> Result<PendingChain, String> {
-    // Validate all targets against restricted IP ranges (SSRF prevention).
+    let connect_timeout = std::time::Duration::from_secs(connect_timeout_secs);
+    // The lookups of every host in the chain and the first connection share
+    // one timeout, as the lookup and the connection do when a name is
+    // connected to. Later hops get a timeout of their own.
+    let first_deadline = tokio::time::Instant::now() + connect_timeout;
+
+    // Check every host against restricted IP ranges (SSRF prevention) before
+    // connecting to any. Each connection then goes to the addresses checked,
+    // in chain order: the jump hosts first, the target last.
+    let mut checked = None;
     if restrict_private_ips {
-        validate_ssh_target(target_host, target_port)?;
-        for hop in jump_hops {
-            validate_ssh_target(&hop.host, hop.port)?;
+        let mut queue = VecDeque::new();
+        let hosts = jump_hops.iter().map(|hop| (hop.host.as_str(), hop.port));
+        for (host, port) in hosts.chain([(target_host, target_port)]) {
+            let addrs = tokio::time::timeout_at(first_deadline, resolve_unrestricted(host, port))
+                .await
+                .map_err(|_| format!("Cannot resolve host '{host}': timed out"))??;
+            queue.push_back(addrs);
         }
+        checked = Some(queue);
     }
 
     if jump_hops.is_empty() {
@@ -1226,6 +1373,7 @@ async fn connect_with_hops(
             port = target_port,
             "Direct connection (no jump hosts)"
         );
+        let target_checked = next_checked(&mut checked)?;
         let config = ssh_config(keepalive_interval_secs, keepalive_max, legacy_algorithms);
         let (verify_tx, verify_rx) = oneshot::channel::<bool>();
         verify_senders
@@ -1248,9 +1396,9 @@ async fn connect_with_hops(
             timeout_secs = connect_timeout_secs,
             "TCP connect attempt"
         );
-        let handle = tokio::time::timeout(
-            std::time::Duration::from_secs(connect_timeout_secs),
-            client::connect(config, (target_host, target_port), handler),
+        let handle = tokio::time::timeout_at(
+            first_deadline,
+            connect_checked(config, target_host, target_port, target_checked, handler),
         )
         .await
         .map_err(|_| {
@@ -1292,6 +1440,7 @@ async fn connect_with_hops(
 
     // Connect to the first hop directly.
     let first_hop = &jump_hops[0];
+    let first_checked = next_checked(&mut checked)?;
     let config = ssh_config(keepalive_interval_secs, keepalive_max, legacy_algorithms);
     let hop_id = format!("{session_id}-hop0");
     let (verify_tx, verify_rx) = oneshot::channel::<bool>();
@@ -1309,9 +1458,15 @@ async fn connect_with_hops(
     };
 
     trace!(session_id, hop = 0, host = %first_hop.host, port = first_hop.port, timeout_secs = connect_timeout_secs, "TCP connect attempt to first hop");
-    let first_handle = tokio::time::timeout(
-        std::time::Duration::from_secs(connect_timeout_secs),
-        client::connect(config, (first_hop.host.as_str(), first_hop.port), handler),
+    let first_handle = tokio::time::timeout_at(
+        first_deadline,
+        connect_checked(
+            config,
+            &first_hop.host,
+            first_hop.port,
+            first_checked,
+            handler,
+        ),
     )
     .await
     .map_err(|_| {
@@ -1351,16 +1506,14 @@ async fn connect_with_hops(
     // Chain through remaining hops (if any).
     for (i, hop) in jump_hops.iter().enumerate().skip(1) {
         debug!(session_id, hop = i, host = %hop.host, port = hop.port, "Opening tunnel to next hop");
-        let hop_timeout = std::time::Duration::from_secs(connect_timeout_secs);
-        let tunnel = tokio::time::timeout(
-            hop_timeout,
-            chain
-                .last()
-                .channel_open_direct_tcpip(&hop.host, hop.port.into(), "127.0.0.1", 0),
+        let tunnel = open_tunnel(
+            chain.last(),
+            &hop.host,
+            hop.port,
+            next_checked(&mut checked)?,
+            connect_timeout,
         )
-        .await
-        .map_err(|_| format!("Tunnel to {}:{} timed out", hop.host, hop.port))?
-        .map_err(|e| format!("Failed to open tunnel to {}:{}: {e}", hop.host, hop.port))?;
+        .await?;
 
         let stream = tunnel.into_stream();
         let config = ssh_config(keepalive_interval_secs, keepalive_max, legacy_algorithms);
@@ -1380,7 +1533,7 @@ async fn connect_with_hops(
         };
 
         let hop_handle = tokio::time::timeout(
-            hop_timeout,
+            connect_timeout,
             client::connect_stream(config, stream, handler),
         )
         .await
@@ -1421,17 +1574,15 @@ async fn connect_with_hops(
         port = target_port,
         "Opening tunnel to final target"
     );
-    let timeout = std::time::Duration::from_secs(connect_timeout_secs);
 
-    let tunnel = tokio::time::timeout(
-        timeout,
-        chain
-            .last()
-            .channel_open_direct_tcpip(target_host, target_port.into(), "127.0.0.1", 0),
+    let tunnel = open_tunnel(
+        chain.last(),
+        target_host,
+        target_port,
+        next_checked(&mut checked)?,
+        connect_timeout,
     )
-    .await
-    .map_err(|_| format!("Tunnel to {target_host}:{target_port} timed out"))?
-    .map_err(|e| format!("Failed to open tunnel to {target_host}:{target_port}: {e}"))?;
+    .await?;
 
     let stream = tunnel.into_stream();
     let config = ssh_config(keepalive_interval_secs, keepalive_max, legacy_algorithms);
@@ -1450,7 +1601,7 @@ async fn connect_with_hops(
     };
 
     let target_handle = tokio::time::timeout(
-        timeout,
+        connect_timeout,
         client::connect_stream(config, stream, handler),
     )
     .await
@@ -1995,6 +2146,20 @@ mod tests {
     }
 
     #[test]
+    fn restricted_ipv4_multicast_reserved_and_special_purpose() {
+        assert!(is_restricted_ip(&v4(224, 0, 0, 1))); // 224.0.0.0/4
+        assert!(is_restricted_ip(&v4(239, 255, 255, 255)));
+        assert!(is_restricted_ip(&v4(240, 0, 0, 1))); // 240.0.0.0/4
+        assert!(is_restricted_ip(&v4(254, 255, 255, 255)));
+        assert!(is_restricted_ip(&v4(192, 0, 0, 1))); // 192.0.0.0/24
+        assert!(is_restricted_ip(&v4(192, 0, 0, 255)));
+        assert!(is_restricted_ip(&v4(198, 18, 0, 1))); // 198.18.0.0/15
+        assert!(is_restricted_ip(&v4(198, 19, 255, 254)));
+        // Carried inside an IPv6 address too.
+        assert!(is_restricted_ip(&v6("::ffff:198.18.0.1")));
+    }
+
+    #[test]
     fn allowed_ipv4_public() {
         // Anything outside the restricted CIDRs must pass — including
         // edge addresses just outside private blocks.
@@ -2007,12 +2172,27 @@ mod tests {
         assert!(!is_restricted_ip(&v4(11, 0, 0, 1))); // just outside 10/8
         assert!(!is_restricted_ip(&v4(100, 63, 255, 254))); // just outside CGNAT
         assert!(!is_restricted_ip(&v4(100, 128, 0, 1))); // just outside CGNAT
+        assert!(!is_restricted_ip(&v4(223, 255, 255, 255))); // just below multicast
+        assert!(!is_restricted_ip(&v4(192, 0, 1, 1))); // just outside 192.0.0.0/24
+        assert!(!is_restricted_ip(&v4(191, 255, 255, 255))); // just below 192.0.0.0/24
+        assert!(!is_restricted_ip(&v4(198, 17, 255, 254))); // just below 198.18/15
+        assert!(!is_restricted_ip(&v4(198, 20, 0, 1))); // just past 198.18/15
     }
 
     #[test]
     fn restricted_ipv6_loopback_and_unspecified() {
         assert!(is_restricted_ip(&v6("::1")));
         assert!(is_restricted_ip(&v6("::")));
+    }
+
+    #[test]
+    fn restricted_ipv6_multicast() {
+        assert!(is_restricted_ip(&v6("ff02::1"))); // ff00::/8
+        assert!(is_restricted_ip(&v6("ff05::1:3")));
+        assert!(is_restricted_ip(&v6("ffff:ffff::1")));
+        // Below ff00::/8 lies site-local space, restricted in its own right,
+        // so there is no allowed edge there; a public address stands in.
+        assert!(!is_restricted_ip(&v6("2001:4860:4860::8888")));
     }
 
     #[test]
@@ -2077,6 +2257,94 @@ mod tests {
         // GUA addresses (2000::/3) must be allowed.
         assert!(!is_restricted_ip(&v6("2001:db8::1"))); // documentation range, but in GUA
         assert!(!is_restricted_ip(&v6("2606:4700:4700::1111"))); // 1.1.1.1 v6
+    }
+
+    // ── resolve_unrestricted ─────────────────────────────────────────────
+    // The connection goes to exactly the addresses returned, so they must be
+    // the addresses checked.
+
+    #[tokio::test]
+    async fn resolve_unrestricted_returns_a_public_literal_as_given() {
+        assert_eq!(
+            resolve_unrestricted("203.0.113.7", 2222).await.unwrap(),
+            ["203.0.113.7:2222".parse::<SocketAddr>().unwrap()]
+        );
+        assert_eq!(
+            resolve_unrestricted("2606:4700:4700::1111", 22)
+                .await
+                .unwrap(),
+            ["[2606:4700:4700::1111]:22".parse::<SocketAddr>().unwrap()]
+        );
+    }
+
+    #[tokio::test]
+    async fn resolve_unrestricted_refuses_restricted_addresses() {
+        for host in ["10.0.0.1", "::1", "::ffff:192.168.1.1"] {
+            assert!(resolve_unrestricted(host, 22).await.is_err(), "{host}");
+        }
+        // A name is refused by the addresses it resolves to, without the
+        // message naming them. Every system the app runs on resolves
+        // `localhost` to loopback without asking a DNS server.
+        let error = resolve_unrestricted("localhost", 22).await.unwrap_err();
+        assert!(error.contains("restricted address"), "{error}");
+        assert!(
+            !error.contains("127.0.0.1") && !error.contains("::1"),
+            "{error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn resolve_unrestricted_keeps_the_resolver_error_out_of_the_message() {
+        // `.invalid` never resolves (RFC 6761).
+        assert_eq!(
+            resolve_unrestricted("server.invalid", 22)
+                .await
+                .unwrap_err(),
+            "Cannot resolve host 'server.invalid'"
+        );
+    }
+
+    #[tokio::test]
+    async fn lookup_keeps_its_permit_until_the_resolver_answers() {
+        static PERMITS: Semaphore = Semaphore::const_new(1);
+        let (answer, answered) = std::sync::mpsc::channel::<()>();
+        let slow = run_lookup(&PERMITS, move || {
+            let _ = answered.recv();
+            Ok(Vec::new())
+        });
+
+        // The caller gives up while the resolver is still busy ...
+        let gave_up = tokio::time::timeout(std::time::Duration::from_millis(100), slow).await;
+        assert!(gave_up.is_err());
+        // ... and the resolver keeps the permit, so the next lookup waits.
+        assert_eq!(PERMITS.available_permits(), 0);
+
+        // Once the resolver answers, the permit comes back.
+        answer.send(()).unwrap();
+        let back = tokio::time::timeout(std::time::Duration::from_secs(5), PERMITS.acquire()).await;
+        assert!(back.is_ok(), "the permit did not come back");
+    }
+
+    #[test]
+    fn next_checked_never_falls_back_to_the_name() {
+        let addr: SocketAddr = "203.0.113.7:22".parse().unwrap();
+        let mut checked = Some(VecDeque::from([vec![addr]]));
+        assert_eq!(next_checked(&mut checked), Ok(Some(vec![addr])));
+        // Running out while checking is an error, not `None` (by name).
+        assert!(next_checked(&mut checked).is_err());
+        // Nothing checked: by name.
+        assert_eq!(next_checked(&mut None), Ok(None));
+    }
+
+    #[test]
+    fn tunnel_failure_leaves_the_bastion_text_out() {
+        let refused = russh::Error::ChannelOpenFailure(russh::ChannelOpenFailure::Other {
+            code: 42,
+            reason: "\u{202e}internal-db.corp: connection refused".to_string(),
+        });
+        assert_eq!(tunnel_failure(&refused), "the jump host refused it");
+        let failed = russh::Error::ChannelOpenFailure(russh::ChannelOpenFailure::ConnectFailed);
+        assert_eq!(tunnel_failure(&failed), "the jump host could not connect");
     }
 
     // ── sanitize_ssh_error ──────────────────────────────────────────────
@@ -2179,6 +2447,27 @@ mod tests {
     /// An authenticated client connected to a new in-process server, and a
     /// receiver that resolves once the server's side of the connection ends.
     async fn test_connection() -> (client::Handle<TestClient>, oneshot::Receiver<()>) {
+        test_connection_to(TestServer).await
+    }
+
+    /// [`test_connection`], to a server run by `server`.
+    async fn test_connection_to(
+        server: impl russh::server::Handler<Error = russh::Error> + Send + 'static,
+    ) -> (client::Handle<TestClient>, oneshot::Receiver<()>) {
+        let (addr, ended_rx) = spawn_test_server(server).await;
+        let mut handle = client::connect(Arc::new(client::Config::default()), addr, TestClient)
+            .await
+            .unwrap();
+        assert!(handle.authenticate_none("test").await.unwrap().success());
+        (handle, ended_rx)
+    }
+
+    /// The address of a new in-process server run by `server`, which takes
+    /// one connection, and a receiver that resolves once that connection
+    /// ends on the server's side.
+    async fn spawn_test_server(
+        server: impl russh::server::Handler<Error = russh::Error> + Send + 'static,
+    ) -> (SocketAddr, oneshot::Receiver<()>) {
         use russh::keys::ssh_key::private::Ed25519Keypair;
 
         let mut config = russh::server::Config {
@@ -2196,18 +2485,13 @@ mod tests {
         let (ended_tx, ended_rx) = oneshot::channel();
         tokio::spawn(async move {
             let (socket, _) = listener.accept().await.unwrap();
-            let running = russh::server::run_stream(Arc::new(config), socket, TestServer)
+            let running = russh::server::run_stream(Arc::new(config), socket, server)
                 .await
                 .unwrap();
             let _ = running.await;
             let _ = ended_tx.send(());
         });
-
-        let mut handle = client::connect(Arc::new(client::Config::default()), addr, TestClient)
-            .await
-            .unwrap();
-        assert!(handle.authenticate_none("test").await.unwrap().success());
-        (handle, ended_rx)
+        (addr, ended_rx)
     }
 
     const ENDED_WITHIN: std::time::Duration = std::time::Duration::from_secs(5);
@@ -2345,5 +2629,210 @@ mod tests {
             .await
             .expect("the bastion is still connected")
             .unwrap();
+    }
+
+    // ── Connecting to checked addresses ──────────────────────────────────
+    // With Restrict private IPs on, the connection must go to the addresses
+    // checked; a second lookup of the name could get a different answer.
+
+    #[tokio::test]
+    async fn checked_connection_goes_to_the_checked_addresses_not_the_name() {
+        let (addr, _ended) = spawn_test_server(TestServer).await;
+
+        // `.invalid` never resolves (RFC 6761), so this only connects if
+        // the name is left alone.
+        let config = Arc::new(client::Config::default());
+        let mut handle =
+            connect_checked(config, "server.invalid", 22, Some(vec![addr]), TestClient)
+                .await
+                .expect("the checked address should connect");
+
+        assert!(handle.authenticate_none("test").await.unwrap().success());
+    }
+
+    #[tokio::test]
+    async fn unchecked_connection_goes_by_name() {
+        let (addr, _ended) = spawn_test_server(TestServer).await;
+
+        // `localhost` may resolve to `::1` first, where nothing listens; as
+        // with any name, each address is tried in turn.
+        let config = Arc::new(client::Config::default());
+        let mut handle = connect_checked(config, "localhost", addr.port(), None, TestClient)
+            .await
+            .expect("the name should connect");
+
+        assert!(handle.authenticate_none("test").await.unwrap().success());
+    }
+
+    // ── Tunnels through a jump host ──────────────────────────────────────
+    // With Restrict private IPs on, the bastion must be sent the addresses
+    // checked, never the name: it would resolve the name itself.
+
+    /// What a test bastion does with a tunnel request.
+    #[derive(Clone, Copy)]
+    enum TunnelAnswer {
+        /// Opens tunnels to this host and refuses the rest.
+        OpensOnly(&'static str),
+        RefusesAll,
+        /// Refuses every tunnel, each after this long.
+        RefusesAfter(std::time::Duration),
+        NeverAnswers,
+    }
+
+    /// A bastion that records the host each tunnel asks for, and answers as
+    /// `answer` says.
+    struct TunnelServer {
+        asked: Arc<std::sync::Mutex<Vec<String>>>,
+        answer: TunnelAnswer,
+        /// Requests left unanswered, since dropping one refuses it.
+        unanswered: Vec<russh::server::ChannelOpenHandle>,
+    }
+
+    impl russh::server::Handler for TunnelServer {
+        type Error = russh::Error;
+
+        fn auth_none(
+            &mut self,
+            _: &str,
+        ) -> impl std::future::Future<Output = Result<russh::server::Auth, Self::Error>> + Send
+        {
+            std::future::ready(Ok(russh::server::Auth::Accept))
+        }
+
+        async fn channel_open_direct_tcpip(
+            &mut self,
+            _: russh::Channel<russh::server::Msg>,
+            host_to_connect: &str,
+            _: u32,
+            _: &str,
+            _: u32,
+            reply: russh::server::ChannelOpenHandle,
+            _: &mut russh::server::Session,
+        ) -> Result<(), Self::Error> {
+            self.asked.lock().unwrap().push(host_to_connect.to_string());
+            match self.answer {
+                TunnelAnswer::OpensOnly(host) if host == host_to_connect => {
+                    reply.accept().await;
+                }
+                TunnelAnswer::NeverAnswers => self.unanswered.push(reply),
+                // Dropping `reply` refuses the tunnel.
+                TunnelAnswer::RefusesAfter(delay) => tokio::time::sleep(delay).await,
+                TunnelAnswer::OpensOnly(_) | TunnelAnswer::RefusesAll => {}
+            }
+            Ok(())
+        }
+    }
+
+    const OPENED_WITHIN: std::time::Duration = std::time::Duration::from_secs(5);
+
+    async fn tunnel_test_bastion(
+        answer: TunnelAnswer,
+    ) -> (
+        client::Handle<TestClient>,
+        Arc<std::sync::Mutex<Vec<String>>>,
+    ) {
+        let asked = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let server = TunnelServer {
+            asked: Arc::clone(&asked),
+            answer,
+            unanswered: Vec::new(),
+        };
+        let (bastion, _ended) = test_connection_to(server).await;
+        (bastion, asked)
+    }
+
+    #[tokio::test]
+    async fn tunnel_goes_to_the_checked_addresses_not_the_name() {
+        let (bastion, asked) = tunnel_test_bastion(TunnelAnswer::OpensOnly("203.0.113.8")).await;
+        let checked = vec![
+            "203.0.113.7:22".parse().unwrap(),
+            "203.0.113.8:22".parse().unwrap(),
+        ];
+
+        open_tunnel(&bastion, "target.example", 22, Some(checked), OPENED_WITHIN)
+            .await
+            .expect("the second address should open");
+
+        assert_eq!(*asked.lock().unwrap(), ["203.0.113.7", "203.0.113.8"]);
+    }
+
+    #[tokio::test]
+    async fn tunnel_fails_once_every_checked_address_is_refused() {
+        let (bastion, asked) = tunnel_test_bastion(TunnelAnswer::RefusesAll).await;
+        let checked = vec!["[2001:db8::7]:22".parse().unwrap()];
+
+        let error = open_tunnel(&bastion, "target.example", 22, Some(checked), OPENED_WITHIN)
+            .await
+            .unwrap_err();
+
+        // A dropped request is refused as administratively prohibited.
+        assert_eq!(
+            error,
+            "Failed to open tunnel to target.example:22: the jump host does not allow it"
+        );
+        assert_eq!(*asked.lock().unwrap(), ["2001:db8::7"]);
+    }
+
+    #[tokio::test]
+    async fn unchecked_tunnel_leaves_the_name_to_the_bastion() {
+        let (bastion, asked) = tunnel_test_bastion(TunnelAnswer::OpensOnly("target.example")).await;
+
+        open_tunnel(&bastion, "target.example", 22, None, OPENED_WITHIN)
+            .await
+            .expect("the name should open");
+
+        assert_eq!(*asked.lock().unwrap(), ["target.example"]);
+    }
+
+    #[tokio::test]
+    async fn tunnel_attempts_stop_at_the_timeout() {
+        let (bastion, asked) = tunnel_test_bastion(TunnelAnswer::NeverAnswers).await;
+        let checked = vec![
+            "203.0.113.7:22".parse().unwrap(),
+            "203.0.113.8:22".parse().unwrap(),
+        ];
+        let timeout = std::time::Duration::from_millis(300);
+
+        let error = open_tunnel(&bastion, "target.example", 22, Some(checked), timeout)
+            .await
+            .unwrap_err();
+
+        assert_eq!(error, "Tunnel to target.example:22 timed out");
+        // The first attempt used up the time, so the second was never sent.
+        assert_eq!(*asked.lock().unwrap(), ["203.0.113.7"]);
+    }
+
+    #[tokio::test]
+    async fn tunnel_attempts_share_one_timeout() {
+        // Each refusal takes 400 ms: the second would end within a 700 ms
+        // timeout of its own, but not within the 700 ms the two share.
+        let refusal = std::time::Duration::from_millis(400);
+        let (bastion, asked) = tunnel_test_bastion(TunnelAnswer::RefusesAfter(refusal)).await;
+        let checked = vec![
+            "203.0.113.7:22".parse().unwrap(),
+            "203.0.113.8:22".parse().unwrap(),
+        ];
+        let timeout = std::time::Duration::from_millis(700);
+
+        let error = open_tunnel(&bastion, "target.example", 22, Some(checked), timeout)
+            .await
+            .unwrap_err();
+
+        assert_eq!(error, "Tunnel to target.example:22 timed out");
+        assert_eq!(*asked.lock().unwrap(), ["203.0.113.7", "203.0.113.8"]);
+    }
+
+    #[tokio::test]
+    async fn tunnel_tries_a_limited_number_of_addresses() {
+        let (bastion, asked) = tunnel_test_bastion(TunnelAnswer::RefusesAll).await;
+        let checked = (1..=20)
+            .map(|i| SocketAddr::from(([203, 0, 113, i], 22)))
+            .collect();
+
+        open_tunnel(&bastion, "target.example", 22, Some(checked), OPENED_WITHIN)
+            .await
+            .unwrap_err();
+
+        assert_eq!(asked.lock().unwrap().len(), MAX_TUNNEL_ATTEMPTS);
     }
 }
