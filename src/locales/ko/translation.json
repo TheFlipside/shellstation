@@ -402,7 +402,7 @@
     "dataImportFileInfo": "ShellStation {{version}}에서 {{date}}에 생성됨.",
     "dataImportLegacyFile": "이전 버전의 ShellStation에서 내보낸 데이터베이스입니다.",
     "dataImportDatabaseDetail": "폴더: {{folders}}, 세션: {{sessions}}. 이미 있는 항목은 건너뜁니다. 비밀번호는 파일에 포함되지 않습니다.",
-    "dataImportSettingsDetail": "현재 설정을 파일의 값으로 덮어씁니다. 사설 주소 차단과 같은 보안 설정은 가져오기로 켤 수는 있지만 끌 수는 없습니다.",
+    "dataImportSettingsDetail": "현재 설정을 파일의 값으로 덮어씁니다. 사설 주소 차단이나 탭을 닫기 전 확인과 같은 보안 설정은 가져오기로 켤 수는 있지만 끌 수는 없습니다. \"우클릭으로 붙여넣기\", \"선택 시 텍스트 복사\", \"연결 해제 시 탭 닫기\"는 가져오기로 끌 수는 있지만 켤 수는 없습니다.",
     "dataImportCommandButtonsDetail": "버튼: {{count}}개. 기존 버튼 뒤에 추가되며 중복 항목은 건너뜁니다. 버튼을 클릭하면 명령이 세션으로 전송되며 \\r은 Enter로 처리됩니다. 아래의 각 명령을 확인하세요.",
     "dataImportNotInFile": "이 파일에 포함되어 있지 않습니다.",
     "dataImportAction": "가져오기",

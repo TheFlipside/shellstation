@@ -402,7 +402,7 @@
     "dataImportFileInfo": "ShellStation {{version}} ile {{date}} tarihinde oluşturuldu.",
     "dataImportLegacyFile": "Önceki bir ShellStation sürümünden veritabanı dışa aktarımı.",
     "dataImportDatabaseDetail": "Klasörler: {{folders}}, oturumlar: {{sessions}}. Zaten var olan kayıtlar atlanır. Parolalar dosyaya dahil değildir.",
-    "dataImportSettingsDetail": "Ayarlarınızın üzerine dosyadaki değerleri yazar. Özel adresleri engelleme gibi güvenlik ayarları içe aktarmayla yalnızca açılabilir, asla kapatılamaz.",
+    "dataImportSettingsDetail": "Ayarlarınızın üzerine dosyadaki değerleri yazar. Özel adresleri engelleme veya sekmeyi kapatmadan önce onay gibi güvenlik ayarları içe aktarmayla yalnızca açılabilir, asla kapatılamaz. \"Sağ tıkla yapıştır\", \"Seçimde metni kopyala\" ve \"Bağlantı kesildiğinde sekmeyi kapat\" ise içe aktarmayla yalnızca kapatılabilir, asla açılamaz.",
     "dataImportCommandButtonsDetail": "Düğmeler: {{count}}. Mevcut düğmelerinizin sonuna eklenir; yinelenenler atlanır. Bir düğmeye tıklamak komutunu oturuma gönderir ve \\r Enter anlamına gelir; bu yüzden aşağıdaki her komutu kontrol edin.",
     "dataImportNotInFile": "Bu dosyada yok.",
     "dataImportAction": "İçe aktar",

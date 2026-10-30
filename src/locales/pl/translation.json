@@ -402,7 +402,7 @@
     "dataImportFileInfo": "Utworzono w ShellStation {{version}} dnia {{date}}.",
     "dataImportLegacyFile": "Eksport bazy danych z wcześniejszej wersji ShellStation.",
     "dataImportDatabaseDetail": "Foldery: {{folders}}, sesje: {{sessions}}. Istniejące wpisy są pomijane. Hasła nie są zawarte w pliku.",
-    "dataImportSettingsDetail": "Zastępuje ustawienia wartościami z pliku. Ustawienia bezpieczeństwa, takie jak blokowanie adresów prywatnych, import może tylko włączyć, nigdy wyłączyć.",
+    "dataImportSettingsDetail": "Zastępuje ustawienia wartościami z pliku. Ustawienia bezpieczeństwa, takie jak blokowanie adresów prywatnych czy potwierdzenie przed zamknięciem karty, import może tylko włączyć, nigdy wyłączyć. Opcje „Wklej prawym przyciskiem myszy”, „Kopiuj tekst przy zaznaczeniu” i „Zamknij kartę po rozłączeniu” import może tylko wyłączyć, nigdy włączyć.",
     "dataImportCommandButtonsDetail": "Przyciski: {{count}}. Dodawane po istniejących przyciskach; duplikaty są pomijane. Kliknięcie przycisku wysyła jego polecenie do sesji, gdzie \\r oznacza Enter, więc sprawdź każde polecenie poniżej.",
     "dataImportNotInFile": "Nie ma w tym pliku.",
     "dataImportAction": "Importuj",

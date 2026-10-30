@@ -402,7 +402,7 @@
     "dataImportFileInfo": "ShellStation {{version}} で {{date}} に作成されました。",
     "dataImportLegacyFile": "以前のバージョンの ShellStation で作成されたデータベースのエクスポートです。",
     "dataImportDatabaseDetail": "フォルダー: {{folders}}、セッション: {{sessions}}。既存の項目はスキップされます。パスワードはファイルに含まれていません。",
-    "dataImportSettingsDetail": "現在の設定をファイル内の値で上書きします。プライベートアドレスへの接続ブロックなどのセキュリティ設定は、インポートで有効にはなりますが、無効になることはありません。",
+    "dataImportSettingsDetail": "現在の設定をファイル内の値で上書きします。プライベートアドレスへの接続ブロックやタブを閉じる前の確認などのセキュリティ設定は、インポートで有効にはなりますが、無効になることはありません。「右クリックで貼り付け」「選択時にテキストをコピー」「切断時にタブを閉じる」は、インポートで無効にはなりますが、有効になることはありません。",
     "dataImportCommandButtonsDetail": "ボタン: {{count}} 個。既存のボタンの後に追加され、重複はスキップされます。ボタンをクリックするとコマンドがセッションに送信され、\\r は Enter として扱われます。以下の各コマンドを確認してください。",
     "dataImportNotInFile": "このファイルには含まれていません。",
     "dataImportAction": "インポート",

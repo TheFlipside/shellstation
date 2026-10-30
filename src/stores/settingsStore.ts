@@ -751,6 +751,17 @@ function importEnableOnly(apply: (state: SettingsState) => void | Promise<void>)
   };
 }
 
+/**
+ * The reverse, for settings that make something happen with less care: a
+ * file may switch them off, but never on.
+ */
+function importDisableOnly(apply: (state: SettingsState) => void): SettingImporter {
+  return (state, value) => {
+    if (value === false) apply(state);
+    return Promise.resolve();
+  };
+}
+
 function importString(apply: ApplySetting<string>): SettingImporter {
   return async (state, value) => {
     if (typeof value === "string") await apply(state, value);
@@ -785,17 +796,19 @@ const SETTING_IMPORTERS: Readonly<Record<ExportableSettingKey, SettingImporter>>
   themeMode: importString((s, v) => {
     if (THEME_MODES.has(v)) s.setThemeMode(v as ThemeMode);
   }),
-  closeOnDisconnect: importBoolean((s, v) => {
-    s.setCloseOnDisconnect(v);
+  // Closing a tab when its session ends throws away what it showed, such
+  // as why the connection dropped.
+  closeOnDisconnect: importDisableOnly((s) => {
+    s.setCloseOnDisconnect(false);
   }),
   openLocalOnStartup: importBoolean((s, v) => {
     s.setOpenLocalOnStartup(v);
   }),
-  confirmOnQuit: importBoolean((s, v) => {
-    s.setConfirmOnQuit(v);
+  confirmOnQuit: importEnableOnly((s) => {
+    s.setConfirmOnQuit(true);
   }),
-  confirmOnCloseTab: importBoolean((s, v) => {
-    s.setConfirmOnCloseTab(v);
+  confirmOnCloseTab: importEnableOnly((s) => {
+    s.setConfirmOnCloseTab(true);
   }),
   terminalFontFamily: importString((s, v) => {
     s.setTerminalFontFamily(v);
@@ -809,11 +822,14 @@ const SETTING_IMPORTERS: Readonly<Record<ExportableSettingKey, SettingImporter>>
   terminalForegroundColor: importColor((s, v) => {
     s.setTerminalForegroundColor(v);
   }),
-  copyOnSelect: importBoolean((s, v) => {
-    s.setCopyOnSelect(v);
+  // Copying on selection puts what the remote host printed on the
+  // clipboard, where the next paste picks it up; pasting on a right-click
+  // types into a live session.
+  copyOnSelect: importDisableOnly((s) => {
+    s.setCopyOnSelect(false);
   }),
-  pasteOnRightClick: importBoolean((s, v) => {
-    s.setPasteOnRightClick(v);
+  pasteOnRightClick: importDisableOnly((s) => {
+    s.setPasteOnRightClick(false);
   }),
   confirmMultilinePaste: importEnableOnly((s) => {
     s.setConfirmMultilinePaste(true);

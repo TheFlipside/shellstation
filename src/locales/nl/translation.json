@@ -402,7 +402,7 @@
     "dataImportFileInfo": "Gemaakt met ShellStation {{version}} op {{date}}.",
     "dataImportLegacyFile": "Database-export uit een eerdere ShellStation-versie.",
     "dataImportDatabaseDetail": "Mappen: {{folders}}, sessies: {{sessions}}. Items die al bestaan, worden overgeslagen. Wachtwoorden staan niet in het bestand.",
-    "dataImportSettingsDetail": "Overschrijft je instellingen met de waarden uit het bestand. Beveiligingsinstellingen, zoals het blokkeren van privéadressen, kan een import alleen inschakelen, nooit uitschakelen.",
+    "dataImportSettingsDetail": "Overschrijft je instellingen met de waarden uit het bestand. Beveiligingsinstellingen, zoals het blokkeren van privéadressen of bevestigen voor het sluiten van een tabblad, kan een import alleen inschakelen, nooit uitschakelen. \"Plakken bij rechtermuisklik\", \"Tekst kopiëren bij selectie\" en \"Tabblad sluiten bij verbreken\" kan een import alleen uitschakelen, nooit inschakelen.",
     "dataImportCommandButtonsDetail": "Knoppen: {{count}}. Worden na je bestaande knoppen toegevoegd; duplicaten worden overgeslagen. Een klik op een knop stuurt de opdracht naar de sessie, waarbij \\r voor Enter staat, dus controleer elke opdracht hieronder.",
     "dataImportNotInFile": "Niet opgenomen in dit bestand.",
     "dataImportAction": "Importeren",

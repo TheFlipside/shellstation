@@ -402,7 +402,7 @@
     "dataImportFileInfo": "Creado con ShellStation {{version}} el {{date}}.",
     "dataImportLegacyFile": "Exportación de base de datos de una versión anterior de ShellStation.",
     "dataImportDatabaseDetail": "Carpetas: {{folders}}, sesiones: {{sessions}}. Las entradas que ya existen se omiten. Las contraseñas no se incluyen en el archivo.",
-    "dataImportSettingsDetail": "Sobrescribe sus ajustes con los valores del archivo. Los ajustes de seguridad, como bloquear direcciones privadas, solo se pueden activar al importar, nunca desactivar.",
+    "dataImportSettingsDetail": "Sobrescribe sus ajustes con los valores del archivo. Los ajustes de seguridad, como bloquear direcciones privadas o confirmar antes de cerrar una pestaña, solo se pueden activar al importar, nunca desactivar. «Pegar con clic derecho», «Copiar texto al seleccionar» y «Cerrar pestaña al desconectar» solo se pueden desactivar al importar, nunca activar.",
     "dataImportCommandButtonsDetail": "Botones: {{count}}. Se añaden después de sus botones existentes; los duplicados se omiten. Al hacer clic en un botón, su comando se envía a la sesión, donde \\r equivale a Enter; revise cada comando a continuación.",
     "dataImportNotInFile": "No incluido en este archivo.",
     "dataImportAction": "Importar",

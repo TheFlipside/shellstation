@@ -402,7 +402,7 @@
     "dataImportFileInfo": "Skapad med ShellStation {{version}} {{date}}.",
     "dataImportLegacyFile": "Databasexport från en tidigare version av ShellStation.",
     "dataImportDatabaseDetail": "Mappar: {{folders}}, sessioner: {{sessions}}. Poster som redan finns hoppas över. Lösenord ingår inte i filen.",
-    "dataImportSettingsDetail": "Skriver över dina inställningar med värdena i filen. Säkerhetsinställningar, som att blockera privata adresser, kan en import bara slå på, aldrig stänga av.",
+    "dataImportSettingsDetail": "Skriver över dina inställningar med värdena i filen. Säkerhetsinställningar, som att blockera privata adresser eller att bekräfta innan en flik stängs, kan en import bara slå på, aldrig stänga av. \"Klistra in vid högerklick\", \"Kopiera text vid markering\" och \"Stäng flik vid frånkoppling\" kan en import bara stänga av, aldrig slå på.",
     "dataImportCommandButtonsDetail": "Knappar: {{count}}. Läggs till efter dina befintliga knappar; dubbletter hoppas över. Ett klick på en knapp skickar dess kommando till sessionen, där \\r står för Enter, så kontrollera varje kommando nedan.",
     "dataImportNotInFile": "Ingår inte i den här filen.",
     "dataImportAction": "Importera",

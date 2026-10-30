@@ -167,7 +167,7 @@ describe("importSettings", () => {
       uiScale: 110,
       terminalFontFamily: "Fira Code",
       terminalBackgroundColor: "#101010",
-      copyOnSelect: true,
+      openLocalOnStartup: true,
       keepaliveInterval: 30,
     });
     const exported = getExportableSettings();
@@ -234,16 +234,51 @@ describe("importSettings", () => {
     expect(useSettingsStore.getState().uiScale).toBe(125);
   });
 
-  it.each(["restrictPrivateIps", "confirmMultilinePaste", "autoCheckForUpdates"] as const)(
-    "can switch the safety setting %s on, but never off",
+  it.each([
+    "restrictPrivateIps",
+    "confirmMultilinePaste",
+    "autoCheckForUpdates",
+    "confirmOnQuit",
+    "confirmOnCloseTab",
+  ] as const)("can switch the safety setting %s on, but never off", async (key) => {
+    useSettingsStore.setState({ [key]: false });
+    await importSettings({ [key]: true });
+    expect(useSettingsStore.getState()[key]).toBe(true);
+    await importSettings({ [key]: false });
+    expect(useSettingsStore.getState()[key]).toBe(true);
+  });
+
+  it.each(["pasteOnRightClick", "copyOnSelect", "closeOnDisconnect"] as const)(
+    "can switch %s off, but never on",
     async (key) => {
-      useSettingsStore.setState({ [key]: false });
-      await importSettings({ [key]: true });
-      expect(useSettingsStore.getState()[key]).toBe(true);
+      useSettingsStore.setState({ [key]: true });
       await importSettings({ [key]: false });
-      expect(useSettingsStore.getState()[key]).toBe(true);
+      expect(useSettingsStore.getState()[key]).toBe(false);
+      await importSettings({ [key]: true });
+      expect(useSettingsStore.getState()[key]).toBe(false);
     },
   );
+
+  it("leaves out what an export would weaken, even this machine's own", async () => {
+    useSettingsStore.setState({
+      confirmOnQuit: false,
+      confirmOnCloseTab: false,
+      pasteOnRightClick: true,
+      copyOnSelect: true,
+      closeOnDisconnect: true,
+    });
+    const exported = getExportableSettings();
+    useSettingsStore.setState(useSettingsStore.getInitialState(), true);
+
+    await importSettings(exported);
+    expect(useSettingsStore.getState()).toMatchObject({
+      confirmOnQuit: true,
+      confirmOnCloseTab: true,
+      pasteOnRightClick: false,
+      copyOnSelect: false,
+      closeOnDisconnect: false,
+    });
+  });
 
   it("never asks the backend to switch the private-address check off", async () => {
     await importSettings({ restrictPrivateIps: false });

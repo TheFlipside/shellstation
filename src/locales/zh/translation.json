@@ -402,7 +402,7 @@
     "dataImportFileInfo": "由 ShellStation {{version}} 于 {{date}} 创建。",
     "dataImportLegacyFile": "来自早期 ShellStation 版本的数据库导出。",
     "dataImportDatabaseDetail": "文件夹：{{folders}}，会话：{{sessions}}。已存在的条目将被跳过。文件中不包含密码。",
-    "dataImportSettingsDetail": "用文件中的值覆盖当前设置。安全设置（例如阻止私有地址）只能通过导入开启，不会被关闭。",
+    "dataImportSettingsDetail": "用文件中的值覆盖当前设置。安全设置（例如阻止私有地址或关闭标签页前确认）只能通过导入开启，不会被关闭。“右键粘贴”“选择时复制文本”和“断开时关闭标签页”只能通过导入关闭，不会被开启。",
     "dataImportCommandButtonsDetail": "按钮：{{count}} 个。将添加在现有按钮之后；重复项将被跳过。点击按钮会将其命令发送到会话，其中 \\r 表示 Enter，因此请检查下方的每条命令。",
     "dataImportNotInFile": "此文件中不包含此项。",
     "dataImportAction": "导入",

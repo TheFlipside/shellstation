@@ -402,7 +402,7 @@
     "dataImportFileInfo": "Erstellt mit ShellStation {{version}} am {{date}}.",
     "dataImportLegacyFile": "Datenbankexport aus einer früheren ShellStation-Version.",
     "dataImportDatabaseDetail": "Ordner: {{folders}}, Sitzungen: {{sessions}}. Bereits vorhandene Einträge werden übersprungen. Passwörter sind nicht in der Datei enthalten.",
-    "dataImportSettingsDetail": "Überschreibt Ihre Einstellungen mit den Werten aus der Datei. Sicherheitseinstellungen wie das Blockieren privater Adressen kann ein Import nur einschalten, nie ausschalten.",
+    "dataImportSettingsDetail": "Überschreibt Ihre Einstellungen mit den Werten aus der Datei. Sicherheitseinstellungen wie das Blockieren privater Adressen oder die Bestätigung vor dem Schließen eines Tabs kann ein Import nur einschalten, nie ausschalten. „Einfügen per Rechtsklick“, „Text bei Markierung kopieren“ und „Tab bei Verbindungsende schließen“ kann ein Import nur ausschalten, nie einschalten.",
     "dataImportCommandButtonsDetail": "Schaltflächen: {{count}}. Werden nach Ihren vorhandenen Schaltflächen hinzugefügt; Duplikate werden übersprungen. Ein Klick auf eine Schaltfläche sendet ihren Befehl an die Sitzung, wobei \\r für Enter steht. Prüfen Sie daher jeden Befehl unten.",
     "dataImportNotInFile": "In dieser Datei nicht enthalten.",
     "dataImportAction": "Importieren",
