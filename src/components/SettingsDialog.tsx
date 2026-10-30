@@ -2,7 +2,6 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { open, save } from "@tauri-apps/plugin-dialog";
 import { DialogKeys } from "./DialogKeys";
 import { useAppStore } from "../stores/appStore";
 import { useSessionStore } from "../stores/sessionStore";
@@ -488,6 +487,22 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
       setDbCreateLoading(false);
     }
   }, [pgHost, pgPort, pgDatabase, pgUsername, pgPassword, pgSslMode]);
+
+  // The backend opens the file dialog: an existing database, or with
+  // `create` a name for a new one.
+  const handleSqlitePick = useCallback(async (create: boolean) => {
+    setDbError(null);
+    try {
+      const path = await invoke<string | null>("db_pick_sqlite_path", { create });
+      if (path) {
+        setSqlitePath(path);
+        setDbDirty(true);
+        setDbSaved(false);
+      }
+    } catch (e) {
+      setDbError(String(e));
+    }
+  }, []);
 
   const handleDbSave = useCallback(async () => {
     setDbError(null);
@@ -1109,38 +1124,52 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
               </div>
               <div className="dialog-row">
                 <div className="dialog-field-grow">
+                  {/* Read-only: the backend saves only a folder chosen in its
+                      own dialog (Browse), or the default. */}
                   <input
                     id="settings-log-directory"
                     type="text"
                     value={logDirectory}
+                    title={logDirectory || undefined}
                     placeholder={t("settings.loggingDirectoryPlaceholder")}
-                    onChange={(e) => {
-                      setLogDirectory(e.target.value);
-                      setLoggingDirty(true);
-                      setLoggingSaved(false);
-                    }}
+                    readOnly
                   />
                 </div>
                 <button
                   type="button"
                   className="dialog-btn"
                   onClick={() => {
+                    setLoggingError(null);
                     void (async () => {
-                      const path = await open({
-                        title: t("settings.loggingDirectoryLabel"),
-                        defaultPath: logDirectory || undefined,
-                        multiple: false,
-                        directory: true,
-                      });
-                      if (path) {
-                        setLogDirectory(path);
-                        setLoggingDirty(true);
-                        setLoggingSaved(false);
+                      try {
+                        const path = await invoke<string | null>("logging_pick_directory");
+                        if (path) {
+                          setLogDirectory(path);
+                          setLoggingDirty(true);
+                          setLoggingSaved(false);
+                        }
+                      } catch (e) {
+                        setLoggingError(String(e));
                       }
                     })();
                   }}
                 >
                   {t("settings.dbBrowse")}
+                </button>
+                {/* Disabled rather than hidden, so the row does not shift
+                    under the pointer when it is clicked. */}
+                <button
+                  type="button"
+                  className="dialog-btn"
+                  disabled={logDirectory === ""}
+                  onClick={() => {
+                    setLoggingError(null);
+                    setLogDirectory("");
+                    setLoggingDirty(true);
+                    setLoggingSaved(false);
+                  }}
+                >
+                  {t("settings.useDefault")}
                 </button>
               </div>
             </div>
@@ -1213,38 +1242,49 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
               </div>
               <div className="dialog-row">
                 <div className="dialog-field-grow">
+                  {/* Read-only, as for the session log directory above. */}
                   <input
                     id="settings-app-log-directory"
                     type="text"
                     value={appLogDirectory}
+                    title={appLogDirectory || undefined}
                     placeholder={t("settings.appLoggingDirectoryPlaceholder")}
-                    onChange={(e) => {
-                      setAppLogDirectory(e.target.value);
-                      setAppLoggingDirty(true);
-                      setAppLoggingSaved(false);
-                    }}
+                    readOnly
                   />
                 </div>
                 <button
                   type="button"
                   className="dialog-btn"
                   onClick={() => {
+                    setAppLoggingError(null);
                     void (async () => {
-                      const path = await open({
-                        title: t("settings.appLoggingDirectoryLabel"),
-                        defaultPath: appLogDirectory || undefined,
-                        multiple: false,
-                        directory: true,
-                      });
-                      if (path) {
-                        setAppLogDirectory(path);
-                        setAppLoggingDirty(true);
-                        setAppLoggingSaved(false);
+                      try {
+                        const path = await invoke<string | null>("app_logging_pick_directory");
+                        if (path) {
+                          setAppLogDirectory(path);
+                          setAppLoggingDirty(true);
+                          setAppLoggingSaved(false);
+                        }
+                      } catch (e) {
+                        setAppLoggingError(String(e));
                       }
                     })();
                   }}
                 >
                   {t("settings.dbBrowse")}
+                </button>
+                <button
+                  type="button"
+                  className="dialog-btn"
+                  disabled={appLogDirectory === ""}
+                  onClick={() => {
+                    setAppLoggingError(null);
+                    setAppLogDirectory("");
+                    setAppLoggingDirty(true);
+                    setAppLoggingSaved(false);
+                  }}
+                >
+                  {t("settings.useDefault")}
                 </button>
               </div>
             </div>
@@ -1313,36 +1353,22 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
             <label htmlFor="settings-sqlite-path">{t("settings.dbSqlitePathLabel")}</label>
             <div className="dialog-row">
               <div className="dialog-field-grow">
+                {/* Read-only, as for the log directories: the backend saves
+                    only a file chosen in its own dialog, or the default. */}
                 <input
                   id="settings-sqlite-path"
                   type="text"
                   value={sqlitePath}
+                  title={sqlitePath || undefined}
                   placeholder={t("settings.dbSqlitePathPlaceholder")}
-                  onChange={(e) => {
-                    setSqlitePath(e.target.value);
-                    setDbDirty(true);
-                    setDbSaved(false);
-                  }}
+                  readOnly
                 />
               </div>
               <button
                 type="button"
                 className="dialog-btn"
                 onClick={() => {
-                  void (async () => {
-                    const path = await open({
-                      title: t("settings.dbSqlitePathLabel"),
-                      defaultPath: sqlitePath || undefined,
-                      multiple: false,
-                      directory: false,
-                      filters: [{ name: "SQLite", extensions: ["db", "sqlite", "sqlite3"] }],
-                    });
-                    if (path) {
-                      setSqlitePath(path);
-                      setDbDirty(true);
-                      setDbSaved(false);
-                    }
-                  })();
+                  void handleSqlitePick(false);
                 }}
               >
                 {t("settings.dbBrowse")}
@@ -1351,21 +1377,23 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
                 type="button"
                 className="dialog-btn"
                 onClick={() => {
-                  void (async () => {
-                    const path = await save({
-                      title: t("settings.dbCreateNew"),
-                      defaultPath: "sessions.db",
-                      filters: [{ name: "SQLite", extensions: ["db", "sqlite", "sqlite3"] }],
-                    });
-                    if (path) {
-                      setSqlitePath(path);
-                      setDbDirty(true);
-                      setDbSaved(false);
-                    }
-                  })();
+                  void handleSqlitePick(true);
                 }}
               >
                 {t("settings.dbCreateNew")}
+              </button>
+              <button
+                type="button"
+                className="dialog-btn"
+                disabled={sqlitePath === ""}
+                onClick={() => {
+                  setDbError(null);
+                  setSqlitePath("");
+                  setDbDirty(true);
+                  setDbSaved(false);
+                }}
+              >
+                {t("settings.useDefault")}
               </button>
               <span className="settings-help" title={t("settings.dbSqlitePathHint")}>
                 ?

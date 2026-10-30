@@ -431,6 +431,7 @@
     "loggingDirectoryLabel": "Katalog logów",
     "loggingDirectoryPlaceholder": "Domyślny (logs/ w katalogu konfiguracji)",
     "loggingDirectoryHint": "Katalog, w którym będą przechowywane pliki logów sesji.",
+    "useDefault": "Użyj domyślnego",
     "loggingFilenameLabel": "Format nazwy pliku",
     "loggingFilenameHint": "Symbole zastępcze: {name} = nazwa sesji, {mm} = minuta, {hh} = godzina, {dd} = dzień, {MM} = miesiąc, {yy} = rok",
     "loggingSave": "Zapisz ustawienia logowania",

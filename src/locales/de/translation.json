@@ -431,6 +431,7 @@
     "loggingDirectoryLabel": "Protokollverzeichnis",
     "loggingDirectoryPlaceholder": "Standard (logs/ im Konfigurationsverzeichnis)",
     "loggingDirectoryHint": "Verzeichnis, in dem die Sitzungsprotokolldateien gespeichert werden.",
+    "useDefault": "Standard verwenden",
     "loggingFilenameLabel": "Dateinamenformat",
     "loggingFilenameHint": "Platzhalter: {name} = Sitzungsname, {mm} = Minute, {hh} = Stunde, {dd} = Tag, {MM} = Monat, {yy} = Jahr",
     "loggingSave": "Protokolleinstellungen speichern",

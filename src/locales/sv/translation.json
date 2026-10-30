@@ -431,6 +431,7 @@
     "loggingDirectoryLabel": "Loggkatalog",
     "loggingDirectoryPlaceholder": "Standard (logs/ i konfigurationsmappen)",
     "loggingDirectoryHint": "Katalog där sessionsloggfiler lagras.",
+    "useDefault": "Använd standard",
     "loggingFilenameLabel": "Filnamnsformat",
     "loggingFilenameHint": "Platshållare: {name} = sessionsnamn, {mm} = minut, {hh} = timme, {dd} = dag, {MM} = månad, {yy} = år",
     "loggingSave": "Spara logginställningar",

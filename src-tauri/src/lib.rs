@@ -1225,6 +1225,7 @@ pub fn run() {
             commands::get_os_username,
             commands::db_test_connection,
             commands::db_create_database,
+            commands::db_pick_sqlite_path,
             commands::db_save_config,
             commands::db_export,
             commands::data_export_file,
@@ -1252,9 +1253,11 @@ pub fn run() {
             commands::bulk_set_session_login_sequences,
             // Session logging
             commands::logging_get_config,
+            commands::logging_pick_directory,
             commands::logging_save_config,
             // Application logging
             commands::app_logging_get_config,
+            commands::app_logging_pick_directory,
             commands::app_logging_save_config,
             // Connection settings
             commands::connection_get_config,

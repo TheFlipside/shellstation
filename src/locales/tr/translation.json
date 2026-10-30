@@ -431,6 +431,7 @@
     "loggingDirectoryLabel": "Günlük dizini",
     "loggingDirectoryPlaceholder": "Varsayılan (yapılandırma dizininde logs/)",
     "loggingDirectoryHint": "Oturum günlük dosyalarının saklanacağı dizin.",
+    "useDefault": "Varsayılanı kullan",
     "loggingFilenameLabel": "Dosya adı biçimi",
     "loggingFilenameHint": "Yer tutucular: {name} = oturum adı, {mm} = dakika, {hh} = saat, {dd} = gün, {MM} = ay, {yy} = yıl",
     "loggingSave": "Günlük ayarlarını kaydet",

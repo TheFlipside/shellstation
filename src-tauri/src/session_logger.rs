@@ -288,7 +288,7 @@ impl SessionLogManager {
             })
             .collect();
 
-        let filename = self
+        let mut filename = self
             .filename_format
             .replace("{name}", &safe_name)
             .replace("{mm}", &format!("{:02}", now.minute()))
@@ -297,8 +297,15 @@ impl SessionLogManager {
             .replace("{MM}", &format!("{:02}", now.month()))
             .replace("{yy}", &format!("{:02}", now.year() % 100));
 
-        // Reject any substituted filename that could escape the log directory.
-        if filename.contains('/') || filename.contains('\\') || filename.contains("..") {
+        // A session named "COM1" would otherwise have its output written to
+        // a serial port on Windows; the prefix makes it an ordinary file.
+        if is_windows_device_name(&filename) {
+            filename.insert(0, '_');
+        }
+
+        // Reject any substituted filename that could escape the log directory,
+        // including through a drive (`C:x`) or name a stream (`x:y`) on Windows.
+        if filename.contains(['/', '\\', ':']) || filename.contains("..") {
             return Err("Generated log filename contains path traversal characters".to_string());
         }
 
@@ -330,6 +337,33 @@ impl SessionLogManager {
 
         Err("Too many log files with the same name in this minute".to_string())
     }
+}
+
+/// Whether Windows takes `filename` for a device (`CON`, `NUL`, `COM1`, …)
+/// rather than a file. It does so whatever the extension, and ignores
+/// spaces before it. Checked on every platform, so a log keeps its name
+/// when the log directory moves to another system.
+fn is_windows_device_name(filename: &str) -> bool {
+    let stem = filename
+        .split('.')
+        .next()
+        .unwrap_or_default()
+        .trim_end_matches(' ')
+        .to_ascii_uppercase();
+    if matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL") {
+        return true;
+    }
+    let Some(number) = stem
+        .strip_prefix("COM")
+        .or_else(|| stem.strip_prefix("LPT"))
+    else {
+        return false;
+    };
+    let mut chars = number.chars();
+    matches!(
+        (chars.next(), chars.next()),
+        (Some('0'..='9' | '\u{b9}' | '\u{b2}' | '\u{b3}'), None)
+    )
 }
 
 /// Thread-safe wrapper registered as Tauri managed state.
@@ -472,6 +506,55 @@ fn strip_ansi(data: &[u8]) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn windows_device_names_are_recognised() {
+        for name in [
+            "CON.log",
+            "con.txt",
+            "NUL",
+            "aux .log",
+            "COM1.log",
+            "lpt9.log",
+            "COM\u{b9}.log",
+        ] {
+            assert!(is_windows_device_name(name), "{name}");
+        }
+        for name in [
+            "CONSOLE.log",
+            "COM10.log",
+            "lpt9_1.log",
+            "COM.log",
+            "my_CON.log",
+            "router_COM1.log",
+            "",
+        ] {
+            assert!(!is_windows_device_name(name), "{name}");
+        }
+    }
+
+    #[test]
+    fn a_session_named_like_a_device_gets_an_ordinary_log_file() {
+        let dir = std::env::temp_dir().join(format!("ss-devlog-{}", uuid::Uuid::new_v4()));
+        let mgr = SessionLogManager::new(true, dir.clone(), "{name}.log".to_string());
+        assert_eq!(
+            mgr.generate_unique_path("COM1").unwrap(),
+            dir.join("_COM1.log")
+        );
+        assert_eq!(
+            mgr.generate_unique_path("router").unwrap(),
+            dir.join("router.log")
+        );
+    }
+
+    #[test]
+    fn a_format_naming_a_drive_or_stream_is_refused() {
+        let dir = std::env::temp_dir().join(format!("ss-colon-{}", uuid::Uuid::new_v4()));
+        for format in ["C:{name}.log", "{name}.log:x"] {
+            let mgr = SessionLogManager::new(true, dir.clone(), format.to_string());
+            assert!(mgr.generate_unique_path("router").is_err(), "{format}");
+        }
+    }
 
     #[test]
     fn strip_plain_text() {

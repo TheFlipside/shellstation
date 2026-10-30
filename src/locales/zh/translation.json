@@ -431,6 +431,7 @@
     "loggingDirectoryLabel": "日志目录",
     "loggingDirectoryPlaceholder": "默认（配置目录中的 logs/）",
     "loggingDirectoryHint": "会话日志文件的存储目录。",
+    "useDefault": "使用默认",
     "loggingFilenameLabel": "文件名格式",
     "loggingFilenameHint": "占位符：{name} = 会话名, {mm} = 分, {hh} = 时, {dd} = 日, {MM} = 月, {yy} = 年",
     "loggingSave": "保存日志设置",

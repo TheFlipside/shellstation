@@ -431,6 +431,7 @@
     "loggingDirectoryLabel": "ログディレクトリ",
     "loggingDirectoryPlaceholder": "デフォルト (設定ディレクトリのlogs/)",
     "loggingDirectoryHint": "セッションログファイルが保存されるディレクトリ。",
+    "useDefault": "デフォルトに戻す",
     "loggingFilenameLabel": "ファイル名フォーマット",
     "loggingFilenameHint": "プレースホルダー: {name} = セッション名, {mm} = 分, {hh} = 時, {dd} = 日, {MM} = 月, {yy} = 年",
     "loggingSave": "ログ設定を保存",

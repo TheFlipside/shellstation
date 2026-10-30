@@ -431,6 +431,7 @@
     "loggingDirectoryLabel": "Logmap",
     "loggingDirectoryPlaceholder": "Standaard (logs/ in configuratiemap)",
     "loggingDirectoryHint": "Map waar sessielogbestanden worden opgeslagen.",
+    "useDefault": "Standaard gebruiken",
     "loggingFilenameLabel": "Bestandsnaamformaat",
     "loggingFilenameHint": "Plaatshouders: {name} = sessienaam, {mm} = minuut, {hh} = uur, {dd} = dag, {MM} = maand, {yy} = jaar",
     "loggingSave": "Loginstellingen opslaan",

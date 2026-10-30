@@ -7,6 +7,8 @@
 //! the webview names the UI language, so it could pick one the user does
 //! not read. A system language without its own text here gets English.
 
+use super::system_language;
+
 /// One language's dialog text. `keep` is the default button and leaves the
 /// check on, `allow` switches it off, and `cancel` is what closing the
 /// dialog counts as. All three must differ, since the dialog result is told
@@ -201,30 +203,16 @@ static PROMPTS: [(&str, Prompt); 14] = [
 ];
 
 /// The prompt in the operating system's language: the first of the user's
-/// preferred languages that has one, or English. On Linux these come from
-/// `LANGUAGE`, `LC_ALL`, `LC_MESSAGES` and `LANG`, which the app inherits
-/// at launch and never changes, so the webview cannot set them either.
+/// preferred languages that has one, or English. See [`system_language`].
 pub(super) fn for_system_language() -> &'static Prompt {
-    for_languages(sys_locale::get_locales())
+    system_language::lookup(&PROMPTS).unwrap_or(&ENGLISH)
 }
 
 /// The prompt for the first of `languages` (most preferred first) that has
 /// one, or English.
+#[cfg(test)]
 fn for_languages(languages: impl IntoIterator<Item = impl AsRef<str>>) -> &'static Prompt {
-    languages
-        .into_iter()
-        .find_map(|language| for_language(language.as_ref()))
-        .unwrap_or(&ENGLISH)
-}
-
-/// The prompt for a language such as `"de"`, if it has one. A region
-/// (`"pt-BR"`) is ignored.
-fn for_language(language: &str) -> Option<&'static Prompt> {
-    let primary = language.split(['-', '_']).next().unwrap_or_default();
-    PROMPTS
-        .iter()
-        .find(|(code, _)| code.eq_ignore_ascii_case(primary))
-        .map(|(_, prompt)| prompt)
+    system_language::lookup_in(&PROMPTS, languages).unwrap_or(&ENGLISH)
 }
 
 #[cfg(test)]

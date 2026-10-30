@@ -431,6 +431,7 @@
     "loggingDirectoryLabel": "Directory dei log",
     "loggingDirectoryPlaceholder": "Predefinito (logs/ nella directory di configurazione)",
     "loggingDirectoryHint": "Directory dove verranno archiviati i file di log delle sessioni.",
+    "useDefault": "Usa predefinito",
     "loggingFilenameLabel": "Formato nome file",
     "loggingFilenameHint": "Segnaposto: {name} = nome sessione, {mm} = minuto, {hh} = ora, {dd} = giorno, {MM} = mese, {yy} = anno",
     "loggingSave": "Salva impostazioni di registrazione",

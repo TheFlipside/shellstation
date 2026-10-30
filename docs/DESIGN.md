@@ -346,6 +346,7 @@ The command broadcast feature allows sending predefined commands to one or more 
 ### 5.5 Session Logging
 
 - Optional per-session logging to local files with configurable log directory.
+- **Where logs go:** A log holds what the remote host sends, so the webview cannot choose where it is written. A new log directory, like the application log's directory and the SQLite database file, is chosen in a dialog the backend opens. The backend words that dialog itself, in the operating system's language, and opens it in the current location. Saving accepts only the default, the path already configured, or a choice made in the last ten minutes. The filename format allows letters, digits, spaces, `- _ . ( )` and the placeholders, and must end in `.log` or `.txt`. A format in the config file that breaks these rules is replaced by the default at startup. A log whose name would be a Windows device name (`CON`, `COM1`, …) gets a `_` in front.
 - **Formats:** Raw terminal output or stripped plain text (ANSI escape codes removed).
 - **Rotation:** Configurable max log size with automatic rotation.
 

@@ -200,6 +200,61 @@ fn default_log_filename_format() -> String {
     "{name}_{mm}-{hh}_{dd}{MM}{yy}.log".to_string()
 }
 
+/// The placeholders the session logger fills in (see
+/// `SessionLogManager::generate_unique_path`).
+const FILENAME_PLACEHOLDERS: [&str; 6] = ["{name}", "{mm}", "{hh}", "{dd}", "{MM}", "{yy}"];
+
+/// Characters a filename format may hold besides letters, digits and the
+/// placeholders.
+const FILENAME_PUNCTUATION: &str = " -_.()";
+
+/// Longest filename format allowed, in characters, before the placeholders
+/// are filled in.
+const MAX_FILENAME_FORMAT_LEN: usize = 100;
+
+impl LoggingConfig {
+    /// Validate a filename format template: letters, digits, spaces,
+    /// `-_.()` and the placeholders only, not starting with a dot or a
+    /// space, and ending in `.log` or `.txt`. The webview chooses the format and the
+    /// logger appends text the remote host sends, so it must not be able to
+    /// name a file something would run or read as configuration. A session
+    /// name goes in as letters, digits and `-_.` only.
+    pub fn validate_filename_format(fmt: &str) -> Result<(), String> {
+        if fmt.is_empty() {
+            return Err("Filename format must not be empty".to_string());
+        }
+        if fmt.chars().count() > MAX_FILENAME_FORMAT_LEN {
+            return Err(format!(
+                "Filename format is too long (max {MAX_FILENAME_FORMAT_LEN} characters)"
+            ));
+        }
+        let mut rest = fmt;
+        while let Some(c) = rest.chars().next() {
+            if let Some(placeholder) = FILENAME_PLACEHOLDERS.iter().find(|p| rest.starts_with(*p)) {
+                rest = &rest[placeholder.len()..];
+            } else if c.is_alphanumeric() || FILENAME_PUNCTUATION.contains(c) {
+                rest = &rest[c.len_utf8()..];
+            } else {
+                return Err(format!(
+                    "Filename format must not contain {c:?}: use letters, digits, spaces, \
+                     - _ . ( ) and the placeholders"
+                ));
+            }
+        }
+        // Windows treats a name starting with a space inconsistently.
+        if fmt.starts_with(['.', ' ']) || fmt.contains("..") {
+            return Err(
+                "Filename format must not start with '.' or a space, or contain '..'".to_string(),
+            );
+        }
+        let lower = fmt.to_lowercase();
+        if !(lower.ends_with(".log") || lower.ends_with(".txt")) {
+            return Err("Filename format must end in .log or .txt".to_string());
+        }
+        Ok(())
+    }
+}
+
 impl Default for LoggingConfig {
     fn default() -> Self {
         Self {
@@ -409,6 +464,17 @@ pub fn load_config(config_dir: &Path) -> AppConfig {
         );
     }
 
+    // A format saved before the format rules existed, possibly by a
+    // compromised webview, could name a file such as `x.bat`.
+    if let Err(e) = LoggingConfig::validate_filename_format(&config.logging.filename_format) {
+        tracing::warn!(
+            "{} holds a session log filename format the app no longer accepts ({e}) — \
+             using the default",
+            path.display()
+        );
+        config.logging.filename_format = default_log_filename_format();
+    }
+
     // Populate PostgreSQL password from OS keychain.
     if config.db_backend == DbBackend::Postgres {
         match crate::credentials::retrieve(PG_PASSWORD_KEYCHAIN_REF) {
@@ -503,6 +569,72 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("shellstation-test-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn the_default_filename_format_is_valid() {
+        let default = LoggingConfig::default().filename_format;
+        assert_eq!(LoggingConfig::validate_filename_format(&default), Ok(()));
+        for fmt in [
+            "{name}.txt",
+            "Session {name} ({dd}.{MM}.{yy}).LOG",
+            "sitzung-ä_{hh}{mm}.log",
+        ] {
+            assert_eq!(
+                LoggingConfig::validate_filename_format(fmt),
+                Ok(()),
+                "{fmt}"
+            );
+        }
+    }
+
+    #[test]
+    fn filename_formats_that_name_other_files_are_refused() {
+        for fmt in [
+            "",
+            "{name}",
+            "{name}.bat",
+            "{name}.log.bat",
+            "{name}.ps1",
+            ".bashrc",
+            ".log",
+            " {name}.log",
+            "{name}..log",
+            "../{name}.log",
+            "logs/{name}.log",
+            "logs\\{name}.log",
+            "C:{name}.log",
+            "{name}:stream.log",
+            "{name}\u{202e}gol.exe",
+            "{name}\n.log",
+            "{other}.log",
+            "{name.log",
+            "$name.log",
+        ] {
+            assert!(
+                LoggingConfig::validate_filename_format(fmt).is_err(),
+                "{fmt:?}"
+            );
+        }
+        let long = format!("{}.log", "a".repeat(MAX_FILENAME_FORMAT_LEN));
+        assert!(LoggingConfig::validate_filename_format(&long).is_err());
+    }
+
+    #[test]
+    fn a_saved_filename_format_the_rules_refuse_gets_the_default() {
+        let dir = scratch_dir();
+        std::fs::write(
+            dir.join("config.json"),
+            r#"{"logging":{"enabled":true,"filename_format":"{name}.bat"}}"#,
+        )
+        .unwrap();
+        let config = load_config(&dir);
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert!(config.logging.enabled);
+        assert_eq!(
+            config.logging.filename_format,
+            LoggingConfig::default().filename_format
+        );
     }
 
     #[test]

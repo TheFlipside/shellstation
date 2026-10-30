@@ -1,9 +1,13 @@
 use std::collections::{HashMap, HashSet};
-use std::time::Duration;
+use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use sqlx::postgres::PgPoolOptions;
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, State, Window};
 use uuid::Uuid;
+
+use super::path_dialog::{self, FileDialog, PickSlot};
+use super::path_dialog_text;
 
 use crate::config::{self, AppConfig, ConfigState, DbBackend, PostgresConfig};
 use crate::db::models::{
@@ -263,8 +267,64 @@ pub async fn db_create_database(
     Ok("ok".to_string())
 }
 
+/// The `SQLite` file the user last chose in [`db_pick_sqlite_path`]. The
+/// webview cannot name one of its own: the app creates the database where
+/// the path points, so a compromised webview could have it created in, say,
+/// a Startup folder (see [`path_dialog`]).
+static SQLITE_PATH: PickSlot =
+    PickSlot::new("Choose a new database file with Browse or Create New");
+
+/// File name the dialog suggests for a new database.
+const DEFAULT_SQLITE_FILE_NAME: &str = "sessions.db";
+
+/// Let the user choose the `SQLite` database file in a native dialog: an
+/// existing one, or, with `create`, a name for a new one. Returns the path,
+/// which `db_save_config` then accepts, or `None` if the user cancelled.
+#[tauri::command]
+pub async fn db_pick_sqlite_path(
+    window: Window,
+    state: State<'_, ConfigState>,
+    create: bool,
+) -> Result<Option<String>, String> {
+    let configured = state
+        .config
+        .lock()
+        .map_err(|e| format!("Config lock poisoned: {e}"))?
+        .sqlite_path
+        .clone();
+    // The folder of the configured database, or of the default one.
+    let start = configured
+        .map(PathBuf::from)
+        .filter(|p| p.is_absolute())
+        .and_then(|p| p.parent().map(Path::to_path_buf))
+        .or_else(|| state.config_path.parent().map(Path::to_path_buf))
+        .unwrap_or_default();
+    let titles = path_dialog_text::for_system_language();
+    let (title, kind) = if create {
+        (
+            titles.create_database,
+            FileDialog::Create {
+                name: DEFAULT_SQLITE_FILE_NAME,
+            },
+        )
+    } else {
+        (titles.open_database, FileDialog::Open)
+    };
+    path_dialog::choose_file(
+        &window,
+        title,
+        &start,
+        ("SQLite", &["db", "sqlite", "sqlite3"]),
+        kind,
+        &SQLITE_PATH,
+    )
+    .await
+}
+
 /// Persist the database configuration and rotate the `PostgreSQL` password
-/// in the `OS` keychain.
+/// in the `OS` keychain. `sqlite_path` must be the default (`None` or
+/// empty), the path already configured, or the file just chosen with
+/// [`db_pick_sqlite_path`].
 ///
 /// ## Why this function is large
 ///
@@ -303,6 +363,23 @@ pub async fn db_save_config(
 
     // Normalize empty string to None so the config file stays clean.
     let sqlite_path = sqlite_path.filter(|p| !p.trim().is_empty());
+
+    // Checked before the keychain is touched; checked again, and the choice
+    // forgotten, when the config is written below. Both checks use the same
+    // time, so a choice cannot expire in between and leave the keychain
+    // changed but the config not.
+    let checked_at = Instant::now();
+    let configured_sqlite_path = state
+        .config
+        .lock()
+        .map_err(|e| format!("Config lock poisoned: {e}"))?
+        .sqlite_path
+        .clone();
+    SQLITE_PATH.check(
+        sqlite_path.as_deref(),
+        configured_sqlite_path.as_deref(),
+        checked_at,
+    )?;
 
     // Validate the custom SQLite path before persisting.
     if let Some(ref path_str) = sqlite_path {
@@ -411,7 +488,12 @@ pub async fn db_save_config(
         connection: config.connection.clone(),
     };
 
-    config::save_config(&state.config_path, &new_config)?;
+    SQLITE_PATH.save_with(
+        new_config.sqlite_path.as_deref(),
+        config.sqlite_path.as_deref(),
+        checked_at,
+        || config::save_config(&state.config_path, &new_config),
+    )?;
     *config = new_config;
 
     Ok(())

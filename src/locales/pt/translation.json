@@ -431,6 +431,7 @@
     "loggingDirectoryLabel": "Diretório de logs",
     "loggingDirectoryPlaceholder": "Padrão (logs/ no diretório de configuração)",
     "loggingDirectoryHint": "Diretório onde os arquivos de log de sessão serão armazenados.",
+    "useDefault": "Usar padrão",
     "loggingFilenameLabel": "Formato do nome do arquivo",
     "loggingFilenameHint": "Marcadores: {name} = nome da sessão, {mm} = minuto, {hh} = hora, {dd} = dia, {MM} = mês, {yy} = ano",
     "loggingSave": "Salvar configurações de log",

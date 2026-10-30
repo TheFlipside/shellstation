@@ -6,11 +6,14 @@ mod database;
 mod highlight;
 mod logging;
 mod login_sequence;
+mod path_dialog;
+mod path_dialog_text;
 mod pty;
 mod session;
 mod session_credentials;
 mod session_login_sequences;
 mod ssh;
+mod system_language;
 mod telnet;
 
 pub use connection::*;

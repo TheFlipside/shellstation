@@ -431,6 +431,7 @@
     "loggingDirectoryLabel": "Каталог журналов",
     "loggingDirectoryPlaceholder": "По умолчанию (logs/ в каталоге конфигурации)",
     "loggingDirectoryHint": "Каталог для хранения файлов журналов сессий.",
+    "useDefault": "Использовать по умолчанию",
     "loggingFilenameLabel": "Формат имени файла",
     "loggingFilenameHint": "Заполнители: {name} = имя сессии, {mm} = минуты, {hh} = часы, {dd} = день, {MM} = месяц, {yy} = год",
     "loggingSave": "Сохранить настройки журналирования",

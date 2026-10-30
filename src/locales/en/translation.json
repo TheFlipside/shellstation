@@ -432,6 +432,7 @@
     "loggingDirectoryLabel": "Log directory",
     "loggingDirectoryPlaceholder": "Default (logs/ in config directory)",
     "loggingDirectoryHint": "Directory where session log files will be stored.",
+    "useDefault": "Use Default",
     "loggingFilenameLabel": "Filename format",
     "loggingFilenameHint": "Placeholders: {name} = session name, {mm} = minute, {hh} = hour, {dd} = day, {MM} = month, {yy} = year",
     "loggingSave": "Save Logging Settings",

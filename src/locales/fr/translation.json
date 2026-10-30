@@ -431,6 +431,7 @@
     "loggingDirectoryLabel": "Répertoire des journaux",
     "loggingDirectoryPlaceholder": "Par défaut (logs/ dans le répertoire de configuration)",
     "loggingDirectoryHint": "Répertoire où les fichiers journaux de session seront stockés.",
+    "useDefault": "Utiliser par défaut",
     "loggingFilenameLabel": "Format du nom de fichier",
     "loggingFilenameHint": "Espaces réservés : {name} = nom de session, {mm} = minute, {hh} = heure, {dd} = jour, {MM} = mois, {yy} = année",
     "loggingSave": "Enregistrer les paramètres de journalisation",

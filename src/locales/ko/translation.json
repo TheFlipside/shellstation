@@ -431,6 +431,7 @@
     "loggingDirectoryLabel": "로그 디렉토리",
     "loggingDirectoryPlaceholder": "기본값 (설정 디렉토리의 logs/)",
     "loggingDirectoryHint": "세션 로그 파일이 저장될 디렉토리.",
+    "useDefault": "기본값 사용",
     "loggingFilenameLabel": "파일명 형식",
     "loggingFilenameHint": "자리표시자: {name} = 세션명, {mm} = 분, {hh} = 시, {dd} = 일, {MM} = 월, {yy} = 년",
     "loggingSave": "로깅 설정 저장",
