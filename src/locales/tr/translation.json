@@ -420,6 +420,7 @@
     "security": "Güvenlik",
     "restrictPrivateIpsLabel": "Özel/loopback adreslere bağlantıları engelle",
     "restrictPrivateIpsHint": "Etkinleştirildiğinde loopback (127.x), link-local ve özel RFC 1918 (10.x, 172.16-31.x, 192.168.x) adreslerine SSH bağlantıları engellenir. Yerel ağınızdaki sunuculara bağlanıyorsanız devre dışı bırakın.",
+    "restrictPrivateIpsNotHandedOver": "Özel ve loopback adreslere yapılan bağlantılar engellenmiyor. ShellStation'ın önceki sürümü bunları engelliyordu, ancak bu ayar kaydedilemedi. Bir sonraki başlatmada yeniden denenecek. Şimdi engellemek için Ayarlar → {{section}} altında \"{{setting}}\" seçeneğini açın.",
     "importExternal": "Harici araçlardan içe aktar",
     "importMremoteng": "mRemoteNG’yi içe aktar",
     "importSecurecrt": "SecureCRT’yi içe aktar",

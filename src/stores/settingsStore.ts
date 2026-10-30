@@ -213,7 +213,16 @@ function stashLegacyConnectionSettings(state: Readonly<Record<string, unknown>>)
   }
 }
 
-function readParkedConnectionSettings(): Record<string, unknown> | null {
+/**
+ * What parked settings that cannot be read stand for. They may have held an
+ * "on" for the private-address check, so the check fails closed, as the
+ * backend's does for a damaged config.json; nothing else is handed over.
+ */
+const UNREADABLE_PARKED_SETTINGS: Readonly<Record<string, unknown>> = {
+  restrictPrivateIps: true,
+};
+
+function readParkedConnectionSettings(): Readonly<Record<string, unknown>> | null {
   let raw: string | null = null;
   try {
     raw = localStorage.getItem(LEGACY_CONNECTION_KEY);
@@ -221,12 +230,32 @@ function readParkedConnectionSettings(): Record<string, unknown> | null {
     // No storage: fall back to the copy kept in memory.
   }
   if (raw === null) return parkedConnectionSettings;
+  let parsed: unknown = null;
   try {
-    const parsed: unknown = JSON.parse(raw);
-    return typeof parsed === "object" && parsed !== null ? (parsed as Record<string, unknown>) : {};
+    parsed = JSON.parse(raw);
   } catch {
-    // Unreadable: there is nothing to hand over.
-    return {};
+    // Unreadable: handled below.
+  }
+  if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
+    return parsed as Record<string, unknown>;
+  }
+  // The copy in memory is the same data, if this launch parked it.
+  return parkedConnectionSettings ?? UNREADABLE_PARKED_SETTINGS;
+}
+
+/**
+ * What `handOverLegacyConnectionSettings` rejects with when the backend
+ * failed to switch on the private-address check an older version had on.
+ * Its message is fixed, so that showing it never shows the backend's words.
+ */
+export class PrivateIpCheckHandOverError extends Error {
+  /** What the backend failed with, for the developer. */
+  readonly reason: unknown;
+
+  constructor(reason: unknown) {
+    super("Could not switch on the private-address check");
+    this.name = "PrivateIpCheckHandOverError";
+    this.reason = reason;
   }
 }
 
@@ -235,9 +264,10 @@ let handOverInFlight: Promise<void> | null = null;
 /**
  * Give the backend the connection settings an older version left in
  * localStorage, if any. Call once at startup, before
- * `loadConnectionSettings`. If it fails, an older "on" for the private-address
- * check has not reached the backend yet, so the caller should say so; it is
- * tried again on the next launch.
+ * `loadConnectionSettings`; `startUpConnectionSettings` does both. If it
+ * fails, it is tried again on the next launch, and if what failed was an
+ * older "on" for the private-address check, it rejects with
+ * `PrivateIpCheckHandOverError`.
  */
 export function handOverLegacyConnectionSettings(): Promise<void> {
   // React's StrictMode runs the startup effect twice in development.
@@ -254,7 +284,11 @@ async function handOver(): Promise<void> {
   // user's confirmation, and off is the backend's default anyway, so
   // nothing written to this key can weaken it.
   if (legacy.restrictPrivateIps === true) {
-    await invoke("connection_set_restrict_private_ips", { enabled: true });
+    try {
+      await invoke("connection_set_restrict_private_ips", { enabled: true });
+    } catch (err) {
+      throw new PrivateIpCheckHandOverError(err);
+    }
   }
   const { keepaliveInterval, keepaliveMax } = legacy;
   // Older versions stored up to 3600 s but connected with at most 300 s, so
@@ -588,6 +622,51 @@ export async function loadConnectionSettings(): Promise<void> {
     keepaliveInterval: config.keepalive_interval_secs,
     keepaliveMax: config.keepalive_max,
   });
+}
+
+/** What `startUpConnectionSettings` found. */
+export interface ConnectionStartup {
+  /** Failures to show the user, oldest first. */
+  errors: unknown[];
+  /**
+   * An older version had the private-address check on, the backend could
+   * not take it, and the check is off (or the backend could not say). The
+   * user must be told in plain words, in a notice that stays.
+   */
+  privateIpCheckOff: boolean;
+}
+
+/**
+ * At startup: hand over the connection settings an older version left in
+ * localStorage, then fill the store with the backend's. Never rejects.
+ */
+export async function startUpConnectionSettings(): Promise<ConnectionStartup> {
+  const errors: unknown[] = [];
+  let checkNotHandedOver = false;
+  try {
+    await handOverLegacyConnectionSettings();
+  } catch (err) {
+    if (err instanceof PrivateIpCheckHandOverError) {
+      // The notice says what this means; the backend's words are for a developer.
+      // eslint-disable-next-line no-console -- diagnostic detail goes to devtools, not the UI
+      console.warn("could not switch on the private-address check:", err.reason);
+      checkNotHandedOver = true;
+    } else {
+      errors.push(err);
+    }
+  }
+  let loaded = false;
+  try {
+    await loadConnectionSettings();
+    loaded = true;
+  } catch (err) {
+    errors.push(err);
+  }
+  // The check can be on anyway, if this version ran before and an older one
+  // since: then nothing was lost.
+  const privateIpCheckOff =
+    checkNotHandedOver && (!loaded || !useSettingsStore.getState().restrictPrivateIps);
+  return { errors, privateIpCheckOff };
 }
 
 // ── Data export / import ─────────────────────────────────────────────────

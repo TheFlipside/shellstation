@@ -9,7 +9,7 @@ function ToastItem({ toast }: { toast: Toast }): React.JSX.Element {
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
-    if (autoDismiss && dismissSeconds > 0) {
+    if (!toast.sticky && autoDismiss && dismissSeconds > 0) {
       timerRef.current = setTimeout(() => {
         removeToast(toast.id);
       }, dismissSeconds * 1000);
@@ -19,7 +19,7 @@ function ToastItem({ toast }: { toast: Toast }): React.JSX.Element {
         clearTimeout(timerRef.current);
       }
     };
-  }, [autoDismiss, dismissSeconds, removeToast, toast.id]);
+  }, [autoDismiss, dismissSeconds, removeToast, toast.id, toast.sticky]);
 
   return (
     <div className={`toast toast-${toast.level}`}>

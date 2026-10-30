@@ -420,6 +420,7 @@
     "security": "安全",
     "restrictPrivateIpsLabel": "阻止连接到私有/回环地址",
     "restrictPrivateIpsHint": "启用后，将阻止到回环 (127.x)、链路本地和 RFC 1918 私有地址 (10.x, 172.16-31.x, 192.168.x) 的 SSH 连接。如果连接本地网络中的主机，请禁用此选项。",
+    "restrictPrivateIpsNotHandedOver": "未阻止到私有地址和回环地址的连接。之前版本的 ShellStation 会阻止这些连接，但该设置未能保存。下次启动时将重试。如需立即阻止，请在“设置 → {{section}}”中启用“{{setting}}”。",
     "importExternal": "从外部工具导入",
     "importMremoteng": "导入 mRemoteNG",
     "importSecurecrt": "导入 SecureCRT",

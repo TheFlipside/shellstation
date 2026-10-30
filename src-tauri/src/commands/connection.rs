@@ -242,8 +242,13 @@ pub async fn connection_set_restrict_private_ips(
     }
     // Saved even if the check was switched on while the dialog was open:
     // the user has just confirmed switching it off.
+    // A failure is logged here: when an older "on" is handed over at
+    // startup, the webview tells the user the check is off, not why.
     let connection = update(&state, |connection| {
         connection.restrict_private_ips = enabled;
+    })
+    .inspect_err(|e| {
+        tracing::warn!(enabled, error = %e, "Could not save the private-address check");
     })?;
     tracing::info!(
         restrict_private_ips = connection.restrict_private_ips,

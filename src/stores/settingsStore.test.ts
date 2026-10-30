@@ -22,6 +22,8 @@ import {
   importCommandButtons,
   importSettings,
   loadConnectionSettings,
+  PrivateIpCheckHandOverError,
+  startUpConnectionSettings,
   useSettingsStore,
   type CommandButton,
 } from "./settingsStore";
@@ -354,10 +356,17 @@ describe("connection settings", () => {
       localStorage.setItem(SETTINGS_KEY, JSON.stringify({ state, version: 0 }));
     }
 
-    /** What App.tsx does at startup. */
-    async function startUp(): Promise<void> {
+    // The store keeps parked settings in memory too. Hand over whatever a
+    // failing test left there, so the next test starts without any.
+    afterEach(async () => {
+      localStorage.clear();
+      invokeMock.mockImplementation(fakeBackend);
       await handOverLegacyConnectionSettings();
-      await loadConnectionSettings();
+    });
+
+    /** What App.tsx does at startup, which here must find nothing to report. */
+    async function startUp(): Promise<void> {
+      expect(await startUpConnectionSettings()).toEqual({ errors: [], privateIpCheckOff: false });
     }
 
     it("move to the backend", async () => {
@@ -435,8 +444,12 @@ describe("connection settings", () => {
       invokeMock.mockImplementation(
         backendFailing("connection_set_restrict_private_ips", "config locked"),
       );
-      // Rejected, so that startup can tell the user.
-      await expect(handOverLegacyConnectionSettings()).rejects.toThrow("config locked");
+      // Rejected as such, so that startup can tell the user the check is off,
+      // with the backend's words kept for the log but out of the message.
+      const handOver = handOverLegacyConnectionSettings();
+      await expect(handOver).rejects.toThrow(PrivateIpCheckHandOverError);
+      await expect(handOver).rejects.not.toThrow("config locked");
+      await expect(handOver).rejects.toHaveProperty("reason.message", "config locked");
       expect(backend.connection.restrict_private_ips).toBe(false);
       expect(localStorage.getItem(LEGACY_KEY)).not.toBeNull();
 
@@ -444,6 +457,99 @@ describe("connection settings", () => {
       await startUp();
       expect(backend.connection.restrict_private_ips).toBe(true);
       expect(localStorage.getItem(LEGACY_KEY)).toBeNull();
+    });
+
+    describe("when the backend cannot switch the check on", () => {
+      const warn = vi.fn();
+
+      beforeEach(async () => {
+        storeLegacy({ restrictPrivateIps: true, connectTimeout: 30 });
+        await useSettingsStore.persist.rehydrate();
+        warn.mockReset();
+        vi.spyOn(console, "warn").mockImplementation(warn);
+        invokeMock.mockImplementation(
+          backendFailing("connection_set_restrict_private_ips", "Failed to write config: denied"),
+        );
+      });
+
+      it("say the check is off instead of showing the backend's error", async () => {
+        expect(await startUpConnectionSettings()).toEqual({
+          errors: [],
+          privateIpCheckOff: true,
+        });
+        expect(useSettingsStore.getState().restrictPrivateIps).toBe(false);
+        expect(localStorage.getItem(LEGACY_KEY)).not.toBeNull();
+        // The backend's words go to devtools only.
+        expect(warn).toHaveBeenCalledWith(
+          expect.stringContaining("private-address check"),
+          new Error("Failed to write config: denied"),
+        );
+      });
+
+      it("say nothing of it when the check is on anyway", async () => {
+        backend.connection.restrict_private_ips = true;
+        expect(await startUpConnectionSettings()).toEqual({
+          errors: [],
+          privateIpCheckOff: false,
+        });
+        expect(useSettingsStore.getState().restrictPrivateIps).toBe(true);
+      });
+
+      it("say the check is off when the backend cannot tell either", async () => {
+        invokeMock.mockImplementation((cmd) =>
+          Promise.reject(new Error(`${cmd}: config lock poisoned`)),
+        );
+        const { errors, privateIpCheckOff } = await startUpConnectionSettings();
+        expect(privateIpCheckOff).toBe(true);
+        expect(errors.map(String)).toEqual(["Error: connection_get_config: config lock poisoned"]);
+      });
+    });
+
+    it("report other failures as they are, with the check on", async () => {
+      storeLegacy({ restrictPrivateIps: true, connectTimeout: 30 });
+      await useSettingsStore.persist.rehydrate();
+      invokeMock.mockImplementation(backendFailing("connection_save_config", "disk full"));
+
+      const { errors, privateIpCheckOff } = await startUpConnectionSettings();
+      expect(privateIpCheckOff).toBe(false);
+      expect(errors.map(String)).toEqual(["Error: disk full"]);
+      expect(useSettingsStore.getState().restrictPrivateIps).toBe(true);
+      // Tried again on the next launch.
+      expect(localStorage.getItem(LEGACY_KEY)).not.toBeNull();
+    });
+
+    it("report a failed load, with no word of the check when it was handed over", async () => {
+      storeLegacy({ restrictPrivateIps: true });
+      await useSettingsStore.persist.rehydrate();
+      invokeMock.mockImplementation(backendFailing("connection_get_config", "lock poisoned"));
+
+      const { errors, privateIpCheckOff } = await startUpConnectionSettings();
+      expect(privateIpCheckOff).toBe(false);
+      expect(errors.map(String)).toEqual(["Error: lock poisoned"]);
+      expect(backend.connection.restrict_private_ips).toBe(true);
+    });
+
+    it.each([
+      ["not JSON", "{not json"],
+      ["not an object", "[true]"],
+    ])("switch the check on when what was parked is %s", async (_, parked) => {
+      localStorage.setItem(LEGACY_KEY, parked);
+      await startUp();
+      // Only the check, which fails closed; nothing else is guessed.
+      expect(callsTo("connection_set_restrict_private_ips")).toStrictEqual([{ enabled: true }]);
+      expect(callsTo("connection_save_config")).toEqual([]);
+      expect(backend.connection).toEqual({ ...DEFAULT_CONNECTION, restrict_private_ips: true });
+      expect(localStorage.getItem(LEGACY_KEY)).toBeNull();
+    });
+
+    it("prefer this launch's own copy to a parked one that cannot be read", async () => {
+      storeLegacy({ connectTimeout: 30 });
+      await useSettingsStore.persist.rehydrate();
+      localStorage.setItem(LEGACY_KEY, "{damaged");
+      await startUp();
+      // What this launch read: a timeout, and no word of the check.
+      expect(callsTo("connection_set_restrict_private_ips")).toEqual([]);
+      expect(callsTo("connection_save_config")).toEqual([{ connectTimeoutSecs: 30 }]);
     });
 
     it("still move when localStorage refuses to park them", async () => {

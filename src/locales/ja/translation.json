@@ -420,6 +420,7 @@
     "security": "セキュリティ",
     "restrictPrivateIpsLabel": "プライベート/ループバックアドレスへの接続をブロック",
     "restrictPrivateIpsHint": "有効にすると、ループバック (127.x)、リンクローカル、RFC 1918プライベートアドレス (10.x, 172.16-31.x, 192.168.x) へのSSH接続がブロックされます。ローカルネットワークのホストに接続する場合は無効にしてください。",
+    "restrictPrivateIpsNotHandedOver": "プライベートアドレスとループバックアドレスへの接続はブロックされていません。以前のバージョンの ShellStation ではブロックしていましたが、その設定を保存できませんでした。次回の起動時に再試行します。今すぐブロックするには、設定 → {{section}} で「{{setting}}」を有効にしてください。",
     "importExternal": "外部ツールからインポート",
     "importMremoteng": "mRemoteNGをインポート",
     "importSecurecrt": "SecureCRTをインポート",

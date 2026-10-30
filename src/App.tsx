@@ -12,12 +12,9 @@ import { ToastContainer } from "./components/ToastContainer";
 import { UpdateDialog } from "./components/UpdateDialog";
 import { UserIdentDialog } from "./components/UserIdentDialog";
 import { useTheme } from "./hooks/useTheme";
+import { showPrivateIpCheckOffNotice } from "./privateIpCheckNotice";
 import { useAppStore } from "./stores/appStore";
-import {
-  handOverLegacyConnectionSettings,
-  loadConnectionSettings,
-  useSettingsStore,
-} from "./stores/settingsStore";
+import { startUpConnectionSettings, useSettingsStore } from "./stores/settingsStore";
 import { useTerminalStore } from "./stores/terminalStore";
 import { useToastStore } from "./stores/toastStore";
 
@@ -40,16 +37,24 @@ function App(): React.JSX.Element {
   const dragging = useRef(false);
 
   // The connection settings live in the backend. Hand over any that an older
-  // version kept in localStorage, then show the backend's. Either failure is
-  // shown: the first may mean the private-address check is not on yet.
+  // version kept in localStorage, then show the backend's. Failures are
+  // shown, and an older "on" for the private-address check that did not
+  // reach the backend gets a notice of its own.
   useEffect(() => {
-    const reportError = (err: unknown): void => {
-      useToastStore.getState().addToast(String(err), "error");
+    // StrictMode runs this twice in development; only the second run reports.
+    let active = true;
+    let dismissNotice: (() => void) | undefined;
+    void startUpConnectionSettings().then(({ errors, privateIpCheckOff }) => {
+      if (!active) return;
+      const { addToast } = useToastStore.getState();
+      for (const err of errors) addToast(String(err), "error");
+      if (privateIpCheckOff) dismissNotice = showPrivateIpCheckOffNotice();
+    });
+    return () => {
+      active = false;
+      // A remount shows it again if it still applies.
+      dismissNotice?.();
     };
-    void handOverLegacyConnectionSettings()
-      .catch(reportError)
-      .then(loadConnectionSettings)
-      .catch(reportError);
   }, []);
 
   // Check DB status on mount and populate app store

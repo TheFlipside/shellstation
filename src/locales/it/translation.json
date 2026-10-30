@@ -420,6 +420,7 @@
     "security": "Sicurezza",
     "restrictPrivateIpsLabel": "Blocca connessioni a indirizzi privati/loopback",
     "restrictPrivateIpsHint": "Quando attivato, le connessioni SSH a indirizzi loopback (127.x), link-local e privati RFC 1918 (10.x, 172.16-31.x, 192.168.x) vengono bloccate. Disattiva se ti connetti a host nella tua rete locale.",
+    "restrictPrivateIpsNotHandedOver": "Le connessioni a indirizzi privati e di loopback non sono bloccate. La versione precedente di ShellStation le bloccava, ma non è stato possibile salvare questa impostazione. Si riproverà al prossimo avvio. Per bloccarle subito, attiva \"{{setting}}\" in Impostazioni → {{section}}.",
     "importExternal": "Importa da strumenti esterni",
     "importMremoteng": "Importa mRemoteNG",
     "importSecurecrt": "Importa SecureCRT",
