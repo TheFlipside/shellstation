@@ -37,7 +37,7 @@ static PROMPT_OPEN: AtomicBool = AtomicBool::new(false);
 /// [`MAX_DECLINE_COOLDOWN`]. A compromised webview could otherwise reopen
 /// the dialog the moment it closes, until a click lands on the wrong button.
 const DECLINE_COOLDOWN: Duration = Duration::from_secs(30);
-const MAX_DECLINE_COOLDOWN: Duration = Duration::from_secs(3600);
+const MAX_DECLINE_COOLDOWN: Duration = Duration::from_hours(1);
 
 /// How often, and when last, the user chose to keep the check on.
 #[derive(Debug, Clone, Copy)]

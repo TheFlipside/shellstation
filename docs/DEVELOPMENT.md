@@ -134,6 +134,8 @@ cargo --version
 rustup --version
 ```
 
+ShellStation needs Rust 1.94 or newer, the `rust-version` in `src-tauri/Cargo.toml`. Cargo refuses to build it with an older toolchain; `rustup update` fixes that.
+
 ### Install required components
 
 ```bash

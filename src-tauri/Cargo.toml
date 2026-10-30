@@ -4,6 +4,10 @@ version = "0.30.0"
 description = "Cross-Platform Terminal Manager & SSH Client"
 authors = ["LuminaApps"]
 edition = "2021"
+# The highest rust-version the locked dependencies declare: sqlx 0.9 needs
+# 1.94. Raise it with any update that needs more; cargo then refuses older
+# toolchains, and clippy flags APIs newer than this.
+rust-version = "1.94"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 

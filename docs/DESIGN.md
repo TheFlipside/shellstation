@@ -441,7 +441,7 @@ The repository follows standard Tauri 2.x conventions with a clear separation of
 | ---------------------- | ------- | ------------------------------------------------------------- |
 | `tauri`                | 2.x     | Application shell, IPC, window management, bundling.          |
 | `russh`                | 0.60+   | SSH2 client with native channel forwarding and key parsing.   |
-| `sqlx`                 | 0.8+    | Async database driver with compile-time query checks.         |
+| `sqlx`                 | 0.9+    | Async database driver with compile-time query checks.         |
 | `tokio`                | 1.x     | Async runtime for concurrent SSH sessions and DB operations.  |
 | `keyring`              | 3.x     | Cross-platform OS keychain access for credential storage.     |
 | `serde` / `serde_json` | 1.x     | Serialization for IPC, config files, and import/export.       |

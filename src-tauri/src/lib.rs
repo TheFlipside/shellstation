@@ -1313,7 +1313,7 @@ mod tests {
         }
     }
 
-    /// The rules for configured paths, which startup and saving the SQLite
+    /// The rules for configured paths, which startup and saving the `SQLite`
     /// path in Settings share.
     #[test]
     fn validate_config_path_wants_absolute_paths_without_parent_components() {

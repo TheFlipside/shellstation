@@ -25,10 +25,8 @@ use tokio::sync::oneshot;
 
 /// How long a choice stays good for the save command: long enough to look
 /// over the other settings first, short enough that a choice the user never
-/// saved is not left for a compromised webview to save later. Ten minutes,
-/// in seconds: `Duration::from_mins` needs Rust 1.91, above the 1.85 that
-/// `russh` requires.
-const PICK_VALID_FOR: Duration = Duration::from_secs(600);
+/// saved is not left for a compromised webview to save later.
+const PICK_VALID_FOR: Duration = Duration::from_mins(10);
 
 /// Set while one of these dialogs is open, so a looping caller cannot stack
 /// up dialogs.
