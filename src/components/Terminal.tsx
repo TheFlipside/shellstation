@@ -82,6 +82,8 @@ export function Terminal({
   onReconnectRef.current = onReconnect;
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
+  const sessionDbIdRef = useRef(sessionDbId);
+  sessionDbIdRef.current = sessionDbId;
 
   const {
     terminalFontFamily,
@@ -149,7 +151,7 @@ export function Terminal({
 
     const term = new XTerm({
       cursorBlink: true,
-      fontSize: terminalFontSize,
+      fontSize: effectiveFontSize,
       fontFamily: buildFontFamily(terminalFontFamily),
       theme: resolveTerminalTheme(resolvedTheme, terminalBackgroundColor, terminalForegroundColor),
     });
@@ -195,7 +197,7 @@ export function Terminal({
       if (sessionEnded) return;
       sessionEnded = true;
       term.write(`\r\n${i18n.t("terminal.processExited")}\r\n`);
-      if (sessionDbId) {
+      if (sessionDbIdRef.current) {
         term.write(`${i18n.t("terminal.reconnectHint")}\r\n`);
       }
       onExitRef.current?.();
@@ -424,6 +426,11 @@ export function Terminal({
       termRef.current = null;
       fitAddonRef.current = null;
     };
+    // Only a new backend session rebuilds the terminal; anything else would
+    // throw away its scrollback. The font and theme values above are initial
+    // values that the next effect applies to the live terminal, and the other
+    // props this effect reads are read through refs. Do not "fix" this with
+    // exhaustive-deps.
   }, [sessionId, sessionType, writeCmd, resizeCmd]);
 
   // Apply font family, font size, and theme changes to a live terminal.

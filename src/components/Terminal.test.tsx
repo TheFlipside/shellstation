@@ -723,6 +723,20 @@ describe("Terminal session exit", () => {
     expect(writeCount(latestTerminal(), RECONNECT_HINT)).toBe(1);
   });
 
+  it("decides on the reconnect hint from the current saved-session id", async () => {
+    const { rerender } = await renderSshTerminal(vi.fn());
+    const term = latestTerminal();
+
+    // Same backend session, so the terminal is kept, but it is now saved.
+    rerender(
+      <Terminal sessionId="session-1" sessionType="ssh" sessionDbId="db-1" visible={true} />,
+    );
+    fireExitEvent();
+
+    expect(latestTerminal()).toBe(term);
+    expect(writeCount(term, RECONNECT_HINT)).toBe(1);
+  });
+
   it("ignores a closed write that rejects after unmount", async () => {
     const pendingWrite: { reject?: (err: unknown) => void } = {};
     vi.mocked(invoke).mockImplementation((cmd: string) =>
