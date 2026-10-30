@@ -237,7 +237,19 @@
     "fingerprint": "{{keyType}}-Schlüsselfingerabdruck:",
     "confirmConnect": "Sind Sie sicher, dass Sie die Verbindung fortsetzen möchten?",
     "reject": "Ablehnen",
-    "accept": "Akzeptieren"
+    "accept": "Akzeptieren",
+    "titleChanged": "Hostschlüssel geändert",
+    "changed": "Der Hostschlüssel von <1>{{host}}:{{port}}</1> ist nicht der hinterlegte. Jemand könnte die Verbindung abfangen (ein Man-in-the-Middle-Angriff), oder der Host wurde neu installiert oder hat einen neuen Schlüssel erhalten.",
+    "confirmChanged": "Akzeptieren Sie nur, wenn Sie wissen, warum sich der Schlüssel geändert hat. Beim Akzeptieren wird der hinterlegte Schlüssel ersetzt.",
+    "titleOtherType": "Hostschlüsseltyp geändert",
+    "otherType": "<1>{{host}}:{{port}}</1> ist mit einem {{knownTypes}}-Schlüssel hinterlegt, bietet jetzt aber einen {{keyType}}-Schlüssel an. Jemand könnte die Verbindung abfangen (ein Man-in-the-Middle-Angriff), oder der Host hat eine neue Art von Schlüssel erhalten.",
+    "confirmOtherType": "Akzeptieren Sie nur, wenn Sie wissen, warum der Host eine andere Art von Schlüssel anbietet. Beim Akzeptieren werden die hinterlegten Schlüssel ersetzt.",
+    "titleUnchecked": "Hostschlüssel nicht geprüft",
+    "unchecked": "Die Datei known_hosts konnte nicht gelesen werden, oder ihr Eintrag für <1>{{host}}:{{port}}</1> ist beschädigt. Dieser Schlüssel konnte daher nicht mit dem hinterlegten verglichen werden. Details stehen im Anwendungsprotokoll.",
+    "confirmUnchecked": "Akzeptieren Sie nur, wenn Sie den Fingerabdruck auf anderem Weg geprüft haben.",
+    "recordedKey": "Hinterlegter {{keyType}}-Schlüssel:",
+    "offeredKey": "Jetzt angebotener {{keyType}}-Schlüssel:",
+    "acceptAnyway": "Trotzdem akzeptieren"
   },
   "quickConnect": {
     "title": "Schnellverbindung",

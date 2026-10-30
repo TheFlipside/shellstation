@@ -237,7 +237,19 @@
     "fingerprint": "{{keyType}}-nyckelfingeravtryck:",
     "confirmConnect": "Är du säker på att du vill fortsätta ansluta?",
     "reject": "Avvisa",
-    "accept": "Acceptera"
+    "accept": "Acceptera",
+    "titleChanged": "Värdnyckeln har ändrats",
+    "changed": "Värdnyckeln för <1>{{host}}:{{port}}</1> är inte den som finns registrerad. Någon kan avlyssna anslutningen (en man-in-the-middle-attack), eller så har värden installerats om eller fått en ny nyckel.",
+    "confirmChanged": "Acceptera bara om du vet varför nyckeln har ändrats. Om du accepterar ersätts den registrerade nyckeln.",
+    "titleOtherType": "Värdnyckelns typ har ändrats",
+    "otherType": "<1>{{host}}:{{port}}</1> är registrerad med en {{knownTypes}}-nyckel, men erbjuder nu en {{keyType}}-nyckel. Någon kan avlyssna anslutningen (en man-in-the-middle-attack), eller så har värden fått en ny sorts nyckel.",
+    "confirmOtherType": "Acceptera bara om du vet varför värden erbjuder en annan sorts nyckel. Om du accepterar ersätts de registrerade nycklarna.",
+    "titleUnchecked": "Värdnyckeln har inte kontrollerats",
+    "unchecked": "Filen known_hosts kunde inte läsas, eller så är dess post för <1>{{host}}:{{port}}</1> skadad, så nyckeln kunde inte jämföras med den registrerade. Programloggen innehåller detaljerna.",
+    "confirmUnchecked": "Acceptera bara om du har kontrollerat fingeravtrycket på annat sätt.",
+    "recordedKey": "Registrerad {{keyType}}-nyckel:",
+    "offeredKey": "{{keyType}}-nyckel som erbjuds nu:",
+    "acceptAnyway": "Acceptera ändå"
   },
   "quickConnect": {
     "title": "Snabbanslutning",

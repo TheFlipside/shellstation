@@ -237,7 +237,19 @@
     "fingerprint": "Impronta digitale della chiave {{keyType}}:",
     "confirmConnect": "Sei sicuro di voler continuare la connessione?",
     "reject": "Rifiuta",
-    "accept": "Accetta"
+    "accept": "Accetta",
+    "titleChanged": "Chiave dell'host cambiata",
+    "changed": "La chiave dell'host <1>{{host}}:{{port}}</1> non è quella registrata. Qualcuno potrebbe intercettare la connessione (un attacco man-in-the-middle), oppure l'host è stato reinstallato o ha ricevuto una nuova chiave.",
+    "confirmChanged": "Accetta solo se sai perché la chiave è cambiata. Accettando, la chiave registrata viene sostituita.",
+    "titleOtherType": "Tipo di chiave dell'host cambiato",
+    "otherType": "<1>{{host}}:{{port}}</1> è registrato con una chiave {{knownTypes}}, ma ora offre una chiave {{keyType}}. Qualcuno potrebbe intercettare la connessione (un attacco man-in-the-middle), oppure l'host ha ricevuto un nuovo tipo di chiave.",
+    "confirmOtherType": "Accetta solo se sai perché l'host offre un altro tipo di chiave. Accettando, le chiavi registrate vengono sostituite.",
+    "titleUnchecked": "Chiave dell'host non verificata",
+    "unchecked": "Non è stato possibile leggere il file known_hosts, oppure la sua voce per <1>{{host}}:{{port}}</1> è danneggiata, quindi questa chiave non è stata confrontata con quella registrata. Il registro dell'applicazione contiene i dettagli.",
+    "confirmUnchecked": "Accetta solo se hai verificato l'impronta digitale in un altro modo.",
+    "recordedKey": "Chiave {{keyType}} registrata:",
+    "offeredKey": "Chiave {{keyType}} offerta ora:",
+    "acceptAnyway": "Accetta comunque"
   },
   "quickConnect": {
     "title": "Connessione rapida",

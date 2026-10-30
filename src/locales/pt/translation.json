@@ -237,7 +237,19 @@
     "fingerprint": "Impressão digital da chave {{keyType}}:",
     "confirmConnect": "Tem certeza de que deseja continuar a conexão?",
     "reject": "Rejeitar",
-    "accept": "Aceitar"
+    "accept": "Aceitar",
+    "titleChanged": "A chave do host mudou",
+    "changed": "A chave do host <1>{{host}}:{{port}}</1> não é a registrada. Alguém pode estar interceptando a conexão (um ataque man-in-the-middle), ou o host foi reinstalado ou recebeu uma nova chave.",
+    "confirmChanged": "Aceite apenas se souber por que a chave mudou. Aceitar substitui a chave registrada.",
+    "titleOtherType": "O tipo de chave do host mudou",
+    "otherType": "<1>{{host}}:{{port}}</1> está registrado com uma chave {{knownTypes}}, mas agora oferece uma chave {{keyType}}. Alguém pode estar interceptando a conexão (um ataque man-in-the-middle), ou o host recebeu um novo tipo de chave.",
+    "confirmOtherType": "Aceite apenas se souber por que o host oferece outro tipo de chave. Aceitar substitui as chaves registradas.",
+    "titleUnchecked": "Chave do host não verificada",
+    "unchecked": "Não foi possível ler o arquivo known_hosts, ou a entrada dele para <1>{{host}}:{{port}}</1> está danificada, então esta chave não pôde ser comparada com a registrada. O log do aplicativo tem os detalhes.",
+    "confirmUnchecked": "Aceite apenas se tiver verificado a impressão digital de outra forma.",
+    "recordedKey": "Chave {{keyType}} registrada:",
+    "offeredKey": "Chave {{keyType}} oferecida agora:",
+    "acceptAnyway": "Aceitar mesmo assim"
   },
   "quickConnect": {
     "title": "Conexão rápida",

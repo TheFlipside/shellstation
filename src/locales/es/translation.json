@@ -237,7 +237,19 @@
     "fingerprint": "Huella digital de la clave {{keyType}}:",
     "confirmConnect": "¿Estás seguro de que deseas continuar con la conexión?",
     "reject": "Rechazar",
-    "accept": "Aceptar"
+    "accept": "Aceptar",
+    "titleChanged": "La clave del host ha cambiado",
+    "changed": "La clave del host <1>{{host}}:{{port}}</1> no es la registrada. Alguien podría estar interceptando la conexión (un ataque de intermediario), o el host se reinstaló o recibió una clave nueva.",
+    "confirmChanged": "Acepta solo si sabes por qué cambió la clave. Al aceptar se reemplaza la clave registrada.",
+    "titleOtherType": "El tipo de clave del host ha cambiado",
+    "otherType": "<1>{{host}}:{{port}}</1> está registrado con una clave {{knownTypes}}, pero ahora ofrece una clave {{keyType}}. Alguien podría estar interceptando la conexión (un ataque de intermediario), o el host recibió un nuevo tipo de clave.",
+    "confirmOtherType": "Acepta solo si sabes por qué el host ofrece otro tipo de clave. Al aceptar se reemplazan las claves registradas.",
+    "titleUnchecked": "Clave del host no comprobada",
+    "unchecked": "No se pudo leer el archivo known_hosts, o su entrada para <1>{{host}}:{{port}}</1> está dañada, así que esta clave no se pudo comparar con la registrada. El registro de la aplicación tiene los detalles.",
+    "confirmUnchecked": "Acepta solo si has comprobado la huella digital por otra vía.",
+    "recordedKey": "Clave {{keyType}} registrada:",
+    "offeredKey": "Clave {{keyType}} ofrecida ahora:",
+    "acceptAnyway": "Aceptar de todos modos"
   },
   "quickConnect": {
     "title": "Conexión rápida",

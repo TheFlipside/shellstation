@@ -237,7 +237,19 @@
     "fingerprint": "{{keyType}} 密钥指纹：",
     "confirmConnect": "确定要继续连接吗？",
     "reject": "拒绝",
-    "accept": "接受"
+    "accept": "接受",
+    "titleChanged": "主机密钥已更改",
+    "changed": "<1>{{host}}:{{port}}</1> 的主机密钥与记录的不一致。可能有人正在拦截连接（中间人攻击），也可能主机已重新安装或更换了新密钥。",
+    "confirmChanged": "仅在你知道密钥为何更改时才接受。接受后将替换记录的密钥。",
+    "titleOtherType": "主机密钥类型已更改",
+    "otherType": "<1>{{host}}:{{port}}</1> 记录的是 {{knownTypes}} 密钥，但现在提供的是 {{keyType}} 密钥。可能有人正在拦截连接（中间人攻击），也可能主机换用了新类型的密钥。",
+    "confirmOtherType": "仅在你知道主机为何提供另一种类型的密钥时才接受。接受后将替换记录的密钥。",
+    "titleUnchecked": "未能检查主机密钥",
+    "unchecked": "无法读取 known_hosts 文件，或其中 <1>{{host}}:{{port}}</1> 的条目已损坏，因此无法将此密钥与记录的密钥进行比较。详细信息见应用程序日志。",
+    "confirmUnchecked": "仅在你已通过其他方式核对指纹时才接受。",
+    "recordedKey": "记录的 {{keyType}} 密钥：",
+    "offeredKey": "现在提供的 {{keyType}} 密钥：",
+    "acceptAnyway": "仍然接受"
   },
   "quickConnect": {
     "title": "快速连接",

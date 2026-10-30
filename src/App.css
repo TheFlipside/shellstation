@@ -527,6 +527,21 @@ body,
   word-break: break-all;
 }
 
+/* The key on record, beside an offered key that does not match it. */
+.dialog-fingerprint-recorded {
+  color: var(--color-subtext0);
+}
+
+/* An offered key that does not match what is on record. */
+.dialog-fingerprint-suspect {
+  color: var(--color-red);
+}
+
+/* A host key prompt that is more than a first connection. */
+.dialog-warning {
+  color: var(--color-red);
+}
+
 .dialog-paste-preview {
   display: block;
   background: var(--color-base);

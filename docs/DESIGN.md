@@ -321,7 +321,7 @@ For one-time setup, key generation, and rotation procedures, see **[DEVELOPMENT.
 - **Authentication methods:** Password, public key (RSA, Ed25519, ECDSA), keyboard-interactive, and agent forwarding.
 - **Jump host chaining:** Any saved session can be designated as a jump host for another session. Chains of arbitrary depth are supported (A → B → C → target).
 - **Connection pooling:** Optionally keep bastion connections alive for reuse when opening multiple sessions through the same jump host.
-- **Known hosts:** Maintains its own known_hosts file with TOFU (Trust On First Use) prompting, or can use the system's `~/.ssh/known_hosts`.
+- **Known hosts:** Uses the system's `~/.ssh/known_hosts`, which it shares with OpenSSH, with TOFU (Trust On First Use) prompting. ShellStation reads the file itself, as OpenSSH does: a line it cannot read costs only that line. The prompt tells a first connection from a changed key, a host on record only with another key type, and a file it could not check. Anything but a first connection is shown as a warning and takes a click to accept. A key listed under `@revoked` is refused without asking.
 - **Keep-alive:** Configurable SSH keepalive interval to prevent idle disconnects.
 
 ### 5.3 Session Management

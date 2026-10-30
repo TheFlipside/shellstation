@@ -670,7 +670,13 @@ export function TerminalTabs({ uiScale }: TerminalTabsProps): React.JSX.Element 
         />
       )}
       {hostVerifyRequest && (
-        <HostVerifyDialog request={hostVerifyRequest} onRespond={handleHostVerifyResponse} />
+        // A new dialog for each request: a queued one must not inherit the
+        // last one's focused Accept button, which Enter would click.
+        <HostVerifyDialog
+          key={hostVerifyRequest.sessionId}
+          request={hostVerifyRequest}
+          onRespond={handleHostVerifyResponse}
+        />
       )}
       {kbdInteractiveRequest && (
         <KbdInteractiveDialog

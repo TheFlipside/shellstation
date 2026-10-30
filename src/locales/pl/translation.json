@@ -237,7 +237,19 @@
     "fingerprint": "Odcisk klucza {{keyType}}:",
     "confirmConnect": "Czy na pewno chcesz kontynuować połączenie?",
     "reject": "Odrzuć",
-    "accept": "Akceptuj"
+    "accept": "Akceptuj",
+    "titleChanged": "Klucz hosta się zmienił",
+    "changed": "Klucz hosta <1>{{host}}:{{port}}</1> nie jest kluczem zapisanym. Ktoś może przechwytywać połączenie (atak typu man-in-the-middle) albo host został przeinstalowany lub otrzymał nowy klucz.",
+    "confirmChanged": "Akceptuj tylko wtedy, gdy wiesz, dlaczego klucz się zmienił. Akceptacja zastępuje zapisany klucz.",
+    "titleOtherType": "Typ klucza hosta się zmienił",
+    "otherType": "<1>{{host}}:{{port}}</1> ma zapisany klucz {{knownTypes}}, ale teraz przedstawia klucz {{keyType}}. Ktoś może przechwytywać połączenie (atak typu man-in-the-middle) albo host otrzymał nowy rodzaj klucza.",
+    "confirmOtherType": "Akceptuj tylko wtedy, gdy wiesz, dlaczego host przedstawia inny rodzaj klucza. Akceptacja zastępuje zapisane klucze.",
+    "titleUnchecked": "Klucz hosta nie został sprawdzony",
+    "unchecked": "Nie udało się odczytać pliku known_hosts albo jego wpis dla <1>{{host}}:{{port}}</1> jest uszkodzony, więc tego klucza nie można było porównać z zapisanym. Szczegóły są w dzienniku aplikacji.",
+    "confirmUnchecked": "Akceptuj tylko wtedy, gdy odcisk został sprawdzony w inny sposób.",
+    "recordedKey": "Zapisany klucz {{keyType}}:",
+    "offeredKey": "Klucz {{keyType}} przedstawiony teraz:",
+    "acceptAnyway": "Akceptuj mimo to"
   },
   "quickConnect": {
     "title": "Szybkie połączenie",

@@ -34,6 +34,47 @@ pub struct HostVerifyPayload {
     pub port: u16,
     pub fingerprint: String,
     pub key_type: String,
+    /// What `known_hosts` has on record for the host.
+    pub status: HostKeyStatus,
+    /// The keys on record for the host: of the offered key's type when
+    /// `Changed`, of other types when `OtherType`, none otherwise.
+    pub known_keys: Vec<KnownKey>,
+}
+
+/// What `known_hosts` has on record for a host whose key the user is asked
+/// to trust.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum HostKeyStatus {
+    /// Nothing: a first connection.
+    New,
+    /// A different key of the same type, as when a man in the middle answers.
+    Changed,
+    /// Only keys of other types. A man in the middle could offer another
+    /// type to avoid `Changed`; OpenSSH warns about this as well.
+    OtherType,
+    /// Unknown: `known_hosts` could not be read, or an entry for the host
+    /// could not be parsed, so the key was not compared with what is there.
+    Unchecked,
+}
+
+/// A key on record for a host, as the prompt shows it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KnownKey {
+    /// The key's algorithm, such as `ssh-ed25519`.
+    pub key_type: String,
+    /// The key's SHA-256 fingerprint, as OpenSSH prints it.
+    pub fingerprint: String,
+}
+
+impl From<&russh::keys::PublicKey> for KnownKey {
+    fn from(key: &russh::keys::PublicKey) -> Self {
+        Self {
+            key_type: key.algorithm().as_str().to_string(),
+            fingerprint: key.fingerprint(russh::keys::HashAlg::Sha256).to_string(),
+        }
+    }
 }
 
 /// Payload emitted to the frontend for keyboard-interactive authentication.
@@ -838,8 +879,9 @@ fn save_known_host(
     let _guard = KNOWN_HOSTS_WRITE
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let old = match std::fs::read(&path) {
-        Ok(old) => old,
+    let old = match read_known_hosts(&path) {
+        Ok(Some(old)) => old,
+        Ok(None) => return Err(format!("{} is larger than the limit", path.display())),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
         Err(e) => return Err(format!("Cannot read {}: {e}", path.display())),
     };
@@ -850,15 +892,35 @@ fn save_known_host(
     Ok(())
 }
 
-/// The name `host`:`port` goes by in `known_hosts`, written the way russh
-/// looks it up: the bare host for port 22, `[host]:port` for any other.
+/// The name `host`:`port` goes by in `known_hosts`, as OpenSSH writes and
+/// looks it up: in lower case, an IPv6 address without the brackets it may
+/// have been given in, bare for port 22 and `[host]:port` for any other.
 fn known_hosts_name(host: &str, port: u16) -> Result<String, String> {
     validate_host_name(host)?;
+    // validate_host_name allows brackets only around an IPv6 address.
+    let host = host
+        .strip_prefix('[')
+        .and_then(|h| h.strip_suffix(']'))
+        .unwrap_or(host)
+        .to_ascii_lowercase();
     Ok(if port == 22 {
-        host.to_string()
+        host
     } else {
         format!("[{host}]:{port}")
     })
+}
+
+/// The contents of the `known_hosts` file at `path`, or `None` when it is
+/// larger than [`MAX_KNOWN_HOSTS_SIZE`]. Read through one handle with a
+/// bound, so that a file growing after a size check is not read whole.
+fn read_known_hosts(path: &std::path::Path) -> std::io::Result<Option<Vec<u8>>> {
+    use std::io::Read;
+    let mut contents = Vec::new();
+    std::fs::File::open(path)?
+        .take(MAX_KNOWN_HOSTS_SIZE + 1)
+        .read_to_end(&mut contents)?;
+    let within = u64::try_from(contents.len()).is_ok_and(|len| len <= MAX_KNOWN_HOSTS_SIZE);
+    Ok(within.then_some(contents))
 }
 
 /// Refuse a host name holding a character that no host name or address
@@ -868,6 +930,12 @@ fn known_hosts_name(host: &str, port: u16) -> Result<String, String> {
 /// patterns), `[` and `]` (a name with its port), and `#`, `@` and `|` (a
 /// comment, a marker, a hashed name). Trusting a key for `x,example.com`
 /// would otherwise trust it for `example.com` too.
+///
+/// Also refused, since the host-key prompt shows the name: the characters
+/// OpenSSH's own host name check refuses (quotes, `` ` ``, `$`, `\`, `;`,
+/// `&`, `<`, `>` and brackets), and invisible ones (bidi controls,
+/// zero-width and filler characters, soft hyphens, variation selectors,
+/// tags), with which a name could pass for another.
 fn validate_host_name(host: &str) -> Result<(), String> {
     // Windows resolves an IPv6 address in brackets, and in known_hosts
     // `[::1]` (or `[[::1]]:2222`) names no other host.
@@ -884,6 +952,31 @@ fn validate_host_name(host: &str) -> Result<(), String> {
             c.is_whitespace()
                 || c.is_control()
                 || matches!(c, ',' | '*' | '?' | '!' | '[' | ']' | '#' | '@' | '|')
+                || matches!(
+                    c,
+                    '\'' | '"' | '`' | '$' | '\\' | ';' | '&' | '<' | '>' | '(' | ')' | '{' | '}'
+                )
+                || matches!(
+                    c,
+                    '\u{00AD}'
+                        | '\u{034F}'
+                        | '\u{061C}'
+                        | '\u{115F}'..='\u{1160}'
+                        | '\u{17B4}'..='\u{17B5}'
+                        | '\u{180B}'..='\u{180F}'
+                        | '\u{200B}'..='\u{200F}'
+                        | '\u{202A}'..='\u{202E}'
+                        | '\u{2060}'..='\u{2064}'
+                        | '\u{2066}'..='\u{206F}'
+                        | '\u{2800}'
+                        | '\u{3164}'
+                        | '\u{FE00}'..='\u{FE0F}'
+                        | '\u{FEFF}'
+                        | '\u{FFA0}'
+                        | '\u{FFF9}'..='\u{FFFB}'
+                        | '\u{E0000}'..='\u{E007F}'
+                        | '\u{E0100}'..='\u{E01EF}'
+                )
         });
     if invalid {
         // Debug formatting escapes control characters.
@@ -895,12 +988,12 @@ fn validate_host_name(host: &str) -> Result<(), String> {
 /// The `known_hosts` contents `old` with `name` taken out of every entry (see
 /// [`without_name`]) and `name key` added at the end. Plain and hashed names
 /// (`|1|…`, as OpenSSH writes them with `HashKnownHosts`) are both found,
-/// which covers every entry russh compares a key with: one left behind would
-/// report the newly trusted key as changed on every connection. Other names
-/// on a line keep their key, so a host's address that shared it is still
-/// reported as changed, not as new. Everything else stays byte for byte,
-/// including comments, `@cert-authority` and `@revoked` lines, line endings
-/// and lines that are not UTF-8.
+/// which covers every entry [`check_known_host`] compares a key with: one
+/// left behind would report the newly trusted key as changed on every
+/// connection. Other names on a line keep their key, so a host's address
+/// that shared it is still reported as changed, not as new. Everything else
+/// stays byte for byte, including comments, `@cert-authority` and
+/// `@revoked` lines, line endings and lines that are not UTF-8.
 fn replace_known_host_entries(old: &[u8], name: &str, key: &str) -> Vec<u8> {
     let mut out = Vec::with_capacity(old.len() + name.len() + key.len() + 2);
     for line in old.split_inclusive(|&b| b == b'\n') {
@@ -918,82 +1011,75 @@ fn replace_known_host_entries(old: &[u8], name: &str, key: &str) -> Vec<u8> {
     out
 }
 
-/// A `known_hosts` line without `name` among its names: the line as it is
-/// when `name` is not there, and `None` when the line goes. russh and
-/// OpenSSH read the names differently. russh skips only a line that starts
-/// with `#`, and splits everything up to the first space at commas. OpenSSH
-/// skips leading blanks; it does not read a comment or a marker line
-/// (`@revoked`, ...) as a host entry, ends the names at a space or tab, and
-/// reads a hashed name as one, commas and all.
-///
-/// Where russh finds `name` on a line OpenSSH reads differently, a comment
-/// is kept without its leading blanks, and a marker line with a single space
-/// after the marker: forms russh skips, unless russh still finds `name`
-/// there (an invalid marker), and then the line goes. Any other such line
-/// goes whole. Otherwise `name` is taken out of OpenSSH's names. The line
-/// goes when none are left, or when the new first name would make OpenSSH
-/// read the line as a hashed entry, a comment or a marker line.
+/// What OpenSSH reads of a `known_hosts` line: up to a NUL, as a C string
+/// ends there, and without the line break (`\n` or `\r\n`); a `\r` anywhere
+/// else is part of the text. [`check_known_host`] and [`without_name`] both
+/// read lines through this, so that they see the same names.
+fn line_content(line: &[u8]) -> &[u8] {
+    let line = line.strip_suffix(b"\n").unwrap_or(line);
+    let line = line.split(|&b| b == 0).next().unwrap_or_default();
+    line.strip_suffix(b"\r").unwrap_or(line)
+}
+
+/// A `known_hosts` line without `name` among its names, read as OpenSSH and
+/// [`check_known_host`] read them (see [`line_content`]): the line as it is
+/// when `name` is not there, and `None` when the line goes. Leading blanks
+/// are skipped, a comment or a marker line (`@revoked`, ...) is kept as it
+/// is, the names end at a space or a tab, a plain name matches in either
+/// case, and a hashed name is one name, commas and all. The line goes when
+/// no names are left, or when the new first name would make it read as a
+/// hashed entry, a comment or a marker line.
 fn without_name<'a>(line: &'a [u8], name: &str) -> Option<std::borrow::Cow<'a, [u8]>> {
-    let is_name = |entry: &&[u8]| *entry == name.as_bytes() || is_hashed_name(entry, name);
-    let start = line
+    let is_name =
+        |entry: &[u8]| entry.eq_ignore_ascii_case(name.as_bytes()) || is_hashed_name(entry, name);
+    let content = line_content(line);
+    let start = content
         .iter()
         .position(|&b| b != b' ' && b != b'\t')
-        .unwrap_or(line.len());
-    let (lead, body) = line.split_at(start);
+        .unwrap_or(content.len());
+    let lead = &line[..start];
+    let body = &content[start..];
+    if body.starts_with(b"#") || body.starts_with(b"@") {
+        return Some(line.into());
+    }
     let end = body
         .iter()
         .position(|&b| b == b' ' || b == b'\t')
         .unwrap_or(body.len());
-    let (names, rest) = body.split_at(end);
-    let openssh: Option<Vec<&[u8]>> = if body.starts_with(b"#") || body.starts_with(b"@") {
-        None
-    } else if names.starts_with(b"|1|") {
-        Some(vec![names])
-    } else {
-        Some(names.split(|&b| b == b',').collect())
-    };
-    let russh = russh_names(line);
-    if russh != openssh && russh.iter().flatten().any(is_name) {
-        let fixed = if body.starts_with(b"#") {
-            body.to_vec()
-        } else if body.starts_with(b"@") {
-            let after = rest
-                .iter()
-                .position(|&b| b != b' ' && b != b'\t')
-                .unwrap_or(rest.len());
-            [lead, names, b" ".as_slice(), &rest[after..]].concat()
-        } else {
-            return None;
-        };
-        let found = russh_names(&fixed).iter().flatten().any(is_name);
-        return (!found).then(|| fixed.into());
+    let names = &body[..end];
+    // The rest of the line, its ending included.
+    let rest = &line[start + end..];
+    if names.starts_with(b"|1|") {
+        return (!is_name(names)).then(|| line.into());
     }
-    let Some(entries) = openssh else {
-        return Some(line.into());
-    };
-    if !entries.iter().any(is_name) {
+    if !names.split(|&b| b == b',').any(is_name) {
         return Some(line.into());
     }
-    let kept: Vec<&[u8]> = entries.into_iter().filter(|e| !is_name(e)).collect();
-    let read_otherwise = |first: &&[u8]| {
+    // Built in one pass rather than collected entry by entry, so that a
+    // line of commas costs no more memory than its own length.
+    let (mut kept, mut first, mut all_empty) = (Vec::with_capacity(line.len()), None, true);
+    kept.extend_from_slice(lead);
+    for entry in names.split(|&b| b == b',').filter(|entry| !is_name(entry)) {
+        if first.is_some() {
+            kept.push(b',');
+        }
+        kept.extend_from_slice(entry);
+        first.get_or_insert(entry);
+        all_empty &= entry.is_empty();
+    }
+    let read_otherwise = |first: &[u8]| {
         first.starts_with(b"|1|") || first.starts_with(b"#") || first.starts_with(b"@")
     };
-    if kept.iter().all(|entry| entry.is_empty()) || kept.first().is_some_and(read_otherwise) {
+    if all_empty || first.is_some_and(read_otherwise) {
         return None;
     }
-    let kept = kept.join(&b',');
-    Some([lead, kept.as_slice(), rest].concat().into())
+    kept.extend_from_slice(rest);
+    Some(kept.into())
 }
 
-/// The names russh reads on a `known_hosts` line: everything up to the
-/// first space, split at commas; `None` for a line starting with `#`.
-fn russh_names(line: &[u8]) -> Option<Vec<&[u8]>> {
-    let names = line.split(|&b| b == b' ').next().unwrap_or_default();
-    (!line.starts_with(b"#")).then(|| names.split(|&b| b == b',').collect())
-}
-
-/// Base64 for hashed names, with padding optional and unused bits ignored,
-/// so that an entry russh matches is not missed over how it was encoded.
+/// Base64 for hashed names in entries being replaced, with padding optional
+/// and unused bits ignored, so that an entry for the host is not missed
+/// over how it was encoded.
 const LENIENT_BASE64: base64::engine::GeneralPurpose = base64::engine::GeneralPurpose::new(
     &base64::alphabet::STANDARD,
     base64::engine::GeneralPurposeConfig::new()
@@ -1003,11 +1089,10 @@ const LENIENT_BASE64: base64::engine::GeneralPurpose = base64::engine::GeneralPu
 
 /// Whether `entry` is `name` hashed the way OpenSSH hashes `known_hosts`
 /// names: `|1|`, a base64 salt, `|`, and the base64 HMAC-SHA1 of the name
-/// keyed with that salt. Read as russh reads it, which accepts more than
-/// OpenSSH: anything after a further `|` is ignored, and so are line breaks
-/// within the base64.
+/// keyed with that salt. Lenient, for entries being replaced: anything after
+/// a further `|` is ignored, and so are line breaks within the base64, so
+/// that no entry for the host is left behind however it was written.
 fn is_hashed_name(entry: &[u8], name: &str) -> bool {
-    use hmac::{KeyInit, Mac};
     let Some(rest) = entry.strip_prefix(b"|1|") else {
         return false;
     };
@@ -1020,15 +1105,284 @@ fn is_hashed_name(entry: &[u8], name: &str) -> bool {
             .collect();
         LENIENT_BASE64.decode(part).ok()
     };
-    let (Some(salt), Some(hash)) = (decode(parts.next()), decode(parts.next())) else {
+    match (decode(parts.next()), decode(parts.next())) {
+        (Some(salt), Some(hash)) => hashes_to(&salt, &hash, name),
+        _ => false,
+    }
+}
+
+/// [`is_hashed_name`] for only the form OpenSSH writes and reads: exactly
+/// two parts after `|1|`, in padded base64.
+fn is_hashed_name_strict(entry: &[u8], name: &str) -> bool {
+    let Some(rest) = entry.strip_prefix(b"|1|") else {
         return false;
     };
-    let Ok(mac) = hmac::Hmac::<sha1::Sha1>::new_from_slice(&salt) else {
+    let mut parts = rest.split(|&b| b == b'|');
+    let decode = |part: Option<&[u8]>| base64::prelude::BASE64_STANDARD.decode(part?).ok();
+    match (decode(parts.next()), decode(parts.next()), parts.next()) {
+        (Some(salt), Some(hash), None) => hashes_to(&salt, &hash, name),
+        _ => false,
+    }
+}
+
+/// Whether `hash` is the HMAC-SHA1 of `name` keyed with `salt`.
+fn hashes_to(salt: &[u8], hash: &[u8], name: &str) -> bool {
+    use hmac::{KeyInit, Mac};
+    let Ok(mac) = hmac::Hmac::<sha1::Sha1>::new_from_slice(salt) else {
         return false;
     };
-    mac.chain_update(name.as_bytes())
-        .verify_slice(&hash)
-        .is_ok()
+    mac.chain_update(name.as_bytes()).verify_slice(hash).is_ok()
+}
+
+/// What [`check_known_host`] found for a host's key.
+#[derive(Debug, PartialEq)]
+enum KnownHost {
+    /// The key is on record for the host.
+    Trusted,
+    /// The key is listed under `@revoked` for the host.
+    Revoked,
+    /// The user is to decide, told `status`; `known` are the keys on record
+    /// that the prompt shows.
+    Ask {
+        status: HostKeyStatus,
+        known: Vec<russh::keys::PublicKey>,
+    },
+}
+
+impl KnownHost {
+    fn ask(status: HostKeyStatus) -> Self {
+        Self::Ask {
+            status,
+            known: Vec::new(),
+        }
+    }
+}
+
+/// The largest `known_hosts` file read or rewritten, far beyond any real
+/// one: a bigger file is not loaded into memory, and its hosts are asked
+/// about as unchecked.
+const MAX_KNOWN_HOSTS_SIZE: u64 = 64 << 20;
+
+/// The most keys on record the host-key prompt shows, of the offered key's
+/// type and of other types each. Any more still count for the status.
+const MAX_KNOWN_KEYS_SHOWN: usize = 8;
+
+/// Check `key`, offered by `host`:`port`, against the `known_hosts` file at
+/// `path`, reading it as OpenSSH does. A line that cannot be read costs only
+/// that line (russh gives up on the whole file), and is logged.
+///
+/// A key is trusted only by an entry naming the host exactly (a plain name
+/// in either case, as OpenSSH compares them, or a hashed one; see
+/// [`known_hosts_name`]), with a key type that matches the key;
+/// patterns (`*`, `?`) never trust one, but a matching negated pattern (`!`)
+/// takes a line out, as in OpenSSH. `@revoked` lines count with their
+/// patterns, so a pattern can revoke a key, and one for the host that
+/// cannot be read leaves the key unchecked rather than trusted.
+/// `@cert-authority` lines are skipped: no host certificate is ever
+/// accepted. Blocking: file I/O.
+fn check_known_host(
+    path: &std::path::Path,
+    host: &str,
+    port: u16,
+    key: &russh::keys::PublicKey,
+) -> KnownHost {
+    let name = match known_hosts_name(host, port) {
+        Ok(name) => name,
+        Err(e) => {
+            warn!(error = %e, "Host name cannot be looked up in known_hosts");
+            return KnownHost::ask(HostKeyStatus::Unchecked);
+        }
+    };
+    let unchecked = |error: &dyn std::fmt::Display| {
+        warn!(known_hosts = %path.display(), %error, "Cannot read known_hosts");
+        KnownHost::ask(HostKeyStatus::Unchecked)
+    };
+    let contents = match std::fs::metadata(path) {
+        Ok(meta) if meta.is_file() => match read_known_hosts(path) {
+            Ok(Some(contents)) => contents,
+            Ok(None) => return unchecked(&"larger than the limit"),
+            Err(e) => return unchecked(&e),
+        },
+        Ok(meta) if meta.is_dir() => return unchecked(&"a directory"),
+        // Linked to /dev/null, which switches known_hosts off, or no file
+        // yet: nothing is on record. A FIFO is not read, which would block.
+        Ok(_) => Vec::new(),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+        Err(e) => return unchecked(&e),
+    };
+
+    // Trust and revocation are settled line by line, and only the keys the
+    // prompt shows are kept, so that a file full of keys for the host costs
+    // no more than reading it.
+    let (mut trusted, mut revoked) = (false, false);
+    let (mut same_type, mut other_types) = (Vec::new(), Vec::new());
+    let (mut unreadable, mut unreadable_revocation) = (false, false);
+    for (index, line) in contents.split(|&b| b == b'\n').enumerate() {
+        let mut fields = line_content(line)
+            .split(|&b| b == b' ' || b == b'\t')
+            .filter(|field| !field.is_empty());
+        let Some(first) = fields.next() else {
+            continue;
+        };
+        let (names, is_revocation) = match first {
+            _ if first.starts_with(b"#") => continue,
+            b"@revoked" => match fields.next() {
+                Some(names) => (names, true),
+                None => continue,
+            },
+            // `@cert-authority`, or a marker OpenSSH does not know.
+            _ if first.starts_with(b"@") => continue,
+            _ => (first, false),
+        };
+        let applies = if is_revocation {
+            pattern_list_matches(names, &name)
+        } else {
+            names_entry_for(names, &name)
+        };
+        if !applies {
+            continue;
+        }
+        // A key type, then the key. As in OpenSSH, the two must agree.
+        let (key_type, blob) = (fields.next(), fields.next());
+        let parsed = blob
+            .and_then(|blob| std::str::from_utf8(blob).ok())
+            .and_then(|blob| russh::keys::parse_public_key_base64(blob).ok())
+            .filter(|recorded| key_type == Some(recorded.algorithm().as_str().as_bytes()));
+        match parsed {
+            Some(recorded) if is_revocation => revoked |= recorded.key_data() == key.key_data(),
+            Some(recorded) if recorded.key_data() == key.key_data() => trusted = true,
+            Some(recorded) => {
+                let shown = if recorded.algorithm() == key.algorithm() {
+                    &mut same_type
+                } else {
+                    &mut other_types
+                };
+                // The same key on two lines, say hashed and plain, is shown once.
+                let again = shown
+                    .iter()
+                    .any(|k: &russh::keys::PublicKey| k.key_data() == recorded.key_data());
+                if !again && shown.len() < MAX_KNOWN_KEYS_SHOWN {
+                    shown.push(recorded);
+                }
+            }
+            None => {
+                warn!(
+                    known_hosts = %path.display(),
+                    line = index + 1,
+                    host = %name,
+                    "known_hosts entry for the host cannot be read — skipped"
+                );
+                if is_revocation {
+                    unreadable_revocation = true;
+                } else {
+                    unreadable = true;
+                }
+            }
+        }
+    }
+
+    if revoked {
+        return KnownHost::Revoked;
+    }
+    // A revocation that cannot be read might be of this very key.
+    let unreadable = unreadable || unreadable_revocation;
+    if trusted {
+        return if unreadable_revocation {
+            KnownHost::ask(HostKeyStatus::Unchecked)
+        } else {
+            KnownHost::Trusted
+        };
+    }
+    if !same_type.is_empty() {
+        KnownHost::Ask {
+            status: HostKeyStatus::Changed,
+            known: same_type,
+        }
+    } else if !other_types.is_empty() {
+        KnownHost::Ask {
+            status: HostKeyStatus::OtherType,
+            known: other_types,
+        }
+    } else if unreadable {
+        KnownHost::ask(HostKeyStatus::Unchecked)
+    } else {
+        KnownHost::ask(HostKeyStatus::New)
+    }
+}
+
+/// Whether a `known_hosts` entry's names (its first field) name `name`, to
+/// trust its key: exactly, or hashed in the form OpenSSH writes, and with
+/// no negated pattern on the line matching it. A hashed name is one name,
+/// commas and all.
+fn names_entry_for(names: &[u8], name: &str) -> bool {
+    if names.starts_with(b"|1|") {
+        return is_hashed_name_strict(names, name);
+    }
+    let excluded = names.split(|&b| b == b',').any(|entry| {
+        entry
+            .strip_prefix(b"!")
+            .is_some_and(|pattern| pattern_matches(pattern, name.as_bytes()))
+    });
+    !excluded
+        && names
+            .split(|&b| b == b',')
+            .any(|entry| entry.eq_ignore_ascii_case(name.as_bytes()))
+}
+
+/// Whether OpenSSH would apply a line with these names to `name`, patterns
+/// included: a negated pattern that matches rules the line out, otherwise
+/// any matching pattern or hashed name applies it. Used for `@revoked`
+/// lines, where matching more only refuses more.
+fn pattern_list_matches(names: &[u8], name: &str) -> bool {
+    if names.starts_with(b"|1|") {
+        return is_hashed_name(names, name);
+    }
+    let mut applies = false;
+    for entry in names.split(|&b| b == b',') {
+        if let Some(pattern) = entry.strip_prefix(b"!") {
+            if pattern_matches(pattern, name.as_bytes()) {
+                return false;
+            }
+        } else if pattern_matches(entry, name.as_bytes()) || is_hashed_name(entry, name) {
+            applies = true;
+        }
+    }
+    applies
+}
+
+/// Whether `text` matches an OpenSSH pattern: `*` stands for any run of
+/// characters, `?` for one, and letters match in either case. Matched with
+/// one step back to the last `*`, so a pattern full of `*` cannot take
+/// exponential time. Each byte but `*` takes one of `text`, so a pattern
+/// with more of them cannot match; refusing it first keeps a long line's
+/// pattern from being matched over and over against the name.
+fn pattern_matches(pattern: &[u8], text: &[u8]) -> bool {
+    if pattern.iter().filter(|&&c| c != b'*').count() > text.len() {
+        return false;
+    }
+    let (mut p, mut t) = (0, 0);
+    let mut star: Option<(usize, usize)> = None;
+    while t < text.len() {
+        match pattern.get(p) {
+            Some(b'*') => {
+                star = Some((p, t));
+                p += 1;
+            }
+            Some(&c) if c == b'?' || c.eq_ignore_ascii_case(&text[t]) => {
+                p += 1;
+                t += 1;
+            }
+            _ => match star {
+                Some((star_p, star_t)) => {
+                    p = star_p + 1;
+                    t = star_t + 1;
+                    star = Some((star_p, star_t + 1));
+                }
+                None => return false,
+            },
+        }
+    }
+    pattern[p..].iter().all(|&c| c == b'*')
 }
 
 /// Set directory permissions to 0700 (Unix) or restricted ACL (Windows).
@@ -2134,52 +2488,59 @@ impl client::Handler for SshHandler {
             fingerprint = %server_public_key.fingerprint(russh::keys::HashAlg::Sha256),
             "Server offered host key"
         );
-        if let Some(ref kh) = kh_path {
-            trace!(
+        let checked = match kh_path.clone() {
+            Some(kh) => {
+                trace!(
+                    session_id = %self.session_id,
+                    known_hosts = %kh.display(),
+                    host = %self.host,
+                    port = self.port,
+                    key_type = server_public_key.algorithm().as_str(),
+                    "Checking known_hosts"
+                );
+                let (host, port, key) = (self.host.clone(), self.port, server_public_key.clone());
+                tokio::task::spawn_blocking(move || check_known_host(&kh, &host, port, &key))
+                    .await
+                    .unwrap_or_else(|e| {
+                        warn!(session_id = %self.session_id, error = %e, "known_hosts check failed");
+                        KnownHost::ask(HostKeyStatus::Unchecked)
+                    })
+            }
+            None => KnownHost::ask(HostKeyStatus::Unchecked),
+        };
+        let (status, known) = match checked {
+            KnownHost::Trusted => {
+                trace!(session_id = %self.session_id, "Host key found in known_hosts — trusted");
+                return Ok(true);
+            }
+            KnownHost::Revoked => {
+                warn!(
+                    session_id = %self.session_id,
+                    host = %self.host,
+                    port = self.port,
+                    "Server key is REVOKED in known_hosts — refused"
+                );
+                return Ok(false);
+            }
+            KnownHost::Ask { status, known } => (status, known),
+        };
+        match status {
+            HostKeyStatus::New => {}
+            // Possibly a man in the middle. If accepted, the old entries are
+            // replaced below.
+            HostKeyStatus::Changed | HostKeyStatus::OtherType => warn!(
                 session_id = %self.session_id,
-                known_hosts = %kh.display(),
                 host = %self.host,
                 port = self.port,
-                key_type = server_public_key.algorithm().as_str(),
-                "Checking known_hosts"
-            );
-            match russh::keys::check_known_hosts_path(&self.host, self.port, server_public_key, kh)
-            {
-                Ok(true) => {
-                    trace!(session_id = %self.session_id, "Host key found in known_hosts — trusted");
-                    return Ok(true);
-                }
-                Ok(false) => {
-                    // No matching key type found — could be a first-time connection
-                    // or a key algorithm change. Fall through to prompt.
-                }
-                Err(russh::keys::Error::KeyChanged { line }) => {
-                    warn!(
-                        session_id = %self.session_id,
-                        host = %self.host,
-                        port = self.port,
-                        line,
-                        "Server key CHANGED — possible MITM"
-                    );
-                    // Fall through to prompt — if accepted, the old entry
-                    // will be replaced below.
-                }
-                Err(e) => {
-                    // Reading the file failed part way (a non-UTF-8 byte
-                    // anywhere in it is enough), or an entry for this host
-                    // has a key russh cannot parse. russh then discards the
-                    // whole file, so no entry for this host counts, matching
-                    // or changed, before or after the bad line.
-                    warn!(
-                        session_id = %self.session_id,
-                        host = %self.host,
-                        port = self.port,
-                        known_hosts = %kh.display(),
-                        error = %e,
-                        "known_hosts could not be checked — treating as unknown host"
-                    );
-                }
-            }
+                ?status,
+                "Server key does not match known_hosts — asking the user"
+            ),
+            HostKeyStatus::Unchecked => warn!(
+                session_id = %self.session_id,
+                host = %self.host,
+                port = self.port,
+                "Server key could not be checked against known_hosts — asking the user"
+            ),
         }
 
         // Emit verification request to the frontend.
@@ -2191,6 +2552,8 @@ impl client::Handler for SshHandler {
                 .fingerprint(russh::keys::HashAlg::Sha256)
                 .to_string(),
             key_type: server_public_key.algorithm().as_str().to_string(),
+            status,
+            known_keys: known.iter().map(KnownKey::from).collect(),
         };
 
         self.app_handle
@@ -2349,13 +2712,19 @@ mod tests {
         assert!(!is_hashed_name(HASHED_22.as_bytes(), "example.org"));
         assert!(!is_hashed_name(HASHED_22.as_bytes(), "[example.com]:2222"));
         assert!(!is_hashed_name(HASHED_2222.as_bytes(), "example.com"));
-        // What russh accepts beyond OpenSSH.
+        assert!(is_hashed_name_strict(HASHED_22.as_bytes(), "example.com"));
+        // Matched when replacing entries, but not as OpenSSH writes them,
+        // so they trust no key.
         let with_junk = format!("{HASHED_22}|junk");
         let with_break = HASHED_22.replacen("e8vr", "e8\r\nvr", 1);
         let unpadded = HASHED_22.replace('=', "");
         for lenient in [&with_junk, &with_break, &unpadded] {
             assert!(
                 is_hashed_name(lenient.as_bytes(), "example.com"),
+                "{lenient:?}"
+            );
+            assert!(
+                !is_hashed_name_strict(lenient.as_bytes(), "example.com"),
                 "{lenient:?}"
             );
         }
@@ -2395,53 +2764,44 @@ mod tests {
             (&format!("@revoked example.com {KEY_A}\n"), None),
             (&format!("@cert-authority example.com {KEY_A}\n"), None),
             (&format!("  example.com\t{KEY_A}\n"), Some("")),
-            // A key russh cannot parse is still this host's entry.
+            // A key that cannot be parsed, or none, is still this host's.
             ("example.com ssh-ed25519 not-a-key\n", Some("")),
+            ("example.com\r\n", Some("")),
+            // A `\r` other than before the line break is part of a name.
+            (
+                &format!("x\r,example.com {KEY_A}\n"),
+                Some(&format!("x\r {KEY_A}\n")),
+            ),
+            // A line ends at a NUL, and a `\r` before it goes with the end.
+            ("example.com\r\0junk\n", Some("")),
+            ("x,example.com\r\0\n", Some("x\r\0\n")),
             (&format!("other.org {KEY_A}\r\n"), None),
             (
                 &format!("  other.org,example.com {KEY_A}\r\n"),
                 Some(&format!("  other.org {KEY_A}\r\n")),
             ),
-            // Where russh reads other names than OpenSSH and finds this
-            // host, the line goes whole. russh reads `a\t,example.com`,
-            // OpenSSH `a`.
-            (&format!("a\t,example.com {KEY_A}\n"), Some("")),
-            // A comment and markers to OpenSSH, entries to russh: kept for
-            // OpenSSH in a form russh skips, unless the marker is invalid.
+            // The names end at a tab: these are `a` and `a\x0c,example.com`.
+            (&format!("a\t,example.com {KEY_A}\n"), None),
             (
-                &format!("\t#x,example.com {KEY_A}\n"),
-                Some(&format!("#x,example.com {KEY_A}\n")),
+                &format!("a\x0c,example.com {KEY_A}\n"),
+                Some(&format!("a\x0c {KEY_A}\n")),
             ),
-            (
-                &format!("@revoked\tx,example.com {KEY_A}\n"),
-                Some(&format!("@revoked x,example.com {KEY_A}\n")),
-            ),
-            (
-                &format!("\t@revoked\t\tx,example.com {KEY_A}\n"),
-                Some(&format!("\t@revoked x,example.com {KEY_A}\n")),
-            ),
-            // Kept as it is: without a comma, russh reads one name,
-            // `\t@revoked\t\texample.com`.
-            (&format!("\t@revoked\t\texample.com {KEY_A}\n"), None),
-            (&format!("@x,example.com {KEY_A}\n"), Some("")),
-            // Taking out the first name would make OpenSSH read the next
-            // as a hashed entry, a marker or a comment.
+            // Comments and marker lines, after blanks too, and with any marker.
+            (&format!("  # example.com {KEY_A}\n"), None),
+            (&format!("\t#x,example.com {KEY_A}\n"), None),
+            (&format!("@revoked\tx,example.com {KEY_A}\n"), None),
+            (&format!("@x,example.com {KEY_A}\n"), None),
+            // Taking out the first name would make the next read as a
+            // hashed entry, a marker or a comment.
             (&format!("example.com,{HASHED_2222} {KEY_A}\n"), Some("")),
             (
                 &format!("example.com,@cert-authority *.corp {KEY_A}\n"),
                 Some(""),
             ),
             (&format!("example.com,#x {KEY_A}\n"), Some("")),
-            // One hashed name to OpenSSH, two names to russh.
-            (&format!("{HASHED_2222},example.com {KEY_A}\n"), Some("")),
+            // A hashed name is one name, commas and all.
+            (&format!("{HASHED_2222},example.com {KEY_A}\n"), None),
             (&format!("{HASHED_22}|junk {KEY_A}\n"), Some("")),
-            // A comment to both.
-            (&format!("  # example.com {KEY_A}\n"), None),
-            // Both end the names at the space, so the form feed stays.
-            (
-                &format!("a\x0c,example.com {KEY_A}\n"),
-                Some(&format!("a\x0c {KEY_A}\n")),
-            ),
             ("\n", None),
         ]
         .into_iter()
@@ -2474,6 +2834,27 @@ mod tests {
         assert_eq!(new, expected);
     }
 
+    /// `without_name` slices the original line at offsets into what
+    /// `line_content` returns, which is safe only while that is a prefix.
+    #[test]
+    fn line_content_is_a_prefix_of_the_line() {
+        for line in [
+            b"".as_slice(),
+            b"\n",
+            b"\r\n",
+            b"\r",
+            b"\0",
+            b"\r\0x\r\n",
+            b"  example.com\r\0junk\n",
+            b"example.com ssh-ed25519 AAAA\r\n",
+            b"a\r\r\n",
+        ] {
+            assert!(line.starts_with(line_content(line)), "{line:?}");
+        }
+        assert_eq!(line_content(b"example.com\r\0junk\n"), b"example.com");
+        assert_eq!(line_content(b"x\r,y z\r\n"), b"x\r,y z");
+    }
+
     #[test]
     fn replacing_ends_the_last_line_before_adding_the_entry() {
         assert_eq!(
@@ -2491,38 +2872,47 @@ mod tests {
     }
 
     #[test]
-    fn saved_key_replaces_a_hashed_entry_for_russh() {
+    fn saved_key_replaces_a_hashed_entry() {
         let (dir, file) = scratch_known_hosts();
         crate::private_fs::create_private_dir(file.parent().unwrap()).unwrap();
+        let revocation = format!("@revoked\tx,example.com {KEY_A}\n");
         std::fs::write(
             &file,
             format!(
                 "{HASHED_22} {KEY_A}\nother.org {KEY_A}\n10.0.0.1,example.com {KEY_A}\n\
-                 @revoked\tx,example.com {KEY_A}\n"
+                 {revocation}"
             ),
         )
         .unwrap();
         let (a, b) = (public_key(KEY_A), public_key(KEY_B));
-        // Before: the hashed entry makes russh report the new key as changed.
-        assert!(matches!(
-            russh::keys::check_known_hosts_path("example.com", 22, &b, &file),
-            Err(russh::keys::Error::KeyChanged { .. })
-        ));
+        assert_eq!(
+            check_known_host(&file, "example.com", 22, &b),
+            ask(HostKeyStatus::Changed, &[KEY_A])
+        );
 
         save_known_host(&file, "example.com", 22, &b).unwrap();
 
-        assert!(russh::keys::check_known_hosts_path("example.com", 22, &b, &file).unwrap());
-        assert!(matches!(
-            russh::keys::check_known_hosts_path("example.com", 22, &a, &file),
-            Err(russh::keys::Error::KeyChanged { .. })
-        ));
-        assert!(russh::keys::check_known_hosts_path("other.org", 22, &a, &file).unwrap());
+        assert_eq!(
+            check_known_host(&file, "example.com", 22, &b),
+            KnownHost::Trusted
+        );
+        assert_eq!(
+            check_known_host(&file, "example.com", 22, &a),
+            KnownHost::Revoked
+        );
+        assert_eq!(
+            check_known_host(&file, "other.org", 22, &a),
+            KnownHost::Trusted
+        );
         // The address that shared the old key keeps it.
-        assert!(russh::keys::check_known_hosts_path("10.0.0.1", 22, &a, &file).unwrap());
-        // The revocation stays, in a form russh does not read as an entry.
+        assert_eq!(
+            check_known_host(&file, "10.0.0.1", 22, &a),
+            KnownHost::Trusted
+        );
+        // The revocation stays as it was.
         assert!(std::fs::read_to_string(&file)
             .unwrap()
-            .contains(&format!("\n@revoked x,example.com {KEY_A}\n")));
+            .contains(&format!("\n{revocation}")));
         // The temporary file was renamed into place, not left beside it.
         assert_eq!(
             std::fs::read_dir(file.parent().unwrap()).unwrap().count(),
@@ -2621,12 +3011,387 @@ mod tests {
             }
         });
         for host in &hosts {
-            assert!(
-                russh::keys::check_known_hosts_path(host, 22, &key, &file).unwrap(),
+            assert_eq!(
+                check_known_host(&file, host, 22, &key),
+                KnownHost::Trusted,
                 "{host} was dropped"
             );
         }
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// An ECDSA host key, of another type than `KEY_A` and `KEY_B`.
+    const KEY_C: &str = "ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBIuGk2LkL9Zhk/SYkH7TJb74L5w4QlkaMucdUOlqsuERs42bHnnQF6FW78EUHwrKSskQsVkyhbguJ50oqLvh6ko=";
+
+    /// `check_known_host` for `key` offered by `host`:`port`, against a
+    /// `known_hosts` file holding `contents`.
+    fn check(contents: &[u8], host: &str, port: u16, key: &str) -> KnownHost {
+        let (dir, file) = scratch_known_hosts();
+        crate::private_fs::create_private_dir(file.parent().unwrap()).unwrap();
+        std::fs::write(&file, contents).unwrap();
+        let found = check_known_host(&file, host, port, &public_key(key));
+        std::fs::remove_dir_all(&dir).unwrap();
+        found
+    }
+
+    fn ask(status: HostKeyStatus, known: &[&str]) -> KnownHost {
+        KnownHost::Ask {
+            status,
+            known: known.iter().map(|key| public_key(key)).collect(),
+        }
+    }
+
+    #[test]
+    fn a_key_on_record_is_trusted() {
+        for (contents, port) in [
+            (format!("example.com {KEY_A}\n"), 22),
+            (format!("{HASHED_22} {KEY_A}\n"), 22),
+            (format!("{HASHED_2222} {KEY_A}\n"), 2222),
+            (format!("[example.com]:2222 {KEY_A}\n"), 2222),
+            (format!("other.org,example.com\t{KEY_A} a comment\r\n"), 22),
+            // Leading blanks, and no line break at the end.
+            (format!("  example.com {KEY_A}"), 22),
+        ] {
+            assert_eq!(
+                check(contents.as_bytes(), "example.com", port, KEY_A),
+                KnownHost::Trusted,
+                "{contents:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn one_bad_line_costs_only_that_line() {
+        // russh gave up on the whole file over either of the first two.
+        let contents = [
+            b"caf\xe9.org ssh-ed25519 AAAA\n".as_slice(),
+            b"example.com ssh-ed25519 not-a-key\n",
+            format!("example.com {KEY_A}\n").as_bytes(),
+        ]
+        .concat();
+        assert_eq!(
+            check(&contents, "example.com", 22, KEY_A),
+            KnownHost::Trusted
+        );
+        // With nothing else on record for the host, the key is unchecked.
+        assert_eq!(
+            check(
+                b"example.com ssh-ed25519 not-a-key\n",
+                "example.com",
+                22,
+                KEY_A
+            ),
+            ask(HostKeyStatus::Unchecked, &[])
+        );
+        // A bad line for another host does not count.
+        assert_eq!(
+            check(
+                b"other.org ssh-ed25519 not-a-key\n",
+                "example.com",
+                22,
+                KEY_A
+            ),
+            ask(HostKeyStatus::New, &[])
+        );
+    }
+
+    #[test]
+    fn another_key_is_changed_or_of_another_type() {
+        let contents = format!("example.com {KEY_A}\n");
+        assert_eq!(
+            check(contents.as_bytes(), "example.com", 22, KEY_B),
+            ask(HostKeyStatus::Changed, &[KEY_A])
+        );
+        assert_eq!(
+            check(contents.as_bytes(), "example.com", 22, KEY_C),
+            ask(HostKeyStatus::OtherType, &[KEY_A])
+        );
+        // A key of the same type on record as well makes it changed.
+        let both = format!("example.com {KEY_C}\nexample.com {KEY_A}\n");
+        assert_eq!(
+            check(both.as_bytes(), "example.com", 22, KEY_B),
+            ask(HostKeyStatus::Changed, &[KEY_A])
+        );
+        // Another port is another host.
+        assert_eq!(
+            check(contents.as_bytes(), "example.com", 2222, KEY_B),
+            ask(HostKeyStatus::New, &[])
+        );
+    }
+
+    #[test]
+    fn only_an_exact_name_trusts_a_key() {
+        for contents in [
+            format!("*.com {KEY_A}\n"),
+            format!("example.co? {KEY_A}\n"),
+            format!("example.com,!example.com {KEY_A}\n"),
+            format!("example.com,!*.com {KEY_A}\n"),
+            format!("# example.com {KEY_A}\n"),
+            format!("@cert-authority example.com {KEY_A}\n"),
+            format!("@x example.com {KEY_A}\n"),
+            format!("{HASHED_22}|junk {KEY_A}\n"),
+        ] {
+            assert_eq!(
+                check(contents.as_bytes(), "example.com", 22, KEY_A),
+                ask(HostKeyStatus::New, &[]),
+                "{contents:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_revoked_key_is_refused() {
+        for contents in [
+            format!("example.com {KEY_A}\n@revoked example.com {KEY_A}\n"),
+            format!("@revoked * {KEY_A}\nexample.com {KEY_A}\n"),
+            format!("@revoked\t*.COM\t{KEY_A}\n"),
+            format!("@revoked {HASHED_22} {KEY_A}\n"),
+        ] {
+            assert_eq!(
+                check(contents.as_bytes(), "example.com", 22, KEY_A),
+                KnownHost::Revoked,
+                "{contents:?}"
+            );
+        }
+        // Not for a host the pattern rules out, nor for another key.
+        let contents =
+            format!("example.com {KEY_A}\n@revoked *,!example.com {KEY_A}\n@revoked * {KEY_B}\n");
+        assert_eq!(
+            check(contents.as_bytes(), "example.com", 22, KEY_A),
+            KnownHost::Trusted
+        );
+    }
+
+    #[test]
+    fn names_are_looked_up_as_openssh_writes_them() {
+        assert_eq!(known_hosts_name("Example.COM", 22).unwrap(), "example.com");
+        assert_eq!(known_hosts_name("[::1]", 22).unwrap(), "::1");
+        assert_eq!(known_hosts_name("[::1]", 2222).unwrap(), "[::1]:2222");
+        assert_eq!(known_hosts_name("::1", 2222).unwrap(), "[::1]:2222");
+        assert_eq!(
+            known_hosts_name("[FE80::1%ETH0]", 22).unwrap(),
+            "fe80::1%eth0"
+        );
+        // A plain name matches in either case; a hashed one is of the
+        // lower-case name, as OpenSSH hashes it.
+        for (contents, host) in [
+            (format!("example.com {KEY_A}\n"), "Example.COM"),
+            (format!("EXAMPLE.com {KEY_A}\n"), "example.com"),
+            (format!("{HASHED_22} {KEY_A}\n"), "Example.COM"),
+            (format!("::1 {KEY_A}\n"), "[::1]"),
+        ] {
+            assert_eq!(
+                check(contents.as_bytes(), host, 22, KEY_A),
+                KnownHost::Trusted,
+                "{contents:?} for {host}"
+            );
+        }
+        for (contents, host) in [
+            (format!("@revoked {HASHED_22} {KEY_A}\n"), "Example.COM"),
+            (format!("@revoked ::1 {KEY_A}\n"), "[::1]"),
+        ] {
+            assert_eq!(
+                check(contents.as_bytes(), host, 22, KEY_A),
+                KnownHost::Revoked,
+                "{contents:?} for {host}"
+            );
+        }
+        // Saving writes the name so, and replaces an entry in another case.
+        let (dir, file) = scratch_known_hosts();
+        crate::private_fs::create_private_dir(file.parent().unwrap()).unwrap();
+        std::fs::write(&file, format!("EXAMPLE.com {KEY_A}\n")).unwrap();
+        save_known_host(&file, "Example.COM", 22, &public_key(KEY_B)).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&file).unwrap(),
+            format!("example.com {KEY_B}\n")
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn the_prompt_shows_a_few_keys_on_record() {
+        use russh::keys::ssh_key::public::{Ed25519PublicKey, KeyData};
+        let contents = (0u8..20)
+            .map(|i| {
+                let key =
+                    russh::keys::PublicKey::new(KeyData::Ed25519(Ed25519PublicKey([i; 32])), "");
+                format!("example.com {}\n", key.to_openssh().unwrap())
+            })
+            .collect::<Vec<_>>()
+            .concat();
+        let KnownHost::Ask { status, known } = check(contents.as_bytes(), "example.com", 22, KEY_B)
+        else {
+            panic!("not asked");
+        };
+        assert_eq!(status, HostKeyStatus::Changed);
+        assert_eq!(known.len(), MAX_KNOWN_KEYS_SHOWN);
+    }
+
+    #[test]
+    fn no_file_is_nothing_on_record_and_a_directory_is_unchecked() {
+        let (dir, file) = scratch_known_hosts();
+        let key = public_key(KEY_A);
+        assert_eq!(
+            check_known_host(&file, "example.com", 22, &key),
+            ask(HostKeyStatus::New, &[])
+        );
+        crate::private_fs::create_private_dir(&file).unwrap();
+        assert_eq!(
+            check_known_host(&file, "example.com", 22, &key),
+            ask(HostKeyStatus::Unchecked, &[])
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_file_over_the_limit_is_neither_read_nor_rewritten() {
+        let (dir, file) = scratch_known_hosts();
+        crate::private_fs::create_private_dir(file.parent().unwrap()).unwrap();
+        std::fs::File::create(&file)
+            .unwrap()
+            .set_len(MAX_KNOWN_HOSTS_SIZE + 1)
+            .unwrap();
+        let key = public_key(KEY_A);
+        assert_eq!(
+            check_known_host(&file, "example.com", 22, &key),
+            ask(HostKeyStatus::Unchecked, &[])
+        );
+        assert!(save_known_host(&file, "example.com", 22, &key).is_err());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_line_is_read_as_openssh_reads_it() {
+        let blob = KEY_A.split(' ').nth(1).unwrap();
+        // The key type must match the key.
+        assert_eq!(
+            check(
+                format!("example.com ssh-rsa {blob}\n").as_bytes(),
+                "example.com",
+                22,
+                KEY_A
+            ),
+            ask(HostKeyStatus::Unchecked, &[])
+        );
+        // A line ends at a NUL, so this one names only `x`.
+        assert_eq!(
+            check(
+                format!("x\0,example.com {KEY_A}\n").as_bytes(),
+                "example.com",
+                22,
+                KEY_A
+            ),
+            ask(HostKeyStatus::New, &[])
+        );
+        // A bad line beside a readable one still shows the change.
+        let contents = format!("example.com ssh-ed25519 not-a-key\nexample.com {KEY_A}\n");
+        assert_eq!(
+            check(contents.as_bytes(), "example.com", 22, KEY_B),
+            ask(HostKeyStatus::Changed, &[KEY_A])
+        );
+        // The same key on two lines is shown once.
+        let contents = format!("example.com {KEY_A}\n{HASHED_22} {KEY_A}\n");
+        assert_eq!(
+            check(contents.as_bytes(), "example.com", 22, KEY_B),
+            ask(HostKeyStatus::Changed, &[KEY_A])
+        );
+    }
+
+    #[test]
+    fn an_unreadable_revocation_leaves_the_key_unchecked() {
+        let revocation = "@revoked example.com ssh-ed25519 not-a-key\n";
+        let contents = format!("example.com {KEY_A}\n{revocation}");
+        assert_eq!(
+            check(contents.as_bytes(), "example.com", 22, KEY_A),
+            ask(HostKeyStatus::Unchecked, &[])
+        );
+        assert_eq!(
+            check(contents.as_bytes(), "example.com", 22, KEY_B),
+            ask(HostKeyStatus::Changed, &[KEY_A])
+        );
+        assert_eq!(
+            check(revocation.as_bytes(), "example.com", 22, KEY_A),
+            ask(HostKeyStatus::Unchecked, &[])
+        );
+        // One for another host does not count.
+        let contents = format!("example.com {KEY_A}\n@revoked other.org ssh-ed25519 x\n");
+        assert_eq!(
+            check(contents.as_bytes(), "example.com", 22, KEY_A),
+            KnownHost::Trusted
+        );
+    }
+
+    /// Whatever `check_known_host` counts for a host, saving a new key for
+    /// it replaces: otherwise the new key would show as changed for good.
+    #[test]
+    fn saving_replaces_every_entry_the_check_counts() {
+        for line in [
+            format!("example.com {KEY_A}\n"),
+            format!("other.org,example.com {KEY_A}\r\n"),
+            format!("x\r,example.com {KEY_A}\n"),
+            "example.com\r\0junk\n".to_string(),
+            format!("\t example.com\t{KEY_A} comment\n"),
+            format!("{HASHED_22} {KEY_A}\n"),
+            format!("example.com,!other.org {KEY_A}\n"),
+            format!("example.com {KEY_C}\n"),
+            "example.com ssh-ed25519 not-a-key\n".to_string(),
+            format!("example.com {KEY_A}"),
+        ] {
+            let (dir, file) = scratch_known_hosts();
+            crate::private_fs::create_private_dir(file.parent().unwrap()).unwrap();
+            std::fs::write(&file, &line).unwrap();
+            let key = public_key(KEY_B);
+            assert_ne!(
+                check_known_host(&file, "example.com", 22, &key),
+                ask(HostKeyStatus::New, &[]),
+                "{line:?} is not counted"
+            );
+            save_known_host(&file, "example.com", 22, &key).unwrap();
+            assert_eq!(
+                check_known_host(&file, "example.com", 22, &key),
+                KnownHost::Trusted,
+                "{line:?} was left behind"
+            );
+            std::fs::remove_dir_all(&dir).unwrap();
+        }
+    }
+
+    #[test]
+    fn patterns_match_as_in_openssh() {
+        for (pattern, text) in [
+            ("*", "example.com"),
+            ("*", ""),
+            ("*.example.com", "a.example.com"),
+            ("host?.com", "host1.com"),
+            ("EXAMPLE.com", "example.COM"),
+            ("a*b*c", "aXbYc"),
+            ("*a*", "banana"),
+        ] {
+            assert!(
+                pattern_matches(pattern.as_bytes(), text.as_bytes()),
+                "{pattern} {text}"
+            );
+        }
+        for (pattern, text) in [
+            ("*.example.com", "example.com"),
+            ("host?.com", "host.com"),
+            ("a*b", "ac"),
+            ("", "a"),
+        ] {
+            assert!(
+                !pattern_matches(pattern.as_bytes(), text.as_bytes()),
+                "{pattern} {text}"
+            );
+        }
+        // Many stars against a long name that does not match end at once.
+        let pattern = "*a".repeat(60);
+        let text = format!("{}b", "a".repeat(400));
+        assert!(!pattern_matches(pattern.as_bytes(), text.as_bytes()));
+        // So does a line-long pattern: it has more letters than the name.
+        let pattern = "*a".repeat(1_000_000);
+        assert!(!pattern_matches(pattern.as_bytes(), text.as_bytes()));
+        let pattern = format!("{}b", "*".repeat(1_000_000));
+        assert!(pattern_matches(pattern.as_bytes(), text.as_bytes()));
     }
 
     #[test]
@@ -2669,6 +3434,30 @@ mod tests {
             "[]",
             "[%eth0]",
             "[::1%a,example.com]",
+            // OpenSSH's own refusals, which could also shape the prompt.
+            "x<br>y",
+            "x'y",
+            "x\"y",
+            "x`y",
+            "x$y",
+            "x\\y",
+            "x;y",
+            "x&y",
+            "x(y)",
+            "x{y}",
+            // Invisible characters with which a name could pass for another.
+            "moc.elpmaxe\u{202E}",
+            "exa\u{200B}mple.com",
+            "\u{FEFF}example.com",
+            "x\u{2066}y\u{2069}",
+            "exam\u{00AD}ple.com",
+            "e\u{034F}xample.com",
+            "example\u{FE0F}.com",
+            "example.com\u{E0041}",
+            "exa\u{206A}mple.com",
+            "\u{2800}example.com",
+            "example\u{FFF9}.com",
+            "\u{3164}example.com",
             "#example.com",
             "@revoked",
             "|1|abc|def",
@@ -2678,7 +3467,10 @@ mod tests {
         ] {
             let err = validate_host_name(host).unwrap_err();
             assert!(
-                !err.contains(['\n', '\t', '\u{0}', '\u{85}', '\u{2028}']),
+                !err.contains([
+                    '\n', '\t', '\u{0}', '\u{85}', '\u{2028}', '\u{202E}', '\u{200B}', '\u{FEFF}',
+                    '\u{2066}', '\u{2069}'
+                ]),
                 "{err:?}"
             );
         }

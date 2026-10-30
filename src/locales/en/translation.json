@@ -238,7 +238,19 @@
     "fingerprint": "{{keyType}} key fingerprint:",
     "confirmConnect": "Are you sure you want to continue connecting?",
     "reject": "Reject",
-    "accept": "Accept"
+    "accept": "Accept",
+    "titleChanged": "Host Key Changed",
+    "changed": "The host key of <1>{{host}}:{{port}}</1> is not the one on record. Someone could be intercepting the connection (a man-in-the-middle attack), or the host was reinstalled or given a new key.",
+    "confirmChanged": "Only accept if you know why the key changed. Accepting replaces the key on record.",
+    "titleOtherType": "Host Key Type Changed",
+    "otherType": "<1>{{host}}:{{port}}</1> is on record with a {{knownTypes}} key, but now offers a {{keyType}} key. Someone could be intercepting the connection (a man-in-the-middle attack), or the host was given a new kind of key.",
+    "confirmOtherType": "Only accept if you know why the host offers another kind of key. Accepting replaces the keys on record.",
+    "titleUnchecked": "Host Key Not Checked",
+    "unchecked": "The known_hosts file could not be read, or its entry for <1>{{host}}:{{port}}</1> is damaged, so this key could not be compared with the one on record. The application log has the details.",
+    "confirmUnchecked": "Only accept if you have checked the fingerprint another way.",
+    "recordedKey": "{{keyType}} key on record:",
+    "offeredKey": "{{keyType}} key offered now:",
+    "acceptAnyway": "Accept Anyway"
   },
   "quickConnect": {
     "title": "Quick Connect",

@@ -237,7 +237,19 @@
     "fingerprint": "{{keyType}} anahtar parmak izi:",
     "confirmConnect": "Bağlantıya devam etmek istediğinizden emin misiniz?",
     "reject": "Reddet",
-    "accept": "Kabul Et"
+    "accept": "Kabul Et",
+    "titleChanged": "Sunucu Anahtarı Değişti",
+    "changed": "<1>{{host}}:{{port}}</1> sunucusunun anahtarı kayıtlı anahtarla eşleşmiyor. Birisi bağlantıyı dinliyor olabilir (ortadaki adam saldırısı) ya da sunucu yeniden kuruldu veya yeni bir anahtar aldı.",
+    "confirmChanged": "Yalnızca anahtarın neden değiştiğini biliyorsanız kabul edin. Kabul etmek kayıtlı anahtarı değiştirir.",
+    "titleOtherType": "Sunucu Anahtar Türü Değişti",
+    "otherType": "<1>{{host}}:{{port}}</1> için {{knownTypes}} anahtarı kayıtlı, ancak sunucu şimdi bir {{keyType}} anahtarı sunuyor. Birisi bağlantıyı dinliyor olabilir (ortadaki adam saldırısı) ya da sunucu yeni türde bir anahtar aldı.",
+    "confirmOtherType": "Yalnızca sunucunun neden başka türde bir anahtar sunduğunu biliyorsanız kabul edin. Kabul etmek kayıtlı anahtarları değiştirir.",
+    "titleUnchecked": "Sunucu Anahtarı Denetlenmedi",
+    "unchecked": "known_hosts dosyası okunamadı veya <1>{{host}}:{{port}}</1> kaydı bozuk, bu yüzden bu anahtar kayıtlı olanla karşılaştırılamadı. Ayrıntılar uygulama günlüğünde.",
+    "confirmUnchecked": "Yalnızca parmak izini başka bir yolla doğruladıysanız kabul edin.",
+    "recordedKey": "Kayıtlı {{keyType}} anahtarı:",
+    "offeredKey": "Şimdi sunulan {{keyType}} anahtarı:",
+    "acceptAnyway": "Yine de Kabul Et"
   },
   "quickConnect": {
     "title": "Hızlı Bağlantı",

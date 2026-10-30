@@ -237,7 +237,19 @@
     "fingerprint": "{{keyType}}-sleutelvingerafdruk:",
     "confirmConnect": "Weet u zeker dat u door wilt gaan met verbinden?",
     "reject": "Weigeren",
-    "accept": "Accepteren"
+    "accept": "Accepteren",
+    "titleChanged": "Hostsleutel gewijzigd",
+    "changed": "De hostsleutel van <1>{{host}}:{{port}}</1> is niet de geregistreerde. Iemand zou de verbinding kunnen onderscheppen (een man-in-the-middle-aanval), of de host is opnieuw geïnstalleerd of heeft een nieuwe sleutel gekregen.",
+    "confirmChanged": "Accepteer alleen als u weet waarom de sleutel is gewijzigd. Accepteren vervangt de geregistreerde sleutel.",
+    "titleOtherType": "Type hostsleutel gewijzigd",
+    "otherType": "<1>{{host}}:{{port}}</1> is geregistreerd met een {{knownTypes}}-sleutel, maar biedt nu een {{keyType}}-sleutel aan. Iemand zou de verbinding kunnen onderscheppen (een man-in-the-middle-aanval), of de host heeft een nieuw soort sleutel gekregen.",
+    "confirmOtherType": "Accepteer alleen als u weet waarom de host een ander soort sleutel aanbiedt. Accepteren vervangt de geregistreerde sleutels.",
+    "titleUnchecked": "Hostsleutel niet gecontroleerd",
+    "unchecked": "Het bestand known_hosts kon niet worden gelezen, of de vermelding voor <1>{{host}}:{{port}}</1> is beschadigd, dus deze sleutel kon niet met de geregistreerde worden vergeleken. Het applicatielogboek bevat de details.",
+    "confirmUnchecked": "Accepteer alleen als u de vingerafdruk op een andere manier hebt gecontroleerd.",
+    "recordedKey": "Geregistreerde {{keyType}}-sleutel:",
+    "offeredKey": "Nu aangeboden {{keyType}}-sleutel:",
+    "acceptAnyway": "Toch accepteren"
   },
   "quickConnect": {
     "title": "Snelverbinding",

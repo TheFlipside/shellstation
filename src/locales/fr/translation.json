@@ -237,7 +237,19 @@
     "fingerprint": "Empreinte de la clé {{keyType}} :",
     "confirmConnect": "Êtes-vous sûr de vouloir continuer la connexion ?",
     "reject": "Refuser",
-    "accept": "Accepter"
+    "accept": "Accepter",
+    "titleChanged": "Clé de l'hôte modifiée",
+    "changed": "La clé de l'hôte <1>{{host}}:{{port}}</1> n'est pas celle enregistrée. Quelqu'un pourrait intercepter la connexion (une attaque de l'homme du milieu), ou l'hôte a été réinstallé ou a reçu une nouvelle clé.",
+    "confirmChanged": "N'acceptez que si vous savez pourquoi la clé a changé. Accepter remplace la clé enregistrée.",
+    "titleOtherType": "Type de clé de l'hôte modifié",
+    "otherType": "<1>{{host}}:{{port}}</1> est enregistré avec une clé {{knownTypes}}, mais propose maintenant une clé {{keyType}}. Quelqu'un pourrait intercepter la connexion (une attaque de l'homme du milieu), ou l'hôte a reçu un nouveau type de clé.",
+    "confirmOtherType": "N'acceptez que si vous savez pourquoi l'hôte propose un autre type de clé. Accepter remplace les clés enregistrées.",
+    "titleUnchecked": "Clé de l'hôte non vérifiée",
+    "unchecked": "Le fichier known_hosts n'a pas pu être lu, ou son entrée pour <1>{{host}}:{{port}}</1> est endommagée : cette clé n'a donc pas pu être comparée à celle enregistrée. Le journal de l'application contient les détails.",
+    "confirmUnchecked": "N'acceptez que si vous avez vérifié l'empreinte par un autre moyen.",
+    "recordedKey": "Clé {{keyType}} enregistrée :",
+    "offeredKey": "Clé {{keyType}} proposée maintenant :",
+    "acceptAnyway": "Accepter quand même"
   },
   "quickConnect": {
     "title": "Connexion rapide",
