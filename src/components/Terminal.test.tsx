@@ -10,7 +10,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { useSettingsStore } from "../stores/settingsStore";
 import {
   SESSION_CLOSED_ERROR,
@@ -352,6 +352,104 @@ describe("Terminal focus restoration", () => {
     vi.advanceTimersByTime(100);
 
     expect(term.focus).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("Terminal listener registration", () => {
+  /** Resolvers for each listen() call, in call order. */
+  let registrations: ((unlisten: UnlistenFn) => void)[];
+
+  beforeEach(() => {
+    // Registration settles through real promise chains — see the
+    // file-level fake-timer setup.
+    vi.useRealTimers();
+    registrations = [];
+    vi.mocked(listen).mockImplementation(
+      () =>
+        new Promise<UnlistenFn>((resolve) => {
+          registrations.push(resolve);
+        }),
+    );
+  });
+
+  afterEach(() => {
+    // clearMocks keeps implementations, so put the default back.
+    vi.mocked(listen).mockImplementation(() => Promise.resolve(vi.fn()));
+  });
+
+  /**
+   * Finish registrations one at a time, each with its own unlisten spy,
+   * until no more are pending — whether the component starts them all at
+   * once or one after another.
+   */
+  async function completeRegistrations(): Promise<Mock[]> {
+    const unlisteners: Mock[] = [];
+    while (unlisteners.length < registrations.length) {
+      const unlisten = vi.fn();
+      registrations[unlisteners.length](unlisten);
+      unlisteners.push(unlisten);
+      await settle();
+    }
+    expect(unlisteners).toHaveLength(2);
+    return unlisteners;
+  }
+
+  function readyCalls(): number {
+    return vi.mocked(invoke).mock.calls.filter(([cmd]) => cmd === "terminal_ready").length;
+  }
+
+  it("signals ready only once both listeners are registered", async () => {
+    renderTerminal();
+    await settle();
+    expect(readyCalls()).toBe(0);
+
+    await completeRegistrations();
+
+    expect(readyCalls()).toBe(1);
+    expect(invoke).toHaveBeenCalledWith("terminal_ready", { id: "session-1" });
+  });
+
+  it("removes both listeners on unmount", async () => {
+    const { unmount } = renderTerminal();
+    const unlisteners = await completeRegistrations();
+
+    unmount();
+    await settle();
+
+    for (const unlisten of unlisteners) {
+      expect(unlisten).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  it("removes listeners that finish registering after unmount", async () => {
+    // StrictMode's discarded first mount, or a tab closed straight away.
+    const { unmount } = renderTerminal();
+    unmount();
+
+    const unlisteners = await completeRegistrations();
+
+    for (const unlisten of unlisteners) {
+      expect(unlisten).toHaveBeenCalledTimes(1);
+    }
+    // The ready signal is one-shot; a discarded instance must leave it for
+    // the instance that will show the output.
+    expect(readyCalls()).toBe(0);
+  });
+
+  it("ignores output delivered after unmount", () => {
+    const { unmount } = renderTerminal();
+    const term = latestTerminal();
+    unmount();
+
+    const call = vi
+      .mocked(listen)
+      .mock.calls.find(([name]) => name === "terminal-output-session-1");
+    if (!call) {
+      throw new Error("Terminal did not listen for its output event");
+    }
+    (call[1] as unknown as (event: { payload: string }) => void)({ payload: btoa("late") });
+
+    expect(term.write).not.toHaveBeenCalled();
   });
 });
 

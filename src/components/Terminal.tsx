@@ -342,10 +342,6 @@ export function Terminal({
     };
     container.addEventListener("paste", handleNativePaste, true);
 
-    // Listen for terminal output.
-    let outputUnlisten: UnlistenFn | null = null;
-    let exitUnlisten: UnlistenFn | null = null;
-
     // One decoder for the whole session, in streaming mode. The backend sends
     // whatever each read returned, so a chunk can end partway through a
     // multi-byte UTF-8 character; a streaming decoder holds those bytes back
@@ -353,19 +349,30 @@ export function Terminal({
     // on its own would turn both halves into U+FFFD.
     const decoder = new TextDecoder();
 
-    const setupListeners = async (): Promise<void> => {
-      outputUnlisten = await listen<string>(`terminal-output-${sessionId}`, (event) => {
+    // Listen for terminal output and exit. Registering a listener is async,
+    // so the effect can be cleaned up before it finishes: StrictMode mounts,
+    // unmounts and remounts every component in development, and a tab can be
+    // closed straight away. Cleanup therefore removes each listener whenever
+    // its registration completes, and only a still-mounted instance tells the
+    // backend it is ready. That signal is one-shot and releases the output
+    // buffered so far, so from a discarded instance it would hand that output
+    // to a terminal nobody sees.
+    let disposed = false;
+    const listeners: Promise<UnlistenFn>[] = [
+      listen<string>(`terminal-output-${sessionId}`, (event) => {
+        // A listener still registering at cleanup can fire before removal.
+        if (disposed) return;
         const bytes = base64Decode(event.payload);
         const text = decoder.decode(bytes, { stream: true });
         const highlighted = highlightRef.current ? highlightRef.current.process(text) : text;
         term.write(highlighted);
-      });
+      }),
+      // handleExit needs no such check: cleanup sets sessionEnded.
+      listen(`terminal-exit-${sessionId}`, handleExit),
+    ];
 
-      exitUnlisten = await listen(`terminal-exit-${sessionId}`, handleExit);
-    };
-
-    setupListeners()
-      .then(() => invoke("terminal_ready", { id: sessionId }))
+    Promise.all(listeners)
+      .then(() => (disposed ? undefined : invoke("terminal_ready", { id: sessionId })))
       .catch(noop);
 
     // Handle container resize.  Skip when the container is hidden
@@ -381,14 +388,20 @@ export function Terminal({
 
     return () => {
       sessionEnded = true;
+      disposed = true;
       resizeObserver.disconnect();
       onDataDisposable.dispose();
       onSelectionDisposable.dispose();
       onResizeDisposable.dispose();
       container.removeEventListener("mousedown", handleRightClick, true);
       container.removeEventListener("paste", handleNativePaste, true);
-      if (outputUnlisten) outputUnlisten();
-      if (exitUnlisten) exitUnlisten();
+      for (const listener of listeners) {
+        listener
+          .then((unlisten) => {
+            unlisten();
+          })
+          .catch(noop);
+      }
       setPendingPaste(null);
       unregisterTerminal(sessionId, term);
       term.dispose();
