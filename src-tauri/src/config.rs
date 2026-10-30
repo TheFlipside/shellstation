@@ -247,8 +247,10 @@ impl LoggingConfig {
                 "Filename format must not start with '.' or a space, or contain '..'".to_string(),
             );
         }
-        let lower = fmt.to_lowercase();
-        if !(lower.ends_with(".log") || lower.ends_with(".txt")) {
+        let extension = Path::new(fmt).extension().and_then(|ext| ext.to_str());
+        if !extension
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("log") || ext.eq_ignore_ascii_case("txt"))
+        {
             return Err("Filename format must end in .log or .txt".to_string());
         }
         Ok(())
@@ -595,6 +597,8 @@ mod tests {
             "{name}",
             "{name}.bat",
             "{name}.log.bat",
+            "{name}.log.",
+            "{name}.log ",
             "{name}.ps1",
             ".bashrc",
             ".log",
