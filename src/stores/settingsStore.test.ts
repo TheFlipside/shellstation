@@ -552,6 +552,184 @@ describe("connection settings", () => {
       expect(callsTo("connection_save_config")).toEqual([{ connectTimeoutSecs: 30 }]);
     });
 
+    describe("and changed in this version before they could move", () => {
+      /** A first start whose hand-over failed at `failing`, leaving them parked. */
+      async function failedFirstStart(
+        legacy: Record<string, unknown>,
+        failing: string,
+      ): Promise<void> {
+        storeLegacy(legacy);
+        await useSettingsStore.persist.rehydrate();
+        vi.spyOn(console, "warn").mockImplementation(() => undefined);
+        invokeMock.mockImplementation(backendFailing(failing, "config locked"));
+        await startUpConnectionSettings();
+        expect(localStorage.getItem(LEGACY_KEY)).not.toBeNull();
+        invokeMock.mockImplementation(fakeBackend);
+        invokeMock.mockClear();
+      }
+
+      const ALL_PARKED = {
+        restrictPrivateIps: true,
+        connectTimeout: 30,
+        keepaliveInterval: 0,
+        keepaliveMax: 5,
+      };
+
+      it.each([
+        ["setConnectTimeout", "connectTimeoutSecs", "connect_timeout_secs", 60],
+        ["setKeepaliveInterval", "keepaliveIntervalSecs", "keepalive_interval_secs", 45],
+        ["setKeepaliveMax", "keepaliveMax", "keepalive_max", 7],
+      ] as const)(
+        "keep a value saved with %s, and still move the rest",
+        async (setter, arg, field, value) => {
+          await failedFirstStart(ALL_PARKED, "connection_set_restrict_private_ips");
+          await useSettingsStore.getState()[setter](value);
+
+          await startUp();
+          expect(callsTo("connection_set_restrict_private_ips")).toStrictEqual([{ enabled: true }]);
+          // A value left out is undefined, which IPC does not send.
+          const saves = callsTo("connection_save_config");
+          const handedOver = saves[saves.length - 1] as Record<string, unknown>;
+          expect(handedOver[arg]).toBeUndefined();
+          expect(Object.values(handedOver).filter((v) => v !== undefined)).toHaveLength(2);
+          expect(backend.connection[field]).toBe(value);
+        },
+      );
+
+      it("keep a value set by an import", async () => {
+        await failedFirstStart(ALL_PARKED, "connection_set_restrict_private_ips");
+        await importSettings({ connectTimeout: 60 });
+
+        await startUp();
+        expect(backend.connection).toEqual({
+          restrict_private_ips: true,
+          connect_timeout_secs: 60,
+          keepalive_interval_secs: 0,
+          keepalive_max: 5,
+        });
+      });
+
+      it("still move a value whose change was refused", async () => {
+        await failedFirstStart({ connectTimeout: 30 }, "connection_save_config");
+        // Out of range: refused before it reaches the backend.
+        await useSettingsStore.getState().setConnectTimeout(301);
+        // Refused by the backend.
+        invokeMock.mockImplementation(backendFailing("connection_save_config", "disk full"));
+        await expect(useSettingsStore.getState().setConnectTimeout(60)).rejects.toThrow();
+        invokeMock.mockImplementation(fakeBackend);
+
+        await startUp();
+        expect(backend.connection.connect_timeout_secs).toBe(30);
+      });
+
+      it("keep a value saved while the check is being handed over", async () => {
+        storeLegacy({ restrictPrivateIps: true, connectTimeout: 30 });
+        await useSettingsStore.persist.rehydrate();
+        let open = (): void => undefined;
+        const opened = new Promise<void>((resolve) => {
+          open = resolve;
+        });
+        invokeMock.mockImplementation(
+          <T>(cmd: string, args?: InvokeArgs): Promise<T> =>
+            cmd === "connection_set_restrict_private_ips"
+              ? opened.then(() => fakeBackend<T>(cmd, args))
+              : fakeBackend<T>(cmd, args),
+        );
+
+        const startup = startUpConnectionSettings();
+        await useSettingsStore.getState().setConnectTimeout(60);
+        open();
+        expect(await startup).toEqual({ errors: [], privateIpCheckOff: false });
+        expect(callsTo("connection_save_config")).toEqual([{ connectTimeoutSecs: 60 }]);
+        expect(backend.connection).toMatchObject({
+          restrict_private_ips: true,
+          connect_timeout_secs: 60,
+        });
+      });
+
+      it("never undo switching the check off that the user confirmed", async () => {
+        // The check moved, the timeout did not.
+        await failedFirstStart(
+          { restrictPrivateIps: true, connectTimeout: 30 },
+          "connection_save_config",
+        );
+        expect(backend.connection.restrict_private_ips).toBe(true);
+        expect(useSettingsStore.getState().restrictPrivateIps).toBe(true);
+        await useSettingsStore.getState().setRestrictPrivateIps(false);
+
+        await startUp();
+        expect(callsTo("connection_set_restrict_private_ips")).toStrictEqual([{ enabled: false }]);
+        expect(backend.connection).toMatchObject({
+          restrict_private_ips: false,
+          connect_timeout_secs: 30,
+        });
+      });
+
+      it("forget an older on once the check is on, as when the user keeps it on", async () => {
+        await failedFirstStart(
+          { restrictPrivateIps: true, connectTimeout: 30 },
+          "connection_save_config",
+        );
+        expect(useSettingsStore.getState().restrictPrivateIps).toBe(true);
+        backend.userAllowsOff = false;
+        await useSettingsStore.getState().setRestrictPrivateIps(false);
+
+        await startUp();
+        // Nothing left to send: no second, handed-over "on".
+        expect(callsTo("connection_set_restrict_private_ips")).toStrictEqual([{ enabled: false }]);
+        expect(backend.connection.restrict_private_ips).toBe(true);
+      });
+
+      it("still move an older on when a check that is off is switched off", async () => {
+        await failedFirstStart({ restrictPrivateIps: true }, "connection_set_restrict_private_ips");
+        expect(useSettingsStore.getState().restrictPrivateIps).toBe(false);
+        // The backend asks nothing here, so this is no one's confirmation.
+        await useSettingsStore.getState().setRestrictPrivateIps(false);
+
+        await startUp();
+        expect(callsTo("connection_set_restrict_private_ips")).toStrictEqual([
+          { enabled: false },
+          { enabled: true },
+        ]);
+        expect(backend.connection.restrict_private_ips).toBe(true);
+      });
+
+      it("keep the check failing closed for what could not be read", async () => {
+        localStorage.setItem(LEGACY_KEY, "{damaged");
+        await useSettingsStore.getState().setKeepaliveMax(7);
+        expect(localStorage.getItem(LEGACY_KEY)).toBe("{damaged");
+
+        invokeMock.mockClear();
+        await startUp();
+        expect(callsTo("connection_set_restrict_private_ips")).toStrictEqual([{ enabled: true }]);
+        expect(backend.connection.keepalive_max).toBe(7);
+      });
+
+      it("let go of what could not be read once the check is on", async () => {
+        localStorage.setItem(LEGACY_KEY, "{damaged");
+        await useSettingsStore.getState().setRestrictPrivateIps(true);
+        expect(localStorage.getItem(LEGACY_KEY)).toBeNull();
+      });
+
+      it("are gone once the user has set every one of them", async () => {
+        await failedFirstStart(
+          { restrictPrivateIps: true, keepaliveInterval: 0 },
+          "connection_set_restrict_private_ips",
+        );
+        await useSettingsStore.getState().setRestrictPrivateIps(true);
+        expect(JSON.parse(localStorage.getItem(LEGACY_KEY) ?? "null")).toEqual({
+          keepaliveInterval: 0,
+        });
+        await useSettingsStore.getState().setKeepaliveInterval(30);
+        expect(localStorage.getItem(LEGACY_KEY)).toBeNull();
+
+        invokeMock.mockClear();
+        await startUp();
+        expect(callsTo("connection_set_restrict_private_ips")).toEqual([]);
+        expect(callsTo("connection_save_config")).toEqual([]);
+      });
+    });
+
     it("still move when localStorage refuses to park them", async () => {
       storeLegacy({ restrictPrivateIps: true });
       const setItem = vi.spyOn(Storage.prototype, "setItem").mockImplementation((key) => {

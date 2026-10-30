@@ -243,6 +243,35 @@ function readParkedConnectionSettings(): Readonly<Record<string, unknown>> | nul
   return parkedConnectionSettings ?? UNREADABLE_PARKED_SETTINGS;
 }
 
+/** Park `settings` in place of what was parked, or nothing if empty. */
+function replaceParkedConnectionSettings(settings: Record<string, unknown> | null): void {
+  const empty = settings === null || Object.keys(settings).length === 0;
+  parkedConnectionSettings = empty ? null : settings;
+  try {
+    if (empty) {
+      localStorage.removeItem(LEGACY_CONNECTION_KEY);
+    } else {
+      localStorage.setItem(LEGACY_CONNECTION_KEY, JSON.stringify(settings));
+    }
+  } catch {
+    // No storage: the copy in memory is all there is. Should storage hold
+    // on to an older copy, a forgotten value may be handed over again, which
+    // is better than removing it and losing a parked "on" with it.
+  }
+}
+
+/**
+ * Stop handing over the parked value of `key`: the user has set it in this
+ * version, and a later launch must not overwrite that with the older value.
+ */
+function forgetParkedConnectionSetting(key: (typeof BACKEND_SETTING_KEYS)[number]): void {
+  const parked = readParkedConnectionSettings();
+  if (parked === null || !Object.prototype.hasOwnProperty.call(parked, key)) return;
+  replaceParkedConnectionSettings(
+    Object.fromEntries(Object.entries(parked).filter(([parkedKey]) => parkedKey !== key)),
+  );
+}
+
 /**
  * What `handOverLegacyConnectionSettings` rejects with when the backend
  * failed to switch on the private-address check an older version had on.
@@ -290,13 +319,21 @@ async function handOver(): Promise<void> {
       throw new PrivateIpCheckHandOverError(err);
     }
   }
-  const { keepaliveInterval, keepaliveMax } = legacy;
+  // Read again: a value the user set while the check was being handed
+  // over is no longer parked, and must not be overwritten. A save still on
+  // its way at this point can be: a narrow window, at startup only, and
+  // for a timeout or keepalive value only.
+  const {
+    connectTimeout: parkedTimeout,
+    keepaliveInterval,
+    keepaliveMax,
+  } = readParkedConnectionSettings() ?? {};
   // Older versions stored up to 3600 s but connected with at most 300 s, so
   // a longer timeout carries over as the 300 s it already was.
   const connectTimeout =
-    typeof legacy.connectTimeout === "number" && legacy.connectTimeout <= 3600
-      ? Math.min(legacy.connectTimeout, 300)
-      : legacy.connectTimeout;
+    typeof parkedTimeout === "number" && parkedTimeout <= 3600
+      ? Math.min(parkedTimeout, 300)
+      : parkedTimeout;
   const values = {
     connectTimeoutSecs: isConnectTimeout(connectTimeout) ? connectTimeout : undefined,
     keepaliveIntervalSecs: isKeepaliveInterval(keepaliveInterval) ? keepaliveInterval : undefined,
@@ -305,17 +342,12 @@ async function handOver(): Promise<void> {
   if (Object.values(values).some((value) => value !== undefined)) {
     await saveConnectionConfig(values);
   }
-  parkedConnectionSettings = null;
-  try {
-    localStorage.removeItem(LEGACY_CONNECTION_KEY);
-  } catch {
-    // No storage: there is no key to remove.
-  }
+  replaceParkedConnectionSettings(null);
 }
 
 export const useSettingsStore = create<SettingsState>()(
   persist(
-    (set) => ({
+    (set, get) => ({
       language: "",
       uiScale: 100,
       themeMode: "system",
@@ -452,12 +484,19 @@ export const useSettingsStore = create<SettingsState>()(
         set({ confirmMultilinePaste: value });
       },
       setRestrictPrivateIps: async (value: boolean) => {
+        const wasOn = get().restrictPrivateIps;
         // Switching the check off opens a dialog the backend words in the
         // operating system's language, not the UI's.
         const on = await invoke<boolean>("connection_set_restrict_private_ips", {
           enabled: value,
         });
         set({ restrictPrivateIps: on });
+        // An older "on" no longer needs handing over once the check is on, or
+        // once the user has switched it off from on, which the backend asks
+        // them to confirm. Switching off a check that is off asks nothing.
+        // `wasOn` is the store's view, which follows the backend's answers;
+        // should it lag behind, the parked "on" stays, failing closed.
+        if (on || wasOn) forgetParkedConnectionSetting("restrictPrivateIps");
       },
       setAutoRefreshInterval: (seconds: number) => {
         // 0 disables polling; any active interval must be >= 5s to prevent
@@ -468,21 +507,25 @@ export const useSettingsStore = create<SettingsState>()(
         }
       },
       // Each sends only its own value, so two changes in flight at once
-      // cannot overwrite each other with a stale copy.
+      // cannot overwrite each other with a stale copy. Once saved, a value
+      // an older version left is no longer handed over.
       setConnectTimeout: async (seconds: number) => {
         if (!isConnectTimeout(seconds)) return;
         const saved = await saveConnectionConfig({ connectTimeoutSecs: seconds });
         set({ connectTimeout: saved.connect_timeout_secs });
+        forgetParkedConnectionSetting("connectTimeout");
       },
       setKeepaliveInterval: async (seconds: number) => {
         if (!isKeepaliveInterval(seconds)) return;
         const saved = await saveConnectionConfig({ keepaliveIntervalSecs: seconds });
         set({ keepaliveInterval: saved.keepalive_interval_secs });
+        forgetParkedConnectionSetting("keepaliveInterval");
       },
       setKeepaliveMax: async (count: number) => {
         if (!isKeepaliveMax(count)) return;
         const saved = await saveConnectionConfig({ keepaliveMax: count });
         set({ keepaliveMax: saved.keepalive_max });
+        forgetParkedConnectionSetting("keepaliveMax");
       },
       setSidebarWidth: (width: number) => {
         if (Number.isFinite(width) && width >= 160 && width <= 600) {
