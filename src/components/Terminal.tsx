@@ -28,9 +28,17 @@ interface TerminalProps {
   onClose?: () => void;
 }
 
-/** Decode a base64 string to bytes using the built-in atob. */
-function base64Decode(encoded: string): Uint8Array {
-  const binary = atob(encoded);
+/**
+ * Decode a base64 string to bytes using the built-in atob. Returns null for
+ * a string that is not valid base64, on which atob throws.
+ */
+function base64Decode(encoded: string): Uint8Array | null {
+  let binary: string;
+  try {
+    binary = atob(encoded);
+  } catch {
+    return null;
+  }
   const bytes = new Uint8Array(binary.length);
   for (let i = 0; i < binary.length; i++) {
     bytes[i] = binary.charCodeAt(i);
@@ -363,6 +371,14 @@ export function Terminal({
         // A listener still registering at cleanup can fire before removal.
         if (disposed) return;
         const bytes = base64Decode(event.payload);
+        if (!bytes) {
+          // The backend always sends base64, so this is a bug there. Drop the
+          // chunk rather than throw out of the event handler, and keep the
+          // payload out of the log: it is terminal output.
+          // eslint-disable-next-line no-console -- diagnostic detail goes to devtools, not the UI
+          console.warn("terminal output event was not valid base64; dropped it");
+          return;
+        }
         const text = decoder.decode(bytes, { stream: true });
         const highlighted = highlightRef.current ? highlightRef.current.process(text) : text;
         term.write(highlighted);

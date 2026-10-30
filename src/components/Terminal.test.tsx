@@ -460,8 +460,8 @@ describe("Terminal output decoding", () => {
     vi.useRealTimers();
   });
 
-  /** Deliver raw bytes the way the backend does: base64 in an output event. */
-  function emitOutput(bytes: number[], sessionId = "session-1"): void {
+  /** Deliver an output event payload to the session's latest listener. */
+  function emitPayload(payload: string, sessionId = "session-1"): void {
     const call = vi
       .mocked(listen)
       .mock.calls.filter(([name]) => name === `terminal-output-${sessionId}`)
@@ -469,9 +469,12 @@ describe("Terminal output decoding", () => {
     if (!call) {
       throw new Error("Terminal did not listen for its output event");
     }
-    (call[1] as unknown as (event: { payload: string }) => void)({
-      payload: btoa(String.fromCharCode(...bytes)),
-    });
+    (call[1] as unknown as (event: { payload: string }) => void)({ payload });
+  }
+
+  /** Deliver raw bytes the way the backend does: base64 in an output event. */
+  function emitOutput(bytes: number[], sessionId = "session-1"): void {
+    emitPayload(btoa(String.fromCharCode(...bytes)), sessionId);
   }
 
   function written(term: FakeTerminal): string[] {
@@ -513,6 +516,32 @@ describe("Terminal output decoding", () => {
     emitOutput([0x6f, 0x6b], "session-2");
 
     expect(written(latestTerminal())).toEqual(["ok"]);
+  });
+
+  it("drops a payload that is not base64 and keeps decoding", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      renderTerminal();
+      await settle();
+      warn.mockClear();
+
+      // The bad payload lands between the two halves of "ä", so this also
+      // checks that dropping it leaves the decoder's held-back byte alone.
+      emitOutput([0x61, 0xc3]);
+      expect(() => {
+        emitPayload("not base64!");
+      }).not.toThrow();
+      emitOutput([0xa4]);
+
+      expect(written(latestTerminal()).join("")).toBe("aä");
+      expect(warn).toHaveBeenCalledTimes(1);
+      // The log must not carry terminal output, in any argument.
+      for (const arg of warn.mock.calls.flat()) {
+        expect(String(arg)).not.toContain("not base64!");
+      }
+    } finally {
+      warn.mockRestore();
+    }
   });
 });
 
