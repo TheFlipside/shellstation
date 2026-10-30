@@ -346,10 +346,17 @@ export function Terminal({
     let outputUnlisten: UnlistenFn | null = null;
     let exitUnlisten: UnlistenFn | null = null;
 
+    // One decoder for the whole session, in streaming mode. The backend sends
+    // whatever each read returned, so a chunk can end partway through a
+    // multi-byte UTF-8 character; a streaming decoder holds those bytes back
+    // until the next chunk completes the character, where decoding each chunk
+    // on its own would turn both halves into U+FFFD.
+    const decoder = new TextDecoder();
+
     const setupListeners = async (): Promise<void> => {
       outputUnlisten = await listen<string>(`terminal-output-${sessionId}`, (event) => {
         const bytes = base64Decode(event.payload);
-        const text = new TextDecoder().decode(bytes);
+        const text = decoder.decode(bytes, { stream: true });
         const highlighted = highlightRef.current ? highlightRef.current.process(text) : text;
         term.write(highlighted);
       });

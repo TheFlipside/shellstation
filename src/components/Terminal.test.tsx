@@ -2,9 +2,10 @@
  * Terminal component tests.
  *
  * Focus of this suite: the multiline-paste confirmation flow and the focus
- * restoration that follows it, and the session-exit path. xterm.js, the Tauri
- * IPC layer, and i18n are mocked; the real Zustand settings store is used so
- * the tests exercise the same `confirmMultilinePaste` path the app does.
+ * restoration that follows it, output decoding, and the session-exit path.
+ * xterm.js, the Tauri IPC layer, and i18n are mocked; the real Zustand
+ * settings store is used so the tests exercise the same
+ * `confirmMultilinePaste` path the app does.
  */
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { act, fireEvent, render, screen } from "@testing-library/react";
@@ -127,6 +128,20 @@ function firePaste(container: HTMLElement, text: string): void {
     value: { getData: () => text },
   });
   fireEvent(target, event);
+}
+
+/**
+ * Let pending promise chains settle — listener setup, rejected writes.
+ * They are pure microtask chains, which all drain before the next
+ * macrotask, so this does not depend on how many awaits each one has.
+ * Needs real timers.
+ */
+async function settle(): Promise<void> {
+  await act(async () => {
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 0);
+    });
+  });
 }
 
 const MULTILINE = "uptime\nreboot\n";
@@ -340,6 +355,69 @@ describe("Terminal focus restoration", () => {
   });
 });
 
+describe("Terminal output decoding", () => {
+  beforeEach(() => {
+    // Listener registration is a real promise chain — see the file-level
+    // fake-timer setup.
+    vi.useRealTimers();
+  });
+
+  /** Deliver raw bytes the way the backend does: base64 in an output event. */
+  function emitOutput(bytes: number[], sessionId = "session-1"): void {
+    const call = vi
+      .mocked(listen)
+      .mock.calls.filter(([name]) => name === `terminal-output-${sessionId}`)
+      .pop();
+    if (!call) {
+      throw new Error("Terminal did not listen for its output event");
+    }
+    (call[1] as unknown as (event: { payload: string }) => void)({
+      payload: btoa(String.fromCharCode(...bytes)),
+    });
+  }
+
+  function written(term: FakeTerminal): string[] {
+    return term.write.mock.calls.map(([text]) => text as string);
+  }
+
+  it("joins a two-byte character split across chunks", async () => {
+    renderTerminal();
+    await settle();
+
+    // "aäb" — ä is 0xC3 0xA4, split between the two reads.
+    emitOutput([0x61, 0xc3]);
+    emitOutput([0xa4, 0x62]);
+
+    expect(written(latestTerminal()).join("")).toBe("aäb");
+  });
+
+  it("joins a four-byte character split across three chunks", async () => {
+    renderTerminal();
+    await settle();
+
+    // U+1F600 is F0 9F 98 80.
+    emitOutput([0xf0]);
+    emitOutput([0x9f, 0x98]);
+    emitOutput([0x80, 0x0a]);
+
+    expect(written(latestTerminal()).join("")).toBe("\u{1F600}\n");
+  });
+
+  it("does not carry a partial character into the next session", async () => {
+    const { rerender } = renderTerminal();
+    await settle();
+    emitOutput([0xc3]);
+
+    // A reconnect gives the tab a new backend session id, and its byte
+    // stream starts fresh.
+    rerender(<Terminal sessionId="session-2" sessionType="local" visible={true} />);
+    await settle();
+    emitOutput([0x6f, 0x6b], "session-2");
+
+    expect(written(latestTerminal())).toEqual(["ok"]);
+  });
+});
+
 describe("Terminal session exit", () => {
   const EXIT_MESSAGE = "\r\nterminal.processExited\r\n";
   const RECONNECT_HINT = "terminal.reconnectHint\r\n";
@@ -380,19 +458,6 @@ describe("Terminal session exit", () => {
     );
     await settle();
     return result;
-  }
-
-  /**
-   * Let pending promise chains settle — listener setup, rejected writes.
-   * They are pure microtask chains, which all drain before the next
-   * macrotask, so this does not depend on how many awaits each one has.
-   */
-  async function settle(): Promise<void> {
-    await act(async () => {
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 0);
-      });
-    });
   }
 
   /**
