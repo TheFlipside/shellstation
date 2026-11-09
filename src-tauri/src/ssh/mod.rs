@@ -846,6 +846,9 @@ fn known_hosts_path() -> Result<PathBuf, String> {
 struct HostsFile {
     path: PathBuf,
     kind: HostsFileKind,
+    /// For a system-wide file, where the revocations last read from it are
+    /// remembered (see [`remember_revocations`]); `None` to remember none.
+    remembered: Option<PathBuf>,
 }
 
 /// Whose a `known_hosts` file is, which decides what one that cannot be
@@ -863,20 +866,34 @@ enum HostsFileKind {
 
 /// The files OpenSSH reads by default: the user's `known_hosts` at `user`,
 /// and `known_hosts2` beside it, then the system-wide `ssh_known_hosts` and
-/// `ssh_known_hosts2`.
-fn known_hosts_files(user: Option<&std::path::Path>) -> Vec<HostsFile> {
+/// `ssh_known_hosts2`, whose revocations are remembered in `remembered_in`
+/// as `ssh_known_hosts.revoked` and `ssh_known_hosts2.revoked`.
+fn known_hosts_files(
+    user: Option<&std::path::Path>,
+    remembered_in: Option<&std::path::Path>,
+) -> Vec<HostsFile> {
     let user_files = user.into_iter().flat_map(|user| {
         [
-            (user.to_path_buf(), HostsFileKind::User),
-            (user.with_file_name("known_hosts2"), HostsFileKind::Legacy),
+            (user.to_path_buf(), HostsFileKind::User, None),
+            (
+                user.with_file_name("known_hosts2"),
+                HostsFileKind::Legacy,
+                None,
+            ),
         ]
     });
     let dir = system_known_hosts_dir();
-    let system_files =
-        ["ssh_known_hosts", "ssh_known_hosts2"].map(|name| (dir.join(name), HostsFileKind::System));
+    let system_files = ["ssh_known_hosts", "ssh_known_hosts2"].map(|name| {
+        let remembered = remembered_in.map(|dir| dir.join(format!("{name}.revoked")));
+        (dir.join(name), HostsFileKind::System, remembered)
+    });
     user_files
         .chain(system_files)
-        .map(|(path, kind)| HostsFile { path, kind })
+        .map(|(path, kind, remembered)| HostsFile {
+            path,
+            kind,
+            remembered,
+        })
         .collect()
 }
 
@@ -900,7 +917,8 @@ fn system_known_hosts_dir() -> PathBuf {
 /// Refuse a system-wide file, or its directory, at `path` unless only an
 /// administrator can change it: owned by `root` and writable by no one
 /// else, or on Windows owned by SYSTEM, the Administrators group or
-/// `TrustedInstaller`, with no one else allowed to change it (see
+/// `TrustedInstaller`, with no one else allowed to change it, its times
+/// included (see
 /// [`administrators_only`]). Any user can create a folder in
 /// `%ProgramData%`, and one an administrator creates there by hand lets
 /// every user add files, so another user of the machine could otherwise put
@@ -989,15 +1007,17 @@ enum Ace {
 /// `owner` owns, with the access list `dacl` (`None`: it has none, which
 /// lets everyone do anything). Its owner is an administrator, and no one
 /// else is allowed to write or append to it, add to or delete from it as a
-/// directory, delete or rename it, or change its permissions or owner. An
-/// entry of a kind not read here fails it.
+/// directory, delete or rename it, change its times or other attributes,
+/// or change its permissions or owner. The times count because a file held
+/// by another process is checked for changes by them (see [`file_stamp`]).
+/// An entry of a kind not read here fails it.
 #[cfg(any(windows, test))]
 fn administrators_only(owner: &str, dacl: Option<&[Ace]>) -> bool {
     // FILE_WRITE_DATA (FILE_ADD_FILE), FILE_APPEND_DATA
-    // (FILE_ADD_SUBDIRECTORY), FILE_DELETE_CHILD, DELETE, WRITE_DAC,
-    // WRITE_OWNER, GENERIC_ALL and GENERIC_WRITE.
+    // (FILE_ADD_SUBDIRECTORY), FILE_DELETE_CHILD, FILE_WRITE_ATTRIBUTES,
+    // DELETE, WRITE_DAC, WRITE_OWNER, GENERIC_ALL and GENERIC_WRITE.
     const CHANGE: u32 =
-        0x2 | 0x4 | 0x40 | 0x1_0000 | 0x4_0000 | 0x8_0000 | 0x1000_0000 | 0x4000_0000;
+        0x2 | 0x4 | 0x40 | 0x100 | 0x1_0000 | 0x4_0000 | 0x8_0000 | 0x1000_0000 | 0x4000_0000;
     // OWNER RIGHTS: whoever owns it, an administrator here.
     const OWNER_RIGHTS: &str = "S-1-3-4";
     is_administrator_sid(owner)
@@ -1092,19 +1112,32 @@ fn known_hosts_name(host: &str, port: u16) -> Result<String, String> {
 /// The contents of the `known_hosts` file at `path`, or `None` when it is
 /// larger than [`MAX_KNOWN_HOSTS_SIZE`].
 fn read_known_hosts(path: &std::path::Path) -> std::io::Result<Option<Vec<u8>>> {
-    read_bounded(std::fs::File::open(path)?)
+    read_bounded(&std::fs::File::open(path)?)
 }
 
 /// The contents of `file`, or `None` when it is larger than
 /// [`MAX_KNOWN_HOSTS_SIZE`]. Read with a bound, so that a file growing after
 /// a size check is not read whole.
-fn read_bounded(file: std::fs::File) -> std::io::Result<Option<Vec<u8>>> {
+fn read_bounded(file: &std::fs::File) -> std::io::Result<Option<Vec<u8>>> {
+    read_limited(file, MAX_KNOWN_HOSTS_SIZE)
+}
+
+/// The contents of `file`, or `None` when it is larger than `limit`.
+fn read_limited(file: &std::fs::File, limit: u64) -> std::io::Result<Option<Vec<u8>>> {
     use std::io::Read;
     let mut contents = Vec::new();
-    file.take(MAX_KNOWN_HOSTS_SIZE + 1)
-        .read_to_end(&mut contents)?;
-    let within = u64::try_from(contents.len()).is_ok_and(|len| len <= MAX_KNOWN_HOSTS_SIZE);
+    file.take(limit + 1).read_to_end(&mut contents)?;
+    let within = u64::try_from(contents.len()).is_ok_and(|len| len <= limit);
     Ok(within.then_some(contents))
+}
+
+/// What [`remember_revocations`] stored at `path`, or `None` when it is
+/// larger than it can be: a stamp line of well under a kilobyte, then the
+/// revocations of a file within [`MAX_KNOWN_HOSTS_SIZE`], which take no
+/// more room than in the file but for a newline after the last.
+fn read_remembered(path: &std::path::Path) -> std::io::Result<Option<Vec<u8>>> {
+    const MAX_REMEMBERED_SIZE: u64 = MAX_KNOWN_HOSTS_SIZE + 1024;
+    read_limited(&std::fs::File::open(path)?, MAX_REMEMBERED_SIZE)
 }
 
 /// Refuse a host name holding a character that no host name or address
@@ -1359,7 +1392,8 @@ const MAX_KNOWN_KEYS_SHOWN: usize = 8;
 /// read leaves the key unchecked, since it might revoke it, where OpenSSH
 /// skips it. Only `known_hosts2`, which nothing writes any more, is skipped
 /// then, and a system-wide file in all but the cases only an administrator
-/// can cause (see [`Unread`]).
+/// can cause (see [`Unread`]). Of a system-wide file that another process
+/// keeps from being read, the revocations last read from it count.
 ///
 /// A key is trusted only by an entry naming the host exactly (a plain name
 /// in either case, as OpenSSH compares them, or a hashed one; see
@@ -1419,6 +1453,57 @@ fn check_contents<'a>(
                 warn!(known_hosts = %file.path.display(), %error, "known_hosts skipped");
                 continue;
             }
+            Err(Unread::Held {
+                error,
+                remembered: Remembered::Nothing,
+            }) => {
+                warn!(
+                    known_hosts = %file.path.display(),
+                    %error,
+                    "known_hosts held by another process, and nothing is remembered from it — skipped"
+                );
+                continue;
+            }
+            Err(Unread::Held {
+                error,
+                remembered: Remembered::Unreadable,
+            }) => {
+                warn!(
+                    known_hosts = %file.path.display(),
+                    %error,
+                    "known_hosts held by another process, and the revocations last read from it cannot be read"
+                );
+                // They might revoke the key.
+                by_name.unreadable_revocation = true;
+                continue;
+            }
+            Err(Unread::Held {
+                error,
+                remembered: Remembered::Revocations { lines, changed },
+            }) => {
+                // Only revocations, so that what is remembered can refuse a
+                // key but never trust one.
+                let remembered = revocation_lines(&lines);
+                let count = remembered
+                    .split(|&b| b == b'\n')
+                    .filter(|line| !line.is_empty())
+                    .count();
+                warn!(
+                    known_hosts = %file.path.display(),
+                    %error,
+                    remembered = count,
+                    changed,
+                    "known_hosts held by another process — only the revocations last read from it count"
+                );
+                let from = file.remembered.as_deref().unwrap_or(&file.path);
+                scan_known_hosts(&remembered, from, &name, key, &mut by_name);
+                if let Some(address) = &address {
+                    scan_known_hosts(&remembered, from, address, key, &mut by_address);
+                }
+                // Changed since, it might now revoke the key.
+                by_name.unreadable_revocation |= changed;
+                continue;
+            }
         };
         scan_known_hosts(&contents, &file.path, &name, key, &mut by_name);
         if let Some(address) = &address {
@@ -1441,36 +1526,98 @@ enum Unread {
     /// It cannot be read, and might revoke the key.
     Unreadable(String),
     /// A system-wide file that someone other than an administrator could
-    /// have changed, or kept from being read, which on Windows any user
-    /// can do by holding it open or locking part of it. Nothing in it
-    /// counts, not even a revocation, so that no user of the machine can
-    /// refuse another's connections or turn their prompts into warnings.
-    /// Nor does one an administrator keeps from this user, which OpenSSH
-    /// skips too.
+    /// have changed, or that an administrator keeps from this user, which
+    /// OpenSSH skips too. Nothing in it counts, not even a revocation, so
+    /// that no user of the machine can refuse another's connections or turn
+    /// their prompts into warnings.
     Skipped(String),
+    /// A system-wide file that another process holds open without sharing
+    /// it for reading, or has locked part of so that even a mapping cannot
+    /// read it: which on Windows any user who can read it can do. Only what
+    /// is `remembered` from it counts (see [`Remembered`]), so that holding
+    /// it cannot take away the revocations an administrator put in it.
+    /// Nothing else counts, as for `Skipped`: a key on record in it neither
+    /// trusts the key nor turns the prompt into a warning. Only on Windows:
+    /// elsewhere nothing makes a file held (see [`held_by_another_process`]).
+    Held {
+        error: String,
+        remembered: Remembered,
+    },
+}
+
+/// What is remembered from a system-wide file that another process holds
+/// (see [`remember_revocations`]).
+#[derive(Debug, PartialEq, Eq)]
+enum Remembered {
+    /// Nothing: it has never been read whole, or nothing is remembered.
+    /// Skipped, as OpenSSH skips it, so that a hold alone cannot put a
+    /// warning on another user's connections.
+    Nothing,
+    /// What was stored cannot be read. The key is left unchecked, since it
+    /// might be revoked.
+    Unreadable,
+    /// The revocations last read from it, which count, even any that an
+    /// administrator has removed since, which can only refuse more.
+    /// `changed`: the file is not as it was then (its size, or when it was
+    /// created or last written), so it might hold new ones, and the key is
+    /// left unchecked. A hold after an administrator's edit thus puts a
+    /// warning on connections until it ends: the price of not trusting a
+    /// key that the edit might revoke.
+    Revocations { lines: Vec<u8>, changed: bool },
 }
 
 /// The contents of the `known_hosts` `file` for the host key check, or why
 /// they are not read. Missing, or linked to `/dev/null`, which switches it
 /// off, it holds nothing; a FIFO is not read, which would block. A
 /// system-wide file is read only while [`system_file_trusted`], it and its
-/// directory, and is then read through the handle it was checked by.
+/// directory, and is then read through the handle it was checked by (see
+/// [`read_system_file`]). Its revocations are then remembered.
 fn known_hosts_contents(file: &HostsFile) -> Result<Vec<u8>, Unread> {
+    read_hosts_file(file, system_file_trusted)
+}
+
+/// [`known_hosts_contents`], with `trusted` in place of
+/// [`system_file_trusted`].
+fn read_hosts_file(
+    file: &HostsFile,
+    trusted: impl Fn(&std::path::Path, Option<&std::fs::File>) -> Result<(), String>,
+) -> Result<Vec<u8>, Unread> {
     let (path, system) = (&file.path, file.kind == HostsFileKind::System);
-    let failed = |e: std::io::Error| {
-        if system {
-            Unread::Skipped(e.to_string())
-        } else {
+    // Once its directory has been checked. `meta`: the file as it is now,
+    // which a hold does not keep from being read, to tell whether it has
+    // changed since it was last read whole. `checked`: whether the file
+    // itself has been, which it has once it could be opened; otherwise it
+    // is checked now, and counts only if it passes.
+    let failed = |e: std::io::Error, meta: &std::fs::Metadata, checked: bool| {
+        if !system {
             Unread::Unreadable(e.to_string())
+        } else if held_by_another_process(&e) {
+            let trusted = if checked {
+                Ok(())
+            } else {
+                held_file_trusted(path, &trusted)
+            };
+            match trusted {
+                Ok(()) => Unread::Held {
+                    error: e.to_string(),
+                    remembered: remembered_revocations(file, Some(meta)),
+                },
+                Err(reason) => Unread::Skipped(reason),
+            }
+        } else {
+            Unread::Skipped(e.to_string())
         }
     };
     let meta = match std::fs::metadata(path) {
         Ok(meta) => meta,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(e) => return Err(failed(e)),
+        // Before its directory has been checked, a system-wide file counts
+        // for nothing, held or not.
+        Err(e) if system => return Err(Unread::Skipped(e.to_string())),
+        Err(e) => return Err(Unread::Unreadable(e.to_string())),
     };
     if system {
-        system_file_trusted(path.parent().unwrap_or(path), None).map_err(Unread::Skipped)?;
+        trusted(path.parent().unwrap_or(path), None).map_err(Unread::Skipped)?;
     }
     // From here on, a system-wide file can only be as it is because an
     // administrator made it so. The directories above are taken to be the
@@ -1482,14 +1629,238 @@ fn known_hosts_contents(file: &HostsFile) -> Result<Vec<u8>, Unread> {
     if !meta.is_file() {
         return Ok(Vec::new());
     }
-    let opened = std::fs::File::open(path).map_err(failed)?;
-    if system {
-        system_file_trusted(path, Some(&opened)).map_err(Unread::Skipped)?;
-    }
-    match read_bounded(opened) {
-        Ok(Some(contents)) => Ok(contents),
+    let opened = std::fs::File::open(path).map_err(|e| failed(e, &meta, false))?;
+    let (read, stamp) = if system {
+        trusted(path, Some(&opened)).map_err(Unread::Skipped)?;
+        // Taken before the read, so that a change during it shows as one.
+        let opened_meta = opened.metadata();
+        let stamp = file_stamp(opened_meta.as_ref().unwrap_or(&meta));
+        (read_system_file(&opened, path), Some(stamp))
+    } else {
+        (read_bounded(&opened), None)
+    };
+    match read {
+        Ok(Some(contents)) => {
+            if let Some(stamp) = stamp {
+                remember_revocations(file, &stamp, &contents);
+            }
+            Ok(contents)
+        }
         Ok(None) => Err(Unread::Unreadable("larger than the limit".to_string())),
-        Err(e) => Err(failed(e)),
+        Err(e) => {
+            // The file as it is now, through the handle it was opened and
+            // checked by.
+            let now = opened.metadata().ok();
+            Err(failed(e, now.as_ref().unwrap_or(&meta), true))
+        }
+    }
+}
+
+/// Check the system-wide file at `path`, which another process holds, with
+/// `trusted`, through a handle that a hold does not stop: one that reads no
+/// more than its attributes, owner and access list (see
+/// `windows_security::open_for_security`).
+fn held_file_trusted(
+    path: &std::path::Path,
+    trusted: &impl Fn(&std::path::Path, Option<&std::fs::File>) -> Result<(), String>,
+) -> Result<(), String> {
+    #[cfg(windows)]
+    let opened = windows_security::open_for_security(path);
+    #[cfg(not(windows))]
+    let opened = std::fs::File::open(path);
+    trusted(path, Some(&opened.map_err(|e| e.to_string())?))
+}
+
+/// What tells whether a file has changed since: its size, and when it was
+/// created and last written, which a hold does not keep from being read.
+/// Only someone allowed to write to it can change any of them (see
+/// [`administrators_only`], which counts the right to change its times), so
+/// an edit shows, unless two fall within one tick of the clock. A time that
+/// cannot be read is `-`.
+fn file_stamp(meta: &std::fs::Metadata) -> String {
+    let nanos = |time: std::io::Result<std::time::SystemTime>| {
+        time.ok()
+            .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+            .map_or_else(|| "-".to_string(), |since| since.as_nanos().to_string())
+    };
+    format!(
+        "{} {} {}",
+        meta.len(),
+        nanos(meta.created()),
+        nanos(meta.modified())
+    )
+}
+
+/// Whether `error` says that another process holds the file open without
+/// sharing it for reading, or has locked the part being read: which on
+/// Windows any user who can read a file can do to it.
+fn held_by_another_process(
+    #[cfg_attr(not(windows), allow(unused_variables))] error: &std::io::Error,
+) -> bool {
+    #[cfg(windows)]
+    {
+        use windows_security::{ERROR_LOCK_VIOLATION, ERROR_SHARING_VIOLATION};
+        matches!(
+            error.raw_os_error(),
+            Some(ERROR_SHARING_VIOLATION | ERROR_LOCK_VIOLATION)
+        )
+    }
+    #[cfg(not(windows))]
+    {
+        false
+    }
+}
+
+/// [`read_bounded`] for the system-wide file `opened`, at `path`. When
+/// another process has locked part of it, which on Windows any user who can
+/// read it can do, it is read through a mapping instead, which such a lock
+/// does not stop (see [`windows_security::read_mapped`]). Should that fail
+/// too, the lock's error is returned.
+fn read_system_file(
+    opened: &std::fs::File,
+    #[cfg_attr(not(windows), allow(unused_variables))] path: &std::path::Path,
+) -> std::io::Result<Option<Vec<u8>>> {
+    let read = read_bounded(opened);
+    #[cfg(windows)]
+    if read
+        .as_ref()
+        .is_err_and(|e| e.raw_os_error() == Some(windows_security::ERROR_LOCK_VIOLATION))
+    {
+        // Its length now, which only an administrator can have changed
+        // since the read; a mapping longer than the file fails rather than
+        // read past its end.
+        let mapped = match opened.metadata() {
+            Ok(meta) if meta.len() > MAX_KNOWN_HOSTS_SIZE => return Ok(None),
+            Ok(meta) => windows_security::read_mapped(opened, meta.len()),
+            Err(e) => Err(e),
+        };
+        match mapped {
+            Ok(contents) => {
+                warn!(
+                    known_hosts = %path.display(),
+                    "Part of known_hosts is locked by another process — read through a mapping"
+                );
+                return Ok(Some(contents));
+            }
+            Err(e) => warn!(
+                known_hosts = %path.display(),
+                error = %e,
+                "Part of known_hosts is locked by another process, and a mapping cannot read it"
+            ),
+        }
+    }
+    read
+}
+
+/// Serializes changes to the revocations remembered from the system-wide
+/// files, so that two checks at once do not both replace them.
+static REMEMBERED_WRITE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Whether it has been logged that there is no local data directory to
+/// remember the revocations in, so that it is logged once.
+static NO_LOCAL_DIR_LOGGED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// The `@revoked` lines of the `known_hosts` `contents`, each as
+/// [`line_content`] reads it and ended with a newline, and nothing else:
+/// lines that can refuse a key but never trust one.
+fn revocation_lines(contents: &[u8]) -> Vec<u8> {
+    let mut lines = Vec::new();
+    for line in contents.split(|&b| b == b'\n') {
+        let line = line_content(line);
+        let first = line
+            .split(|&b| b == b' ' || b == b'\t')
+            .find(|field| !field.is_empty());
+        if first == Some(b"@revoked".as_slice()) {
+            lines.extend_from_slice(line);
+            lines.push(b'\n');
+        }
+    }
+    lines
+}
+
+/// The first line of what [`remember_revocations`] stores, before the
+/// [`file_stamp`] of the file it read. A comment, which
+/// [`revocation_lines`] leaves out.
+const REMEMBERED_STAMP: &str = "# known_hosts last read by ShellStation as: ";
+
+/// Remember the revocations in `contents`, just read from the system-wide
+/// `file` whose [`file_stamp`] was `stamp` before the read, for when
+/// another process keeps it from being read (see [`Unread::Held`]). They
+/// are kept, after a line with the stamp, in the app's own directory, which
+/// only the user can change, and are replaced only when either changes. They
+/// are kept when there are none, too, so that a file read without any can
+/// be told from one never read. Only a file read whole counts, and only
+/// once it and its directory have passed [`system_file_trusted`], so all
+/// that is kept was written by an administrator. A file that is missing,
+/// or not to be trusted, leaves them as they are, which can only refuse
+/// more. A failure is logged, and costs only what a later held read would
+/// have had.
+fn remember_revocations(file: &HostsFile, stamp: &str, contents: &[u8]) {
+    let Some(path) = &file.remembered else {
+        return;
+    };
+    let mut remembered = format!("{REMEMBERED_STAMP}{stamp}\n").into_bytes();
+    remembered.extend(revocation_lines(contents));
+    let _guard = REMEMBERED_WRITE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if read_remembered(path).is_ok_and(|stored| stored.as_ref() == Some(&remembered)) {
+        return;
+    }
+    let changed = path
+        .parent()
+        .map_or(Ok(()), crate::private_fs::create_private_dir)
+        .and_then(|()| crate::private_fs::write_private_file(path, &remembered));
+    match changed {
+        Ok(()) => debug!(
+            known_hosts = %file.path.display(),
+            remembered = %path.display(),
+            "Remembered the revocations in known_hosts"
+        ),
+        Err(e) => warn!(
+            known_hosts = %file.path.display(),
+            remembered = %path.display(),
+            error = %e,
+            "Cannot remember the revocations in known_hosts"
+        ),
+    }
+}
+
+/// What [`remember_revocations`] kept from the system-wide `file`, and
+/// whether the file, as `meta` says it is now, has changed since: when
+/// there is no `meta`, or no stamp was kept, it counts as changed. What
+/// cannot be read is logged. Read under the same lock as it is written, so
+/// that a read in this process does not meet it being replaced; between
+/// two processes, the replace is a rename, which a read sees whole or not
+/// at all.
+fn remembered_revocations(file: &HostsFile, meta: Option<&std::fs::Metadata>) -> Remembered {
+    let Some(path) = &file.remembered else {
+        return Remembered::Nothing;
+    };
+    let _guard = REMEMBERED_WRITE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    match read_remembered(path) {
+        Ok(Some(lines)) => {
+            let first = lines.split(|&b| b == b'\n').next().unwrap_or_default();
+            let stamp = first.strip_prefix(REMEMBERED_STAMP.as_bytes());
+            let now = meta.map(file_stamp);
+            let changed = stamp.is_none() || stamp != now.as_ref().map(String::as_bytes);
+            Remembered::Revocations { lines, changed }
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Remembered::Nothing,
+        read => {
+            let error = read
+                .err()
+                .map_or("larger than the limit".to_string(), |e| e.to_string());
+            warn!(
+                remembered = %path.display(),
+                %error,
+                "Cannot read the revocations remembered from known_hosts"
+            );
+            Remembered::Unreadable
+        }
     }
 }
 
@@ -2871,7 +3242,24 @@ impl client::Handler for SshHandler {
                     key_type = server_public_key.algorithm().as_str(),
                     "Checking known_hosts"
                 );
-                let files = known_hosts_files(Some(&kh));
+                // Only on Windows can another user keep a system-wide file
+                // from being read, so only there are its revocations
+                // remembered. They are of this machine's files, so they go
+                // where a roaming profile does not carry them to another.
+                let remembered_in = if cfg!(windows) {
+                    crate::config::local_app_dir()
+                } else {
+                    None
+                };
+                if cfg!(windows)
+                    && remembered_in.is_none()
+                    && !NO_LOCAL_DIR_LOGGED.swap(true, std::sync::atomic::Ordering::Relaxed)
+                {
+                    warn!(
+                        "No local data directory — revocations in the system-wide known_hosts are not remembered"
+                    );
+                }
+                let files = known_hosts_files(Some(&kh), remembered_in.as_deref());
                 let (host, port, address) = (self.host.clone(), self.port, self.address);
                 let key = server_public_key.clone();
                 tokio::task::spawn_blocking(move || {
@@ -3093,6 +3481,7 @@ mod tests {
         HostsFile {
             path: path.to_path_buf(),
             kind,
+            remembered: None,
         }
     }
 
@@ -3792,20 +4181,36 @@ mod tests {
             .join(".ssh")
             .join("known_hosts");
         let dir = system_known_hosts_dir();
-        let listed: Vec<(PathBuf, HostsFileKind)> = known_hosts_files(Some(&user))
-            .into_iter()
-            .map(|file| (file.path, file.kind))
-            .collect();
+        let app = std::path::Path::new("app");
+        let listed: Vec<(PathBuf, HostsFileKind, Option<PathBuf>)> =
+            known_hosts_files(Some(&user), Some(app))
+                .into_iter()
+                .map(|file| (file.path, file.kind, file.remembered))
+                .collect();
         assert_eq!(
             listed,
             [
-                (user.clone(), HostsFileKind::User),
-                (user.with_file_name("known_hosts2"), HostsFileKind::Legacy),
-                (dir.join("ssh_known_hosts"), HostsFileKind::System),
-                (dir.join("ssh_known_hosts2"), HostsFileKind::System),
+                (user.clone(), HostsFileKind::User, None),
+                (
+                    user.with_file_name("known_hosts2"),
+                    HostsFileKind::Legacy,
+                    None
+                ),
+                (
+                    dir.join("ssh_known_hosts"),
+                    HostsFileKind::System,
+                    Some(app.join("ssh_known_hosts.revoked"))
+                ),
+                (
+                    dir.join("ssh_known_hosts2"),
+                    HostsFileKind::System,
+                    Some(app.join("ssh_known_hosts2.revoked"))
+                ),
             ]
         );
-        assert_eq!(known_hosts_files(None).len(), 2);
+        let system = known_hosts_files(None, None);
+        assert_eq!(system.len(), 2);
+        assert!(system.iter().all(|file| file.remembered.is_none()));
         #[cfg(not(windows))]
         assert_eq!(dir, std::path::Path::new("/etc/ssh"));
         #[cfg(windows)]
@@ -3947,6 +4352,468 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
+    // ── A system-wide file another process holds ─────────────────────────
+
+    #[test]
+    fn revocation_lines_keep_only_revocations() {
+        let contents = format!(
+            "example.com {KEY_A}\n\
+             # @revoked example.com {KEY_B}\n\
+             @cert-authority * {KEY_B}\n\
+             \x20 @revoked example.com {KEY_B}\r\n\
+             @revoked\t* {KEY_A}\0 junk\n\
+             @revokedx * {KEY_A}\n\
+             @revoked [example.com]:2222 {KEY_A}"
+        );
+        assert_eq!(
+            String::from_utf8(revocation_lines(contents.as_bytes())).unwrap(),
+            format!(
+                "\x20 @revoked example.com {KEY_B}\n\
+                 @revoked\t* {KEY_A}\n\
+                 @revoked [example.com]:2222 {KEY_A}\n"
+            )
+        );
+        assert_eq!(revocation_lines(b""), b"");
+    }
+
+    #[test]
+    fn a_held_system_file_counts_with_its_remembered_revocations() {
+        use HostsFileKind::{System, User};
+        let trusted = format!("example.com {KEY_A}\n");
+        let trusted = trusted.as_str();
+        let held_with = |remembered| {
+            Err(Unread::Held {
+                error: "held".to_string(),
+                remembered,
+            })
+        };
+        let unread = |remembered: &str| Unread::Held {
+            error: "held".to_string(),
+            remembered: Remembered::Revocations {
+                lines: remembered.as_bytes().to_vec(),
+                changed: false,
+            },
+        };
+        let held = |remembered: &str| Err(unread(remembered));
+        // A revocation remembered from it still refuses the key that the
+        // user's own file trusts.
+        let revocation = format!("@revoked example.com {KEY_A}\n");
+        assert_eq!(
+            check_read(vec![(User, Ok(trusted)), (System, held(&revocation))]),
+            KnownHost::Revoked
+        );
+        // Read before without revocations, or never, it is skipped, as
+        // OpenSSH skips it.
+        assert_eq!(
+            check_read(vec![(User, Ok(trusted)), (System, held(""))]),
+            KnownHost::Trusted
+        );
+        assert_eq!(
+            check_read(vec![
+                (User, Ok(trusted)),
+                (System, held_with(Remembered::Nothing))
+            ]),
+            KnownHost::Trusted
+        );
+        // Changed since, it might now revoke the key, but what it revoked
+        // then still counts.
+        let changed = |remembered: &str| {
+            held_with(Remembered::Revocations {
+                lines: remembered.as_bytes().to_vec(),
+                changed: true,
+            })
+        };
+        assert_eq!(
+            check_read(vec![(User, Ok(trusted)), (System, changed(""))]),
+            ask(HostKeyStatus::Unchecked, &[])
+        );
+        assert_eq!(
+            check_read(vec![(User, Ok(trusted)), (System, changed(&revocation))]),
+            KnownHost::Revoked
+        );
+        // Only revocations count, whatever else was put where they are
+        // remembered: a key on record there neither trusts the key nor
+        // makes the prompt a warning.
+        for remembered in [
+            format!("example.com {KEY_A}\n"),
+            format!("example.com {KEY_B}\n"),
+        ] {
+            assert_eq!(
+                check_read(vec![(User, Ok("")), (System, held(&remembered))]),
+                ask(HostKeyStatus::New, &[]),
+                "{remembered}"
+            );
+        }
+        // A remembered revocation that cannot be read might be of the key,
+        // and so might those remembered when they cannot be read at all.
+        assert_eq!(
+            check_read(vec![
+                (User, Ok(trusted)),
+                (System, held("@revoked example.com ssh-ed25519 AAAA\n"))
+            ]),
+            ask(HostKeyStatus::Unchecked, &[])
+        );
+        assert_eq!(
+            check_read(vec![
+                (User, Ok(trusted)),
+                (System, held_with(Remembered::Unreadable))
+            ]),
+            ask(HostKeyStatus::Unchecked, &[])
+        );
+        // A revocation remembered under the address refuses the key too.
+        let files = [
+            hosts_file(std::path::Path::new("known_hosts"), User),
+            hosts_file(std::path::Path::new("ssh_known_hosts"), System),
+        ];
+        let read = files.iter().zip([
+            Ok(trusted.as_bytes().to_vec()),
+            Err(unread(&format!("@revoked 203.0.113.7 {KEY_A}\n"))),
+        ]);
+        assert_eq!(
+            check_contents(
+                read,
+                "example.com",
+                22,
+                Some(v4(203, 0, 113, 7)),
+                &public_key(KEY_A)
+            ),
+            KnownHost::Revoked
+        );
+    }
+
+    /// A system-wide file at `path`, remembered in `remembered`.
+    fn system_file(path: &std::path::Path, remembered: &std::path::Path) -> HostsFile {
+        HostsFile {
+            path: path.to_path_buf(),
+            kind: HostsFileKind::System,
+            remembered: Some(remembered.to_path_buf()),
+        }
+    }
+
+    /// [`read_hosts_file`] taking every system-wide file as one only an
+    /// administrator can change, as the test's own are not.
+    fn read_as_trusted(file: &HostsFile) -> Result<Vec<u8>, Unread> {
+        read_hosts_file(file, |_, _| Ok(()))
+    }
+
+    /// What is remembered from the system-wide `file`, against the file as
+    /// it is now: its revocations, and whether it has changed since.
+    fn remembered_now(file: &HostsFile) -> Option<(Vec<u8>, bool)> {
+        let meta = std::fs::metadata(&file.path).ok();
+        match remembered_revocations(file, meta.as_ref()) {
+            Remembered::Revocations { lines, changed } => Some((revocation_lines(&lines), changed)),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn revocations_are_remembered_from_a_trusted_read() {
+        let revocation = format!("@revoked example.com {KEY_B}\n");
+        let contents = format!("example.com {KEY_A}\n{revocation}");
+        let (dir, paths) = scratch_files(&[&contents]);
+        let remembered = dir.join("app").join("ssh_known_hosts.revoked");
+        let file = system_file(&paths[0], &remembered);
+        let now = || std::fs::metadata(&paths[0]).unwrap();
+        let set_written = |path: &std::path::Path, time| {
+            std::fs::OpenOptions::new()
+                .write(true)
+                .open(path)
+                .unwrap()
+                .set_modified(time)
+                .unwrap();
+        };
+        assert_eq!(
+            remembered_revocations(&file, Some(&now())),
+            Remembered::Nothing
+        );
+        // With remembering off, nothing is remembered or stored.
+        let off = HostsFile {
+            remembered: None,
+            ..system_file(&paths[0], &remembered)
+        };
+        assert_eq!(read_as_trusted(&off), Ok(contents.clone().into_bytes()));
+        assert_eq!(
+            remembered_revocations(&off, Some(&now())),
+            Remembered::Nothing
+        );
+        assert!(!dir.join("app").exists());
+
+        // Read whole and trusted, its revocations are remembered after its
+        // stamp, in a directory created for them if need be.
+        let stamped = format!("{REMEMBERED_STAMP}{}\n", file_stamp(&now()));
+        assert_eq!(read_as_trusted(&file), Ok(contents.clone().into_bytes()));
+        let stored = format!("{stamped}{revocation}").into_bytes();
+        assert_eq!(std::fs::read(&remembered).unwrap(), stored);
+        let unchanged = Remembered::Revocations {
+            lines: stored.clone(),
+            changed: false,
+        };
+        assert_eq!(remembered_revocations(&file, Some(&now())), unchanged);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&remembered).unwrap().permissions().mode();
+            assert_eq!(mode & 0o077, 0, "{mode:o}");
+        }
+        // Read again unchanged, what is stored is not written again.
+        let long_ago = std::time::UNIX_EPOCH + std::time::Duration::from_hours(24);
+        set_written(&remembered, long_ago);
+        assert!(read_as_trusted(&file).is_ok());
+        let kept = std::fs::metadata(&remembered).unwrap().modified().unwrap();
+        assert_eq!(kept, long_ago);
+
+        // Without the file as it is now, or once it has changed, it counts
+        // as changed.
+        let changed = Remembered::Revocations {
+            lines: stored.clone(),
+            changed: true,
+        };
+        assert_eq!(remembered_revocations(&file, None), changed);
+        // An edit that keeps the size shows by its time: the same
+        // revocation of another key of the same length.
+        let written = now().modified().unwrap();
+        let swapped = format!("example.com {KEY_A}\n@revoked example.com {KEY_A}\n");
+        assert_eq!(swapped.len(), contents.len());
+        std::fs::write(&paths[0], &swapped).unwrap();
+        set_written(&paths[0], written + std::time::Duration::from_secs(1));
+        assert_eq!(remembered_revocations(&file, Some(&now())), changed);
+        // Set back, it would not show, which is why only an administrator
+        // may change the times (see `administrators_only`).
+        set_written(&paths[0], written);
+        assert_eq!(remembered_revocations(&file, Some(&now())), unchanged);
+        // One that changes the size shows even with the time set back.
+        std::fs::write(&paths[0], format!("{contents}{revocation}")).unwrap();
+        set_written(&paths[0], written);
+        assert_eq!(now().modified().unwrap(), written);
+        assert_eq!(remembered_revocations(&file, Some(&now())), changed);
+        std::fs::write(&paths[0], format!("example.com {KEY_A}\n")).unwrap();
+        assert_eq!(remembered_revocations(&file, Some(&now())), changed);
+
+        // Neither a file that is not trusted, nor a user's own, nor one
+        // that is missing changes what is remembered.
+        assert!(matches!(
+            read_hosts_file(&file, |_, _| Err("not trusted".to_string())),
+            Err(Unread::Skipped(_))
+        ));
+        let mut user = system_file(&paths[0], &remembered);
+        user.kind = HostsFileKind::User;
+        assert!(known_hosts_contents(&user).is_ok());
+        let missing = system_file(&dir.join("missing"), &remembered);
+        assert_eq!(read_as_trusted(&missing), Ok(Vec::new()));
+        assert_eq!(std::fs::read(&remembered).unwrap(), stored);
+
+        // A trusted read with no revocations keeps its stamp alone, so
+        // that it is not taken for a file never read.
+        assert!(read_as_trusted(&file).is_ok());
+        let stamped = format!("{REMEMBERED_STAMP}{}\n", file_stamp(&now()));
+        assert_eq!(std::fs::read(&remembered).unwrap(), stamped.as_bytes());
+        assert_eq!(remembered_now(&file), Some((Vec::new(), false)));
+
+        // Kept without a stamp, or with one not as it was written, it
+        // counts as changed.
+        std::fs::write(&remembered, &revocation).unwrap();
+        assert_eq!(
+            remembered_now(&file),
+            Some((revocation.clone().into_bytes(), true))
+        );
+        let malformed = format!("{} x\n{revocation}", stamped.trim_end());
+        std::fs::write(&remembered, malformed).unwrap();
+        assert_eq!(remembered_now(&file), Some((revocation.into_bytes(), true)));
+
+        // What cannot be read is not taken for nothing.
+        std::fs::remove_file(&remembered).unwrap();
+        crate::private_fs::create_private_dir(&remembered).unwrap();
+        assert_eq!(
+            remembered_revocations(&file, Some(&now())),
+            Remembered::Unreadable
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Lock `bytes` bytes of a file from `offset` on through `handle`, as
+    /// another process could.
+    #[cfg(windows)]
+    fn lock_file(handle: &std::fs::File, offset: u32, bytes: u32) {
+        use std::os::windows::io::AsRawHandle;
+        extern "system" {
+            fn LockFile(
+                file: *mut std::ffi::c_void,
+                offset_low: u32,
+                offset_high: u32,
+                bytes_low: u32,
+                bytes_high: u32,
+            ) -> i32;
+        }
+        // SAFETY: the handle stays open while `handle` is borrowed; the
+        // lock is released when it is closed.
+        let locked = unsafe { LockFile(handle.as_raw_handle(), offset, 0, bytes, 0) };
+        assert_ne!(locked, 0, "{}", std::io::Error::last_os_error());
+    }
+
+    /// Lock all of a file through `handle`, as another process could.
+    #[cfg(windows)]
+    fn lock_whole_file(handle: &std::fs::File) {
+        lock_file(handle, 0, u32::MAX);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_locked_system_file_is_read_through_a_mapping() {
+        let contents = format!("example.com {KEY_A}\n@revoked example.com {KEY_B}\n");
+        let (dir, paths) = scratch_files(&[&contents, ""]);
+        let remembered = dir.join("ssh_known_hosts.revoked");
+        let file = system_file(&paths[0], &remembered);
+        // Only part of it, say the revocation's key.
+        let locker = std::fs::File::open(&paths[0]).unwrap();
+        let revoked_at = u32::try_from(contents.rfind("AAAA").unwrap()).unwrap();
+        lock_file(&locker, revoked_at, 8);
+
+        // A plain read is refused, as held by another process.
+        let refused = read_bounded(&std::fs::File::open(&paths[0]).unwrap()).unwrap_err();
+        assert_eq!(
+            refused.raw_os_error(),
+            Some(windows_security::ERROR_LOCK_VIOLATION)
+        );
+        assert!(held_by_another_process(&refused));
+        // A mapping reads it, and its revocations are remembered.
+        assert_eq!(read_as_trusted(&file), Ok(contents.clone().into_bytes()));
+        assert_eq!(
+            remembered_now(&file),
+            Some((
+                format!("@revoked example.com {KEY_B}\n").into_bytes(),
+                false
+            ))
+        );
+        // A mapping of nothing is nothing, and one longer than the file an
+        // error rather than a read past its end.
+        let opened = std::fs::File::open(&paths[1]).unwrap();
+        assert_eq!(windows_security::read_mapped(&opened, 0).unwrap(), b"");
+        assert!(windows_security::read_mapped(&opened, 1).is_err());
+        // A locked file larger than the limit is not mapped, but too large.
+        let large = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&paths[1])
+            .unwrap();
+        large.set_len(MAX_KNOWN_HOSTS_SIZE + 1).unwrap();
+        lock_whole_file(&large);
+        assert_eq!(read_system_file(&opened, &paths[1]).unwrap(), None);
+        drop((locker, opened, large));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// [`check_contents`] for `key` offered by example.com:22, given the
+    /// user's file `user` and what reading the system-wide `system` gave.
+    #[cfg(windows)]
+    fn check_with_held(
+        user: &str,
+        system: &HostsFile,
+        read: Result<Vec<u8>, Unread>,
+        key: &str,
+    ) -> KnownHost {
+        let user_file = user_file(std::path::Path::new("known_hosts"));
+        let files = [&user_file, system];
+        let read = files.into_iter().zip([Ok(user.as_bytes().to_vec()), read]);
+        check_contents(read, "example.com", 22, None, &public_key(key))
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_system_file_held_without_sharing_gives_its_remembered_revocations() {
+        use std::os::windows::fs::OpenOptionsExt;
+        const FILE_SHARE_WRITE: u32 = 0x2;
+        const FILE_SHARE_DELETE: u32 = 0x4;
+        let revocation = format!("@revoked example.com {KEY_A}\n");
+        let (dir, paths) = scratch_files(&[&revocation]);
+        let remembered = dir.join("ssh_known_hosts.revoked");
+        let file = system_file(&paths[0], &remembered);
+        assert!(read_as_trusted(&file).is_ok());
+        let hold = |share| {
+            std::fs::OpenOptions::new()
+                .read(true)
+                .share_mode(share)
+                .open(&paths[0])
+                .unwrap()
+        };
+
+        // Opened by someone else with no sharing at all. The file itself is
+        // still checked, through a handle that reads its access list, and
+        // counts for nothing when it fails.
+        let holder = hold(0);
+        let file_checked = read_hosts_file(&file, |_, opened| match opened {
+            None => Ok(()),
+            Some(opened) => windows_security::security(opened)
+                .map_err(|e| format!("cannot read: {e}"))
+                .and(Err("checked, not trusted".to_string())),
+        });
+        assert_eq!(
+            file_checked,
+            Err(Unread::Skipped("checked, not trusted".to_string()))
+        );
+        // Trusted, the key the revocation names is still refused.
+        let read = read_as_trusted(&file);
+        let Err(Unread::Held {
+            error,
+            remembered: held_back,
+        }) = &read
+        else {
+            panic!("{read:?}");
+        };
+        assert_ne!(error, "");
+        assert!(
+            matches!(held_back, Remembered::Revocations { changed: false, .. }),
+            "{held_back:?}"
+        );
+        let user = format!("example.com {KEY_A}\n");
+        assert_eq!(
+            check_with_held(&user, &file, read, KEY_A),
+            KnownHost::Revoked
+        );
+        // A user's own file held so is unreadable, as before.
+        let mut user_held = system_file(&paths[0], &remembered);
+        user_held.kind = HostsFileKind::User;
+        assert!(matches!(
+            read_as_trusted(&user_held),
+            Err(Unread::Unreadable(_))
+        ));
+        drop(holder);
+
+        // Held so that only reading is not shared, an administrator can
+        // still write to it. The revocation added then cannot be read, but
+        // the file has changed, so a key trusted by the user's own is
+        // unchecked rather than trusted.
+        let holder = hold(FILE_SHARE_WRITE | FILE_SHARE_DELETE);
+        std::fs::write(
+            &paths[0],
+            format!("{revocation}@revoked example.com {KEY_B}\n"),
+        )
+        .unwrap();
+        let read = read_as_trusted(&file);
+        assert!(
+            matches!(
+                read,
+                Err(Unread::Held {
+                    remembered: Remembered::Revocations { changed: true, .. },
+                    ..
+                })
+            ),
+            "{read:?}"
+        );
+        let user = format!("example.com {KEY_B}\n");
+        assert_eq!(
+            check_with_held(&user, &file, read, KEY_B),
+            ask(HostKeyStatus::Unchecked, &[])
+        );
+        drop(holder);
+        // Once it can be read again, the new revocation is.
+        let read = read_as_trusted(&file);
+        assert!(read.is_ok(), "{read:?}");
+        assert_eq!(
+            check_with_held(&user, &file, read, KEY_B),
+            KnownHost::Revoked
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
     #[test]
     fn only_an_administrator_may_change_a_system_file() {
         for sid in [
@@ -3988,8 +4855,8 @@ mod tests {
         let mut harmless = installed();
         harmless.extend([
             Ace::Ignored,
-            // FILE_WRITE_ATTRIBUTES and FILE_WRITE_EA.
-            allow("S-1-5-32-545", 0x100 | 0x10),
+            // FILE_WRITE_EA.
+            allow("S-1-5-32-545", 0x10),
             allow("S-1-3-4", full),
         ]);
         assert!(administrators_only("S-1-5-18", Some(&harmless)));
@@ -3999,11 +4866,12 @@ mod tests {
         assert!(!administrators_only("S-1-5-32-544", None));
         // Any right for someone else to change it as a file or directory:
         // such as to add files, which a folder made in ProgramData by hand
-        // gives Users.
+        // gives Users, or to set its times back after it was changed.
         for mask in [
             0x2,
             0x4,
             0x40,
+            0x100,
             0x1_0000,
             0x4_0000,
             0x8_0000,

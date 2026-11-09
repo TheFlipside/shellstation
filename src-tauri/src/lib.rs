@@ -832,9 +832,7 @@ fn open_app_log_file(
 /// so a panic is the appropriate signal for the `OS` to surface.
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let config_dir = dirs::config_dir()
-        .unwrap_or_else(|| std::path::PathBuf::from("."))
-        .join("shellstation");
+    let config_dir = config::app_config_dir();
     // Owner-only on Unix: it holds the config, the local database and the
     // logs. The subscriber is not installed yet, so a problem goes to stderr
     // now and to the log once there is one.

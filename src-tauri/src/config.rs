@@ -3,6 +3,26 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+/// The app's own directory: `shellstation` in the platform's config
+/// directory, or in the working directory when there is none. It holds the
+/// config, the local database and, by default, the logs.
+#[must_use]
+pub fn app_config_dir() -> PathBuf {
+    dirs::config_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("shellstation")
+}
+
+/// The app's directory for what belongs to this machine alone:
+/// `shellstation` in the platform's local data directory, such as
+/// `%LOCALAPPDATA%` on Windows, which does not roam with the user's
+/// profile. `None` when there is none, never a directory relative to where
+/// the app was started.
+#[must_use]
+pub fn local_app_dir() -> Option<PathBuf> {
+    dirs::data_local_dir().map(|dir| dir.join("shellstation"))
+}
+
 /// Application configuration, persisted as JSON in the config directory.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct AppConfig {
