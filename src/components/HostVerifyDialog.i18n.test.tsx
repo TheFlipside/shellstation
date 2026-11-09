@@ -27,7 +27,7 @@ async function englishAsInTheApp(): Promise<typeof i18next> {
 const HOST = "x</1><br><strong>VERIFIED</strong><i>&amp;</i><1>y";
 
 describe("HostVerifyDialog translations", () => {
-  it.each(["new", "changed", "otherType", "unchecked"] as const)(
+  it.each(["new", "changed", "otherType", "addressChanged", "unchecked"] as const)(
     "shows a %s prompt's host name as text",
     async (status) => {
       const i18n = await englishAsInTheApp();

@@ -2,14 +2,15 @@
  * HostVerifyDialog tests.
  *
  * The contract that matters: a first connection's key can be accepted with
- * Enter, but a changed key (or one that could not be checked) only with a
- * click on Accept, so that a keystroke meant for something else cannot trust
- * it. Escape always rejects, and a warning shows the key on record beside
- * the one offered.
+ * Enter, but any other (a changed key or key type, a new host whose address
+ * has another key, a key that could not be checked) only with a click on
+ * Accept, so that a keystroke meant for something else cannot trust it.
+ * Escape always rejects, and a warning shows the key on record beside the
+ * one offered.
  */
 import { describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
-import { HostVerifyDialog, type HostVerifyRequest } from "./HostVerifyDialog";
+import { HostVerifyDialog, type HostKeyStatus, type HostVerifyRequest } from "./HostVerifyDialog";
 
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({ t: (key: string) => key }),
@@ -34,6 +35,7 @@ function request(overrides: Partial<HostVerifyRequest> = {}): HostVerifyRequest 
 const WARNINGS = [
   ["changed", [{ keyType: "ssh-ed25519", fingerprint: "SHA256:recorded" }]],
   ["otherType", [{ keyType: "ecdsa-sha2-nistp256", fingerprint: "SHA256:recorded" }]],
+  ["addressChanged", [{ keyType: "ssh-ed25519", fingerprint: "SHA256:recorded" }]],
   ["unchecked", []],
 ] as const;
 
@@ -143,6 +145,7 @@ describe("HostVerifyDialog", () => {
     const titles = {
       changed: "hostVerify.titleChanged",
       otherType: "hostVerify.titleOtherType",
+      addressChanged: "hostVerify.titleAddressChanged",
       unchecked: "hostVerify.titleUnchecked",
     };
     expect(screen.getByText(titles[status])).toHaveClass("dialog-warning");
@@ -153,6 +156,23 @@ describe("HostVerifyDialog", () => {
       expect(screen.getByText(key.fingerprint)).toHaveClass("dialog-fingerprint-recorded");
     }
   });
+
+  it.each(["fromNewerBackend", "toString"])(
+    "shows a status it does not know, %s, as an unchecked key",
+    (status) => {
+      const onRespond = vi.fn();
+      render(
+        <HostVerifyDialog
+          // As from a newer backend, outside the type this build knows.
+          request={request({ status: status as HostKeyStatus })}
+          onRespond={onRespond}
+        />,
+      );
+      expect(screen.getByText("hostVerify.titleUnchecked")).toHaveClass("dialog-warning");
+      fireEvent.keyDown(document.body, { key: "Enter" });
+      expect(onRespond).not.toHaveBeenCalled();
+    },
+  );
 
   it("names the key types on record in the text", () => {
     render(

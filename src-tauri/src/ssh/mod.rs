@@ -14,6 +14,9 @@ use tokio::task::JoinHandle;
 use tracing::{debug, error, info, trace, warn};
 use zeroize::Zeroizing;
 
+#[cfg(windows)]
+mod windows_security;
+
 /// Pending TOFU verification senders, stored separately from `SshManager`
 /// so that `ssh_host_verify_response` can resolve a pending verification
 /// without acquiring the main `SshManager` lock (which is held by the
@@ -37,7 +40,9 @@ pub struct HostVerifyPayload {
     /// What `known_hosts` has on record for the host.
     pub status: HostKeyStatus,
     /// The keys on record for the host: of the offered key's type when
-    /// `Changed`, of other types when `OtherType`, none otherwise.
+    /// `Changed`, of other types when `OtherType`, for the address it was
+    /// reached at when `AddressChanged`, none otherwise. The address itself
+    /// is not sent, as the webview is not told what a name resolves to.
     pub known_keys: Vec<KnownKey>,
 }
 
@@ -53,6 +58,10 @@ pub enum HostKeyStatus {
     /// Only keys of other types. A man in the middle could offer another
     /// type to avoid `Changed`; OpenSSH warns about this as well.
     OtherType,
+    /// Nothing for the host's name, but other keys for the address it was
+    /// reached at: a man in the middle answering there, or an address that
+    /// now belongs to another host.
+    AddressChanged,
     /// Unknown: `known_hosts` could not be read, or an entry for the host
     /// could not be parsed, so the key was not compared with what is there.
     Unchecked,
@@ -833,6 +842,176 @@ fn known_hosts_path() -> Result<PathBuf, String> {
     Ok(home.join(".ssh").join("known_hosts"))
 }
 
+/// A `known_hosts` file the host key check reads.
+struct HostsFile {
+    path: PathBuf,
+    kind: HostsFileKind,
+}
+
+/// Whose a `known_hosts` file is, which decides what one that cannot be
+/// read costs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum HostsFileKind {
+    /// The user's `known_hosts`, where a trusted key is saved.
+    User,
+    /// The user's `known_hosts2`, which nothing writes any more.
+    Legacy,
+    /// System-wide: kept by an administrator, never written to, and read
+    /// only while no one else can change it (see [`system_file_trusted`]).
+    System,
+}
+
+/// The files OpenSSH reads by default: the user's `known_hosts` at `user`,
+/// and `known_hosts2` beside it, then the system-wide `ssh_known_hosts` and
+/// `ssh_known_hosts2`.
+fn known_hosts_files(user: Option<&std::path::Path>) -> Vec<HostsFile> {
+    let user_files = user.into_iter().flat_map(|user| {
+        [
+            (user.to_path_buf(), HostsFileKind::User),
+            (user.with_file_name("known_hosts2"), HostsFileKind::Legacy),
+        ]
+    });
+    let dir = system_known_hosts_dir();
+    let system_files =
+        ["ssh_known_hosts", "ssh_known_hosts2"].map(|name| (dir.join(name), HostsFileKind::System));
+    user_files
+        .chain(system_files)
+        .map(|(path, kind)| HostsFile { path, kind })
+        .collect()
+}
+
+/// Where OpenSSH keeps its system-wide files: `/etc/ssh`, or on Windows
+/// `ssh` in the `ProgramData` folder. That folder is asked of Windows rather
+/// than read from `%ProgramData%`, which whoever starts the app could point
+/// at a share that reports any owner.
+fn system_known_hosts_dir() -> PathBuf {
+    #[cfg(windows)]
+    {
+        windows_security::program_data()
+            .unwrap_or_else(|| PathBuf::from(r"C:\ProgramData"))
+            .join("ssh")
+    }
+    #[cfg(not(windows))]
+    {
+        PathBuf::from("/etc/ssh")
+    }
+}
+
+/// Refuse a system-wide file, or its directory, at `path` unless only an
+/// administrator can change it: owned by `root` and writable by no one
+/// else, or on Windows owned by SYSTEM, the Administrators group or
+/// `TrustedInstaller`, with no one else allowed to change it (see
+/// [`administrators_only`]). Any user can create a folder in
+/// `%ProgramData%`, and one an administrator creates there by hand lets
+/// every user add files, so another user of the machine could otherwise put
+/// a file there that trusts their own key for any host. A file is checked
+/// through `opened`, the handle it is then read from, so that it cannot be
+/// swapped for another in between. On Windows a directory must not be a
+/// link, since a junction, which any user can make, could be pointed
+/// elsewhere once checked: it is opened without following one, refused if
+/// it is one, and otherwise checked through that one handle.
+fn system_file_trusted(
+    path: &std::path::Path,
+    opened: Option<&std::fs::File>,
+) -> Result<(), String> {
+    #[cfg(unix)]
+    let trusted = {
+        use std::os::unix::fs::MetadataExt;
+        let meta = opened
+            .map_or_else(|| std::fs::metadata(path), std::fs::File::metadata)
+            .map_err(|e| e.to_string())?;
+        root_only(meta.uid(), meta.mode())
+    };
+    #[cfg(windows)]
+    let trusted = {
+        use std::os::windows::fs::MetadataExt;
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+        let directory;
+        let checked = if let Some(file) = opened {
+            file
+        } else {
+            directory = windows_security::open_directory(path).map_err(|e| e.to_string())?;
+            let attributes = directory
+                .metadata()
+                .map_err(|e| e.to_string())?
+                .file_attributes();
+            if attributes & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+                return Err(format!("{} is a link", path.display()));
+            }
+            &directory
+        };
+        let (owner, dacl) =
+            windows_security::security(checked).map_err(|e| format!("{}: {e}", path.display()))?;
+        administrators_only(&owner, dacl.as_deref())
+    };
+    if trusted {
+        Ok(())
+    } else {
+        Err(format!(
+            "{} can be changed by others than an administrator",
+            path.display()
+        ))
+    }
+}
+
+/// Whether a file owned by `uid`, with permission bits `mode`, can be
+/// changed by `root` alone.
+#[cfg(any(unix, test))]
+fn root_only(uid: u32, mode: u32) -> bool {
+    uid == 0 && mode & 0o022 == 0
+}
+
+/// Whether `sid` is SYSTEM, the Administrators group or `TrustedInstaller`,
+/// the owners of what an administrator or Windows itself installed.
+#[cfg(any(windows, test))]
+fn is_administrator_sid(sid: &str) -> bool {
+    matches!(
+        sid,
+        "S-1-5-18"
+            | "S-1-5-32-544"
+            | "S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464"
+    )
+}
+
+/// An entry of a Windows access list, as far as [`administrators_only`]
+/// reads it.
+#[cfg(any(windows, test))]
+enum Ace {
+    /// Allows `sid` the rights in `mask`.
+    Allow { sid: String, mask: u32 },
+    /// Denies rights, or applies only to what is created inside.
+    Ignored,
+    /// Of a kind not read here.
+    Other,
+}
+
+/// Whether only an administrator can change a file or directory that
+/// `owner` owns, with the access list `dacl` (`None`: it has none, which
+/// lets everyone do anything). Its owner is an administrator, and no one
+/// else is allowed to write or append to it, add to or delete from it as a
+/// directory, delete or rename it, or change its permissions or owner. An
+/// entry of a kind not read here fails it.
+#[cfg(any(windows, test))]
+fn administrators_only(owner: &str, dacl: Option<&[Ace]>) -> bool {
+    // FILE_WRITE_DATA (FILE_ADD_FILE), FILE_APPEND_DATA
+    // (FILE_ADD_SUBDIRECTORY), FILE_DELETE_CHILD, DELETE, WRITE_DAC,
+    // WRITE_OWNER, GENERIC_ALL and GENERIC_WRITE.
+    const CHANGE: u32 =
+        0x2 | 0x4 | 0x40 | 0x1_0000 | 0x4_0000 | 0x8_0000 | 0x1000_0000 | 0x4000_0000;
+    // OWNER RIGHTS: whoever owns it, an administrator here.
+    const OWNER_RIGHTS: &str = "S-1-3-4";
+    is_administrator_sid(owner)
+        && dacl.is_some_and(|aces| {
+            aces.iter().all(|ace| match ace {
+                Ace::Allow { sid, mask } => {
+                    mask & CHANGE == 0 || is_administrator_sid(sid) || sid == OWNER_RIGHTS
+                }
+                Ace::Ignored => true,
+                Ace::Other => false,
+            })
+        })
+}
+
 /// Serializes changes to `known_hosts` within the app. Two connections whose
 /// keys are accepted at the same moment would otherwise both read the file
 /// before either has written it, and the second write would drop the first
@@ -911,13 +1090,18 @@ fn known_hosts_name(host: &str, port: u16) -> Result<String, String> {
 }
 
 /// The contents of the `known_hosts` file at `path`, or `None` when it is
-/// larger than [`MAX_KNOWN_HOSTS_SIZE`]. Read through one handle with a
-/// bound, so that a file growing after a size check is not read whole.
+/// larger than [`MAX_KNOWN_HOSTS_SIZE`].
 fn read_known_hosts(path: &std::path::Path) -> std::io::Result<Option<Vec<u8>>> {
+    read_bounded(std::fs::File::open(path)?)
+}
+
+/// The contents of `file`, or `None` when it is larger than
+/// [`MAX_KNOWN_HOSTS_SIZE`]. Read with a bound, so that a file growing after
+/// a size check is not read whole.
+fn read_bounded(file: std::fs::File) -> std::io::Result<Option<Vec<u8>>> {
     use std::io::Read;
     let mut contents = Vec::new();
-    std::fs::File::open(path)?
-        .take(MAX_KNOWN_HOSTS_SIZE + 1)
+    file.take(MAX_KNOWN_HOSTS_SIZE + 1)
         .read_to_end(&mut contents)?;
     let within = u64::try_from(contents.len()).is_ok_and(|len| len <= MAX_KNOWN_HOSTS_SIZE);
     Ok(within.then_some(contents))
@@ -988,7 +1172,7 @@ fn validate_host_name(host: &str) -> Result<(), String> {
 /// The `known_hosts` contents `old` with `name` taken out of every entry (see
 /// [`without_name`]) and `name key` added at the end. Plain and hashed names
 /// (`|1|…`, as OpenSSH writes them with `HashKnownHosts`) are both found,
-/// which covers every entry [`check_known_host`] compares a key with: one
+/// which covers every entry [`check_known_hosts`] compares a key with: one
 /// left behind would report the newly trusted key as changed on every
 /// connection. Other names on a line keep their key, so a host's address
 /// that shared it is still reported as changed, not as new. Everything else
@@ -1013,7 +1197,7 @@ fn replace_known_host_entries(old: &[u8], name: &str, key: &str) -> Vec<u8> {
 
 /// What OpenSSH reads of a `known_hosts` line: up to a NUL, as a C string
 /// ends there, and without the line break (`\n` or `\r\n`); a `\r` anywhere
-/// else is part of the text. [`check_known_host`] and [`without_name`] both
+/// else is part of the text. [`check_known_hosts`] and [`without_name`] both
 /// read lines through this, so that they see the same names.
 fn line_content(line: &[u8]) -> &[u8] {
     let line = line.strip_suffix(b"\n").unwrap_or(line);
@@ -1022,7 +1206,7 @@ fn line_content(line: &[u8]) -> &[u8] {
 }
 
 /// A `known_hosts` line without `name` among its names, read as OpenSSH and
-/// [`check_known_host`] read them (see [`line_content`]): the line as it is
+/// [`check_known_hosts`] read them (see [`line_content`]): the line as it is
 /// when `name` is not there, and `None` when the line goes. Leading blanks
 /// are skipped, a comment or a marker line (`@revoked`, ...) is kept as it
 /// is, the names end at a space or a tab, a plain name matches in either
@@ -1134,12 +1318,12 @@ fn hashes_to(salt: &[u8], hash: &[u8], name: &str) -> bool {
     mac.chain_update(name.as_bytes()).verify_slice(hash).is_ok()
 }
 
-/// What [`check_known_host`] found for a host's key.
+/// What [`check_known_hosts`] found for a host's key.
 #[derive(Debug, PartialEq)]
 enum KnownHost {
     /// The key is on record for the host.
     Trusted,
-    /// The key is listed under `@revoked` for the host.
+    /// The key is listed under `@revoked` for the host or its address.
     Revoked,
     /// The user is to decide, told `status`; `known` are the keys on record
     /// that the prompt shows.
@@ -1159,17 +1343,23 @@ impl KnownHost {
 }
 
 /// The largest `known_hosts` file read or rewritten, far beyond any real
-/// one: a bigger file is not loaded into memory, and its hosts are asked
-/// about as unchecked.
+/// one: a bigger file is not loaded into memory, and counts as one that
+/// cannot be read.
 const MAX_KNOWN_HOSTS_SIZE: u64 = 64 << 20;
 
 /// The most keys on record the host-key prompt shows, of the offered key's
 /// type and of other types each. Any more still count for the status.
 const MAX_KNOWN_KEYS_SHOWN: usize = 8;
 
-/// Check `key`, offered by `host`:`port`, against the `known_hosts` file at
-/// `path`, reading it as OpenSSH does. A line that cannot be read costs only
-/// that line (russh gives up on the whole file), and is logged.
+/// Check `key`, offered by `host`:`port`, against the `known_hosts` `files`,
+/// reading them as OpenSSH does. A line that cannot be read costs only that
+/// line (russh gives up on the whole file), and is logged. What the files
+/// hold counts together, as in OpenSSH: a key trusted by one is not changed
+/// by another, and a key revoked in any is refused. A file that cannot be
+/// read leaves the key unchecked, since it might revoke it, where OpenSSH
+/// skips it. Only `known_hosts2`, which nothing writes any more, is skipped
+/// then, and a system-wide file in all but the cases only an administrator
+/// can cause (see [`Unread`]).
 ///
 /// A key is trusted only by an entry naming the host exactly (a plain name
 /// in either case, as OpenSSH compares them, or a hashed one; see
@@ -1179,11 +1369,31 @@ const MAX_KNOWN_KEYS_SHOWN: usize = 8;
 /// patterns, so a pattern can revoke a key, and one for the host that
 /// cannot be read leaves the key unchecked rather than trusted.
 /// `@cert-authority` lines are skipped: no host certificate is ever
-/// accepted. Blocking: file I/O.
-fn check_known_host(
-    path: &std::path::Path,
+/// accepted.
+///
+/// `address` is the one connected to, when known, and its entries are
+/// looked up too, as OpenSSH's `CheckHostIP` does (see [`address_name`]).
+/// They never trust a key and never add a prompt for a host trusted by
+/// name, since addresses change hands; but a revocation under the address
+/// refuses the key, and other keys under it make a new host's prompt a
+/// warning ([`HostKeyStatus::AddressChanged`]). Blocking: file I/O.
+fn check_known_hosts(
+    files: &[HostsFile],
     host: &str,
     port: u16,
+    address: Option<IpAddr>,
+    key: &russh::keys::PublicKey,
+) -> KnownHost {
+    let read = files.iter().map(|file| (file, known_hosts_contents(file)));
+    check_contents(read, host, port, address, key)
+}
+
+/// [`check_known_hosts`], given what was read from each file.
+fn check_contents<'a>(
+    read: impl Iterator<Item = (&'a HostsFile, Result<Vec<u8>, Unread>)>,
+    host: &str,
+    port: u16,
+    address: Option<IpAddr>,
     key: &russh::keys::PublicKey,
 ) -> KnownHost {
     let name = match known_hosts_name(host, port) {
@@ -1193,30 +1403,196 @@ fn check_known_host(
             return KnownHost::ask(HostKeyStatus::Unchecked);
         }
     };
-    let unchecked = |error: &dyn std::fmt::Display| {
-        warn!(known_hosts = %path.display(), %error, "Cannot read known_hosts");
-        KnownHost::ask(HostKeyStatus::Unchecked)
-    };
-    let contents = match std::fs::metadata(path) {
-        Ok(meta) if meta.is_file() => match read_known_hosts(path) {
-            Ok(Some(contents)) => contents,
-            Ok(None) => return unchecked(&"larger than the limit"),
-            Err(e) => return unchecked(&e),
-        },
-        Ok(meta) if meta.is_dir() => return unchecked(&"a directory"),
-        // Linked to /dev/null, which switches known_hosts off, or no file
-        // yet: nothing is on record. A FIFO is not read, which would block.
-        Ok(_) => Vec::new(),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
-        Err(e) => return unchecked(&e),
-    };
+    let address = address.and_then(|ip| address_name(&name, ip, port));
+    let (mut by_name, mut by_address) = (Findings::default(), Findings::default());
+    for (file, contents) in read {
+        let contents = match contents {
+            Ok(contents) => contents,
+            Err(Unread::Unreadable(error)) if file.kind != HostsFileKind::Legacy => {
+                warn!(known_hosts = %file.path.display(), %error, "Cannot read known_hosts");
+                // It might revoke the key, as a revocation that cannot be
+                // read might.
+                by_name.unreadable_revocation = true;
+                continue;
+            }
+            Err(Unread::Unreadable(error) | Unread::Skipped(error)) => {
+                warn!(known_hosts = %file.path.display(), %error, "known_hosts skipped");
+                continue;
+            }
+        };
+        scan_known_hosts(&contents, &file.path, &name, key, &mut by_name);
+        if let Some(address) = &address {
+            scan_known_hosts(&contents, &file.path, address, key, &mut by_address);
+        }
+    }
+    if by_name.trusted && by_address.mismatch() {
+        warn!(
+            host = %name,
+            address = address.as_deref().unwrap_or_default(),
+            "Host key on record for the host, but its address is on record with another key"
+        );
+    }
+    by_name.verdict(by_address)
+}
 
-    // Trust and revocation are settled line by line, and only the keys the
-    // prompt shows are kept, so that a file full of keys for the host costs
-    // no more than reading it.
-    let (mut trusted, mut revoked) = (false, false);
-    let (mut same_type, mut other_types) = (Vec::new(), Vec::new());
-    let (mut unreadable, mut unreadable_revocation) = (false, false);
+/// Why a `known_hosts` file was not read.
+#[derive(Debug, PartialEq, Eq)]
+enum Unread {
+    /// It cannot be read, and might revoke the key.
+    Unreadable(String),
+    /// A system-wide file that someone other than an administrator could
+    /// have changed, or kept from being read, which on Windows any user
+    /// can do by holding it open or locking part of it. Nothing in it
+    /// counts, not even a revocation, so that no user of the machine can
+    /// refuse another's connections or turn their prompts into warnings.
+    /// Nor does one an administrator keeps from this user, which OpenSSH
+    /// skips too.
+    Skipped(String),
+}
+
+/// The contents of the `known_hosts` `file` for the host key check, or why
+/// they are not read. Missing, or linked to `/dev/null`, which switches it
+/// off, it holds nothing; a FIFO is not read, which would block. A
+/// system-wide file is read only while [`system_file_trusted`], it and its
+/// directory, and is then read through the handle it was checked by.
+fn known_hosts_contents(file: &HostsFile) -> Result<Vec<u8>, Unread> {
+    let (path, system) = (&file.path, file.kind == HostsFileKind::System);
+    let failed = |e: std::io::Error| {
+        if system {
+            Unread::Skipped(e.to_string())
+        } else {
+            Unread::Unreadable(e.to_string())
+        }
+    };
+    let meta = match std::fs::metadata(path) {
+        Ok(meta) => meta,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(failed(e)),
+    };
+    if system {
+        system_file_trusted(path.parent().unwrap_or(path), None).map_err(Unread::Skipped)?;
+    }
+    // From here on, a system-wide file can only be as it is because an
+    // administrator made it so. The directories above are taken to be the
+    // system's own: `/etc`, or `ProgramData`, in which users can make
+    // folders but not rename or remove those of others.
+    if meta.is_dir() {
+        return Err(Unread::Unreadable("a directory".to_string()));
+    }
+    if !meta.is_file() {
+        return Ok(Vec::new());
+    }
+    let opened = std::fs::File::open(path).map_err(failed)?;
+    if system {
+        system_file_trusted(path, Some(&opened)).map_err(Unread::Skipped)?;
+    }
+    match read_bounded(opened) {
+        Ok(Some(contents)) => Ok(contents),
+        Ok(None) => Err(Unread::Unreadable("larger than the limit".to_string())),
+        Err(e) => Err(failed(e)),
+    }
+}
+
+/// The name the address `ip`:`port` goes by in `known_hosts`, looked up
+/// beside the host's name `name`: `None` when that is the same name (the
+/// host was given as an address), and for a loopback, link-local or
+/// unspecified address, which is no one host. OpenSSH skips a local
+/// address too.
+fn address_name(name: &str, ip: IpAddr, port: u16) -> Option<String> {
+    let ip = ip.to_canonical();
+    let local = match ip {
+        IpAddr::V4(ip) => ip.is_loopback() || ip.is_link_local() || ip.is_unspecified(),
+        IpAddr::V6(ip) => ip.is_loopback() || ip.is_unicast_link_local() || ip.is_unspecified(),
+    };
+    if local {
+        return None;
+    }
+    known_hosts_name(&ip.to_string(), port)
+        .ok()
+        .filter(|address| address != name)
+}
+
+/// What the `known_hosts` files have on record under one name for a key,
+/// gathered line by line. Only the keys the prompt shows are kept, so that
+/// a file full of keys for the host costs no more than reading it.
+// Four facts about the lines read, each independent of the others.
+#[allow(clippy::struct_excessive_bools)]
+#[derive(Default)]
+struct Findings {
+    /// The key is on record.
+    trusted: bool,
+    /// The key is listed under `@revoked`.
+    revoked: bool,
+    /// Other keys on record, of the key's type and of other types.
+    same_type: Vec<russh::keys::PublicKey>,
+    other_types: Vec<russh::keys::PublicKey>,
+    /// An entry, or a revocation, that cannot be read.
+    unreadable: bool,
+    unreadable_revocation: bool,
+}
+
+impl Findings {
+    /// Whether other keys are on record, but not the key.
+    fn mismatch(&self) -> bool {
+        let others = !self.same_type.is_empty() || !self.other_types.is_empty();
+        others && !self.trusted
+    }
+
+    /// What these findings under the host's name, and `address` under the
+    /// address it was reached at, make of the key.
+    fn verdict(self, address: Self) -> KnownHost {
+        if self.revoked || address.revoked {
+            return KnownHost::Revoked;
+        }
+        // A revocation that cannot be read might be of this very key.
+        let unreadable_revocation = self.unreadable_revocation || address.unreadable_revocation;
+        if self.trusted {
+            return if unreadable_revocation {
+                KnownHost::ask(HostKeyStatus::Unchecked)
+            } else {
+                KnownHost::Trusted
+            };
+        }
+        if !self.same_type.is_empty() {
+            KnownHost::Ask {
+                status: HostKeyStatus::Changed,
+                known: self.same_type,
+            }
+        } else if !self.other_types.is_empty() {
+            KnownHost::Ask {
+                status: HostKeyStatus::OtherType,
+                known: self.other_types,
+            }
+        } else if self.unreadable || self.unreadable_revocation {
+            // An entry for the host that cannot be read might be of the
+            // key, so the prompt does not say the host is not on record.
+            KnownHost::ask(HostKeyStatus::Unchecked)
+        } else if address.mismatch() {
+            KnownHost::Ask {
+                status: HostKeyStatus::AddressChanged,
+                known: if address.same_type.is_empty() {
+                    address.other_types
+                } else {
+                    address.same_type
+                },
+            }
+        } else if address.unreadable || unreadable_revocation {
+            KnownHost::ask(HostKeyStatus::Unchecked)
+        } else {
+            KnownHost::ask(HostKeyStatus::New)
+        }
+    }
+}
+
+/// Note in `found` what the `known_hosts` `contents`, read from `path`, have
+/// on record under `name` for `key`.
+fn scan_known_hosts(
+    contents: &[u8],
+    path: &std::path::Path,
+    name: &str,
+    key: &russh::keys::PublicKey,
+    found: &mut Findings,
+) {
     for (index, line) in contents.split(|&b| b == b'\n').enumerate() {
         let mut fields = line_content(line)
             .split(|&b| b == b' ' || b == b'\t')
@@ -1235,9 +1611,9 @@ fn check_known_host(
             _ => (first, false),
         };
         let applies = if is_revocation {
-            pattern_list_matches(names, &name)
+            pattern_list_matches(names, name)
         } else {
-            names_entry_for(names, &name)
+            names_entry_for(names, name)
         };
         if !applies {
             continue;
@@ -1249,13 +1625,15 @@ fn check_known_host(
             .and_then(|blob| russh::keys::parse_public_key_base64(blob).ok())
             .filter(|recorded| key_type == Some(recorded.algorithm().as_str().as_bytes()));
         match parsed {
-            Some(recorded) if is_revocation => revoked |= recorded.key_data() == key.key_data(),
-            Some(recorded) if recorded.key_data() == key.key_data() => trusted = true,
+            Some(recorded) if is_revocation => {
+                found.revoked |= recorded.key_data() == key.key_data();
+            }
+            Some(recorded) if recorded.key_data() == key.key_data() => found.trusted = true,
             Some(recorded) => {
                 let shown = if recorded.algorithm() == key.algorithm() {
-                    &mut same_type
+                    &mut found.same_type
                 } else {
-                    &mut other_types
+                    &mut found.other_types
                 };
                 // The same key on two lines, say hashed and plain, is shown once.
                 let again = shown
@@ -1273,40 +1651,12 @@ fn check_known_host(
                     "known_hosts entry for the host cannot be read — skipped"
                 );
                 if is_revocation {
-                    unreadable_revocation = true;
+                    found.unreadable_revocation = true;
                 } else {
-                    unreadable = true;
+                    found.unreadable = true;
                 }
             }
         }
-    }
-
-    if revoked {
-        return KnownHost::Revoked;
-    }
-    // A revocation that cannot be read might be of this very key.
-    let unreadable = unreadable || unreadable_revocation;
-    if trusted {
-        return if unreadable_revocation {
-            KnownHost::ask(HostKeyStatus::Unchecked)
-        } else {
-            KnownHost::Trusted
-        };
-    }
-    if !same_type.is_empty() {
-        KnownHost::Ask {
-            status: HostKeyStatus::Changed,
-            known: same_type,
-        }
-    } else if !other_types.is_empty() {
-        KnownHost::Ask {
-            status: HostKeyStatus::OtherType,
-            known: other_types,
-        }
-    } else if unreadable {
-        KnownHost::ask(HostKeyStatus::Unchecked)
-    } else {
-        KnownHost::ask(HostKeyStatus::New)
     }
 }
 
@@ -1782,18 +2132,33 @@ fn next_checked(
 }
 
 /// Connect to `host`: to the addresses it was checked at when given, so
-/// nothing resolves it again, and by name otherwise.
+/// nothing resolves it again, and by name otherwise. The handler is made by
+/// `handler` once the TCP connection is up, from the address it reached,
+/// so that its host key check can look that address up as well.
 async fn connect_checked<H: client::Handler + Send + 'static>(
     config: Arc<client::Config>,
     host: &str,
     port: u16,
     checked: Option<Vec<SocketAddr>>,
-    handler: H,
+    handler: impl FnOnce(Option<IpAddr>) -> H,
 ) -> Result<client::Handle<H>, H::Error> {
-    match checked {
-        Some(addrs) => client::connect(config, &addrs[..], handler).await,
-        None => client::connect(config, (host, port), handler).await,
+    // What russh's `client::connect` does, with the peer's address in hand.
+    let socket = match checked {
+        Some(addrs) => tokio::net::TcpStream::connect(&addrs[..]).await,
+        None => tokio::net::TcpStream::connect((host, port)).await,
     }
+    .map_err(russh::Error::from)?;
+    if let Err(e) = socket.set_nodelay(config.nodelay) {
+        warn!(host, error = %e, "set_nodelay() failed");
+    }
+    let address = match socket.peer_addr() {
+        Ok(addr) => Some(addr.ip()),
+        Err(e) => {
+            debug!(host, error = %e, "peer_addr() failed: known_hosts is looked up by name only");
+            None
+        }
+    };
+    client::connect_stream(config, socket, handler(address)).await
 }
 
 /// The most addresses a bastion is asked to open one tunnel to, so a name
@@ -1929,10 +2294,11 @@ async fn connect_with_hops(
             .map_err(|e| format!("Verify sender lock poisoned: {e}"))?
             .insert(session_id.to_string(), verify_tx);
 
-        let handler = SshHandler {
+        let handler = |address| SshHandler {
             session_id: session_id.to_string(),
             host: target_host.to_string(),
             port: target_port,
+            address,
             app_handle: app_handle.clone(),
             verify_rx: Arc::new(Mutex::new(Some(verify_rx))),
         };
@@ -1997,10 +2363,11 @@ async fn connect_with_hops(
         .map_err(|e| format!("Verify sender lock poisoned: {e}"))?
         .insert(hop_id.clone(), verify_tx);
 
-    let handler = SshHandler {
+    let handler = |address| SshHandler {
         session_id: hop_id.clone(),
         host: first_hop.host.clone(),
         port: first_hop.port,
+        address,
         app_handle: app_handle.clone(),
         verify_rx: Arc::new(Mutex::new(Some(verify_rx))),
     };
@@ -2076,6 +2443,7 @@ async fn connect_with_hops(
             session_id: hop_id.clone(),
             host: hop.host.clone(),
             port: hop.port,
+            address: None,
             app_handle: app_handle.clone(),
             verify_rx: Arc::new(Mutex::new(Some(verify_rx))),
         };
@@ -2144,6 +2512,7 @@ async fn connect_with_hops(
         session_id: session_id.to_string(),
         host: target_host.to_string(),
         port: target_port,
+        address: None,
         app_handle: app_handle.clone(),
         verify_rx: Arc::new(Mutex::new(Some(verify_rx))),
     };
@@ -2442,6 +2811,10 @@ pub(crate) struct SshHandler {
     session_id: String,
     host: String,
     port: u16,
+    /// The address connected to, whose `known_hosts` entries are checked
+    /// too. `None` through a tunnel: the jump host resolves the name, and an
+    /// address behind one jump host can be another host behind the next.
+    address: Option<IpAddr>,
     app_handle: AppHandle,
     /// Shared receiver for the TOFU verification response from the frontend.
     verify_rx: Arc<Mutex<Option<oneshot::Receiver<bool>>>>,
@@ -2498,13 +2871,17 @@ impl client::Handler for SshHandler {
                     key_type = server_public_key.algorithm().as_str(),
                     "Checking known_hosts"
                 );
-                let (host, port, key) = (self.host.clone(), self.port, server_public_key.clone());
-                tokio::task::spawn_blocking(move || check_known_host(&kh, &host, port, &key))
-                    .await
-                    .unwrap_or_else(|e| {
-                        warn!(session_id = %self.session_id, error = %e, "known_hosts check failed");
-                        KnownHost::ask(HostKeyStatus::Unchecked)
-                    })
+                let files = known_hosts_files(Some(&kh));
+                let (host, port, address) = (self.host.clone(), self.port, self.address);
+                let key = server_public_key.clone();
+                tokio::task::spawn_blocking(move || {
+                    check_known_hosts(&files, &host, port, address, &key)
+                })
+                .await
+                .unwrap_or_else(|e| {
+                    warn!(session_id = %self.session_id, error = %e, "known_hosts check failed");
+                    KnownHost::ask(HostKeyStatus::Unchecked)
+                })
             }
             None => KnownHost::ask(HostKeyStatus::Unchecked),
         };
@@ -2528,13 +2905,15 @@ impl client::Handler for SshHandler {
             HostKeyStatus::New => {}
             // Possibly a man in the middle. If accepted, the old entries are
             // replaced below.
-            HostKeyStatus::Changed | HostKeyStatus::OtherType => warn!(
-                session_id = %self.session_id,
-                host = %self.host,
-                port = self.port,
-                ?status,
-                "Server key does not match known_hosts — asking the user"
-            ),
+            HostKeyStatus::Changed | HostKeyStatus::OtherType | HostKeyStatus::AddressChanged => {
+                warn!(
+                    session_id = %self.session_id,
+                    host = %self.host,
+                    port = self.port,
+                    ?status,
+                    "Server key does not match known_hosts — asking the user"
+                );
+            }
             HostKeyStatus::Unchecked => warn!(
                 session_id = %self.session_id,
                 host = %self.host,
@@ -2703,6 +3082,28 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("ss-kh-{}", uuid::Uuid::new_v4()));
         let file = dir.join(".ssh").join("known_hosts");
         (dir, file)
+    }
+
+    /// The user's file at `path`, to check.
+    fn user_file(path: &std::path::Path) -> HostsFile {
+        hosts_file(path, HostsFileKind::User)
+    }
+
+    fn hosts_file(path: &std::path::Path, kind: HostsFileKind) -> HostsFile {
+        HostsFile {
+            path: path.to_path_buf(),
+            kind,
+        }
+    }
+
+    /// [`check_known_hosts`] against the user's file at `path` alone.
+    fn check_known_host(
+        path: &std::path::Path,
+        host: &str,
+        port: u16,
+        key: &russh::keys::PublicKey,
+    ) -> KnownHost {
+        check_known_hosts(&[user_file(path)], host, port, None, key)
     }
 
     #[test]
@@ -3353,6 +3754,588 @@ mod tests {
                 "{line:?} was left behind"
             );
             std::fs::remove_dir_all(&dir).unwrap();
+        }
+    }
+
+    // ── Several files, and the address ───────────────────────────────────
+
+    /// A scratch directory with a file holding each of `contents`.
+    fn scratch_files(contents: &[&str]) -> (PathBuf, Vec<PathBuf>) {
+        let (dir, file) = scratch_known_hosts();
+        let ssh = file.parent().unwrap();
+        crate::private_fs::create_private_dir(ssh).unwrap();
+        let paths = contents
+            .iter()
+            .enumerate()
+            .map(|(i, contents)| {
+                let path = ssh.join(format!("known_hosts{i}"));
+                std::fs::write(&path, contents).unwrap();
+                path
+            })
+            .collect();
+        (dir, paths)
+    }
+
+    /// [`check_known_hosts`] for `key` offered by `host`:22, reached at
+    /// `address`, against the user's files holding each of `contents`.
+    fn check_files(contents: &[&str], host: &str, address: Option<IpAddr>, key: &str) -> KnownHost {
+        let (dir, paths) = scratch_files(contents);
+        let files: Vec<HostsFile> = paths.iter().map(|path| user_file(path)).collect();
+        let found = check_known_hosts(&files, host, 22, address, &public_key(key));
+        std::fs::remove_dir_all(&dir).unwrap();
+        found
+    }
+
+    #[test]
+    fn the_files_read_are_those_openssh_reads() {
+        let user = std::path::Path::new("home")
+            .join(".ssh")
+            .join("known_hosts");
+        let dir = system_known_hosts_dir();
+        let listed: Vec<(PathBuf, HostsFileKind)> = known_hosts_files(Some(&user))
+            .into_iter()
+            .map(|file| (file.path, file.kind))
+            .collect();
+        assert_eq!(
+            listed,
+            [
+                (user.clone(), HostsFileKind::User),
+                (user.with_file_name("known_hosts2"), HostsFileKind::Legacy),
+                (dir.join("ssh_known_hosts"), HostsFileKind::System),
+                (dir.join("ssh_known_hosts2"), HostsFileKind::System),
+            ]
+        );
+        assert_eq!(known_hosts_files(None).len(), 2);
+        #[cfg(not(windows))]
+        assert_eq!(dir, std::path::Path::new("/etc/ssh"));
+        #[cfg(windows)]
+        {
+            // Where Windows says ProgramData is, which is where the
+            // environment says too, unless something changed it.
+            let data = windows_security::program_data().unwrap();
+            assert!(data.is_absolute(), "{data:?}");
+            assert_eq!(dir, data.join("ssh"));
+            if let Some(env) = std::env::var_os("ProgramData") {
+                assert!(
+                    data.as_os_str().eq_ignore_ascii_case(&env),
+                    "{data:?} {env:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn what_the_files_hold_counts_together() {
+        let (a, b, c) = (
+            format!("example.com {KEY_A}\n"),
+            format!("example.com {KEY_B}\n"),
+            format!("example.com {KEY_C}\n"),
+        );
+        // A key trusted by one file is not changed by another.
+        for files in [[&a, &b], [&b, &a]] {
+            assert_eq!(
+                check_files(&files.map(String::as_str), "example.com", None, KEY_A),
+                KnownHost::Trusted
+            );
+        }
+        // A key revoked in any is refused.
+        let revocation = format!("@revoked * {KEY_A}\n");
+        assert_eq!(
+            check_files(&[&a, &revocation], "example.com", None, KEY_A),
+            KnownHost::Revoked
+        );
+        // The keys on record in any are shown.
+        assert_eq!(
+            check_files(&["", &b], "example.com", None, KEY_A),
+            ask(HostKeyStatus::Changed, &[KEY_B])
+        );
+        assert_eq!(
+            check_files(&[&c, &b], "example.com", None, KEY_A),
+            ask(HostKeyStatus::Changed, &[KEY_B])
+        );
+    }
+
+    /// [`check_contents`] for `KEY_A` offered by example.com:22, given what
+    /// was read from a file of each kind.
+    fn check_read(read: Vec<(HostsFileKind, Result<&str, Unread>)>) -> KnownHost {
+        let files: Vec<HostsFile> = read
+            .iter()
+            .map(|(kind, _)| hosts_file(std::path::Path::new("known_hosts"), *kind))
+            .collect();
+        let read = files
+            .iter()
+            .zip(read)
+            .map(|(file, (_, contents))| (file, contents.map(|c| c.as_bytes().to_vec())));
+        check_contents(read, "example.com", 22, None, &public_key(KEY_A))
+    }
+
+    #[test]
+    fn what_a_file_that_cannot_be_read_costs_depends_on_whose_it_is() {
+        use HostsFileKind::{Legacy, System, User};
+        let (trusted, revocation) = (
+            format!("example.com {KEY_A}\n"),
+            format!("@revoked example.com {KEY_A}\n"),
+        );
+        let (trusted, revocation) = (trusted.as_str(), revocation.as_str());
+        let unreadable = || Err(Unread::Unreadable("a directory".to_string()));
+        let skipped = || Err(Unread::Skipped("can be changed by others".to_string()));
+        // The user's own might revoke the key, and so might a system-wide
+        // one in a way only an administrator can cause.
+        for kind in [User, System] {
+            assert_eq!(
+                check_read(vec![(User, Ok(trusted)), (kind, unreadable())]),
+                ask(HostKeyStatus::Unchecked, &[]),
+                "{kind:?}"
+            );
+        }
+        // known_hosts2 is skipped then, as in OpenSSH, and a system-wide one
+        // whenever another user could be the reason.
+        assert_eq!(
+            check_read(vec![
+                (User, Ok(trusted)),
+                (Legacy, unreadable()),
+                (System, skipped())
+            ]),
+            KnownHost::Trusted
+        );
+        // A revocation elsewhere still refuses the key.
+        assert_eq!(
+            check_read(vec![(User, unreadable()), (System, Ok(revocation))]),
+            KnownHost::Revoked
+        );
+        // What a system-wide file holds counts as the user's own does.
+        assert_eq!(
+            check_read(vec![(User, Ok("")), (System, Ok(trusted))]),
+            KnownHost::Trusted
+        );
+        assert_eq!(
+            check_read(vec![(User, Ok(trusted)), (System, Ok(revocation))]),
+            KnownHost::Revoked
+        );
+    }
+
+    #[test]
+    fn files_that_are_missing_or_cannot_be_read_or_trusted() {
+        let (dir, paths) = scratch_files(&[&format!("example.com {KEY_A}\n")]);
+        let directory = dir.join("known_hosts");
+        crate::private_fs::create_private_dir(&directory).unwrap();
+        // Missing, with or without its directory, a file holds nothing.
+        for missing in [dir.join("missing"), dir.join("missing").join("known_hosts")] {
+            for kind in [HostsFileKind::User, HostsFileKind::System] {
+                assert_eq!(
+                    known_hosts_contents(&hosts_file(&missing, kind)),
+                    Ok(Vec::new())
+                );
+            }
+        }
+        assert_eq!(
+            known_hosts_contents(&user_file(&directory)),
+            Err(Unread::Unreadable("a directory".to_string()))
+        );
+        // A system-wide file others can change is skipped: the test's own,
+        // which on Windows its owner may change, and on Unix others too
+        // once it is open to them, even when the test runs as root.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&paths[0], std::fs::Permissions::from_mode(0o666)).unwrap();
+        }
+        assert!(matches!(
+            known_hosts_contents(&hosts_file(&paths[0], HostsFileKind::System)),
+            Err(Unread::Skipped(_))
+        ));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn only_an_administrator_may_change_a_system_file() {
+        for sid in [
+            "S-1-5-18",
+            "S-1-5-32-544",
+            "S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464",
+        ] {
+            assert!(is_administrator_sid(sid), "{sid}");
+        }
+        for sid in [
+            "S-1-5-32-545", // Users
+            "S-1-5-11",     // Authenticated Users
+            "S-1-1-0",      // Everyone
+            "S-1-5-21-2123663517-4207914079-1984504764-1001",
+            "S-1-5-18-1",
+            "",
+        ] {
+            assert!(!is_administrator_sid(sid), "{sid}");
+        }
+
+        // As Windows' OpenSSH sets up %ProgramData%\ssh, and a file in it
+        // inherits.
+        let full: u32 = 0x1F_01FF;
+        let read_execute: u32 = 0x12_00A9;
+        let allow = |sid: &str, mask| Ace::Allow {
+            sid: sid.to_string(),
+            mask,
+        };
+        let installed = || {
+            vec![
+                allow("S-1-5-18", full),
+                allow("S-1-5-32-544", full),
+                allow("S-1-5-11", read_execute),
+            ]
+        };
+        assert!(administrators_only("S-1-5-32-544", Some(&installed())));
+        // Denials, entries only for what is created inside, and rights that
+        // change neither it nor what is in it, are of no matter.
+        let mut harmless = installed();
+        harmless.extend([
+            Ace::Ignored,
+            // FILE_WRITE_ATTRIBUTES and FILE_WRITE_EA.
+            allow("S-1-5-32-545", 0x100 | 0x10),
+            allow("S-1-3-4", full),
+        ]);
+        assert!(administrators_only("S-1-5-18", Some(&harmless)));
+        // Owned by someone else, or without a list, which lets everyone in.
+        let user = "S-1-5-21-2123663517-4207914079-1984504764-1001";
+        assert!(!administrators_only(user, Some(&installed())));
+        assert!(!administrators_only("S-1-5-32-544", None));
+        // Any right for someone else to change it as a file or directory:
+        // such as to add files, which a folder made in ProgramData by hand
+        // gives Users.
+        for mask in [
+            0x2,
+            0x4,
+            0x40,
+            0x1_0000,
+            0x4_0000,
+            0x8_0000,
+            0x1000_0000,
+            0x4000_0000,
+            full,
+        ] {
+            let mut aces = installed();
+            aces.push(allow("S-1-5-32-545", mask));
+            assert!(
+                !administrators_only("S-1-5-32-544", Some(&aces)),
+                "{mask:#x}"
+            );
+        }
+        // An entry of a kind not read.
+        let mut aces = installed();
+        aces.push(Ace::Other);
+        assert!(!administrators_only("S-1-5-32-544", Some(&aces)));
+
+        for mode in [0o100_644, 0o100_400, 0o040_755, 0o040_700] {
+            assert!(root_only(0, mode), "{mode:o}");
+        }
+        for (uid, mode) in [
+            (1000, 0o100_644),
+            (0, 0o100_664),
+            (0, 0o100_646),
+            (0, 0o041_777),
+        ] {
+            assert!(!root_only(uid, mode), "{uid} {mode:o}");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_file_only_root_can_change_is_read() {
+        let passwd = std::path::Path::new("/etc/passwd");
+        assert_eq!(
+            system_file_trusted(std::path::Path::new("/etc"), None),
+            Ok(())
+        );
+        let opened = std::fs::File::open(passwd).unwrap();
+        assert_eq!(system_file_trusted(passwd, Some(&opened)), Ok(()));
+        let read = known_hosts_contents(&hosts_file(passwd, HostsFileKind::System));
+        assert!(read.is_ok_and(|contents| !contents.is_empty()));
+    }
+
+    /// Run the Windows tool `name` with `args`, without a console window,
+    /// and say whether it succeeded.
+    #[cfg(windows)]
+    fn run_windows_tool(name: &str, args: &[&std::ffi::OsStr]) -> bool {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        std::process::Command::new(windows_tool(name))
+            .args(args)
+            .creation_flags(CREATE_NO_WINDOW)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .is_ok_and(|status| status.success())
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn access_lists_are_read_from_windows() {
+        // Windows' own hosts file, which only administrators can change: so
+        // unless the user running the tests can, it is read.
+        let root = std::env::var_os("SystemRoot").unwrap_or_else(|| r"C:\Windows".into());
+        let hosts = std::path::Path::new(&root).join(r"System32\drivers\etc\hosts");
+        let read = known_hosts_contents(&hosts_file(&hosts, HostsFileKind::System));
+        if std::fs::OpenOptions::new()
+            .append(true)
+            .open(&hosts)
+            .is_ok()
+        {
+            eprintln!(
+                "This user may change {}, so its read is not checked",
+                hosts.display()
+            );
+        } else {
+            assert!(read.is_ok(), "{read:?}");
+        }
+
+        // A file of the test's own, owned by the user or, when it runs as an
+        // administrator, the group; either way the user may change it.
+        let (dir, file) = scratch_known_hosts();
+        let ssh = file.parent().unwrap();
+        crate::private_fs::create_private_dir(ssh).unwrap();
+        std::fs::write(&file, b"").unwrap();
+        let opened = std::fs::File::open(&file).unwrap();
+        let (owner, dacl) = windows_security::security(&opened).unwrap();
+        let user = current_user_sid().unwrap();
+        assert!(owner == user || is_administrator_sid(&owner), "{owner}");
+        assert!(dacl.unwrap().iter().any(|ace| matches!(
+            ace,
+            Ace::Allow { sid, mask } if sid == user && mask & 0x2 != 0
+        )));
+        // Its directory, opened as the check opens one, has the same owner.
+        let directory = windows_security::open_directory(ssh).unwrap();
+        assert_eq!(windows_security::security(&directory).unwrap().0, owner);
+        // Unless the tests run as an administrator account, such as SYSTEM.
+        if !is_administrator_sid(user) {
+            assert!(system_file_trusted(&file, Some(&opened)).is_err());
+            assert!(system_file_trusted(ssh, None).is_err());
+        }
+        assert!(system_file_trusted(&dir.join("missing"), None).is_err());
+        drop((opened, directory));
+        std::fs::remove_dir_all(&dir).unwrap();
+
+        // ProgramData is taken only from a fixed drive of this machine.
+        assert!(windows_security::on_fixed_drive(std::path::Path::new(
+            &root
+        )));
+        for elsewhere in [
+            r"\\server\share\ProgramData",
+            r"\\?\UNC\server\share\ProgramData",
+            r"ProgramData",
+            r"\ProgramData",
+        ] {
+            assert!(
+                !windows_security::on_fixed_drive(std::path::Path::new(elsewhere)),
+                "{elsewhere}"
+            );
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_junction_in_place_of_a_directory_is_refused() {
+        let (dir, _) = scratch_known_hosts();
+        let (link, target) = (dir.join("link"), dir.join("target"));
+        crate::private_fs::create_private_dir(&target).unwrap();
+        // Any user can make one, on NTFS.
+        let args = [
+            "/C".as_ref(),
+            "mklink".as_ref(),
+            "/J".as_ref(),
+            link.as_os_str(),
+            target.as_os_str(),
+        ];
+        assert!(
+            run_windows_tool("cmd.exe", &args),
+            "No junction could be made in {}",
+            dir.display()
+        );
+        let refused = system_file_trusted(&link, None).unwrap_err();
+        assert!(refused.ends_with("is a link"), "{refused}");
+        std::fs::remove_dir(&link).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn access_list_entries_are_read_by_kind() {
+        const USERS: &str = "S-1-5-32-545";
+        const EVERYONE: &str = "S-1-1-0";
+        let (dir, _) = scratch_known_hosts();
+        crate::private_fs::create_private_dir(&dir).unwrap();
+        // Only the user may do anything with it, whatever the temporary
+        // directory lets others do.
+        restrict_windows_acl(&dir, true);
+        let icacls = |change: &[&str]| {
+            let mut args = vec![dir.as_os_str()];
+            args.extend(change.iter().map(std::ffi::OsStr::new));
+            assert!(run_windows_tool("icacls.exe", &args), "icacls {change:?}");
+        };
+        let aces = || {
+            let directory = windows_security::open_directory(&dir).unwrap();
+            windows_security::security(&directory).unwrap().1.unwrap()
+        };
+        let may_add = |aces: &[Ace], who: &str| {
+            aces.iter()
+                .any(|ace| matches!(ace, Ace::Allow { sid, mask } if sid == who && mask & 0x2 != 0))
+        };
+        let before = aces();
+        assert!(!may_add(&before, EVERYONE) && !may_add(&before, USERS));
+        // A denial, and a grant only for what is made inside, allow nothing;
+        // misread, either would let them add files.
+        icacls(&["/deny", "*S-1-1-0:(WD)"]);
+        icacls(&["/grant", "*S-1-5-32-545:(OI)(IO)(M)"]);
+        let read = aces();
+        assert!(read.iter().any(|ace| matches!(ace, Ace::Ignored)));
+        assert!(!may_add(&read, EVERYONE) && !may_add(&read, USERS));
+        // A grant for the directory itself is read with its rights.
+        icacls(&["/grant", "*S-1-5-32-545:(AD,WD)"]);
+        assert!(may_add(&aces(), USERS));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// The address the host is reached at in the address tests.
+    const ADDRESS: IpAddr = IpAddr::V4(Ipv4Addr::new(203, 0, 113, 5));
+
+    #[test]
+    fn address_entries_make_only_a_new_hosts_prompt_a_warning() {
+        let name = |key: &str| format!("example.com {key}\n");
+        let address = |key: &str| format!("203.0.113.5 {key}\n");
+        let at = Some(ADDRESS);
+        // Other keys for the address.
+        for (contents, shown) in [
+            (address(KEY_A), KEY_A),
+            (address(KEY_C), KEY_C),
+            (format!("{}{}", address(KEY_C), address(KEY_A)), KEY_A),
+            (format!("other.org,203.0.113.5 {KEY_A}\n"), KEY_A),
+            (format!("{} {KEY_A}\n", hashed("203.0.113.5")), KEY_A),
+        ] {
+            assert_eq!(
+                check_files(&[&contents], "example.com", at, KEY_B),
+                ask(HostKeyStatus::AddressChanged, &[shown]),
+                "{contents:?}"
+            );
+        }
+        // The key on record for the address does not trust it, nor warn.
+        for contents in [
+            address(KEY_A),
+            format!("{}{}", address(KEY_C), address(KEY_A)),
+        ] {
+            assert_eq!(
+                check_files(&[&contents], "example.com", at, KEY_A),
+                ask(HostKeyStatus::New, &[]),
+                "{contents:?}"
+            );
+        }
+        // A host trusted by name is not asked about, whatever its address
+        // has, and one whose key changed is reported as changed.
+        assert_eq!(
+            check_files(&[&name(KEY_A), &address(KEY_B)], "example.com", at, KEY_A),
+            KnownHost::Trusted
+        );
+        assert_eq!(
+            check_files(&[&name(KEY_B), &address(KEY_C)], "example.com", at, KEY_A),
+            ask(HostKeyStatus::Changed, &[KEY_B])
+        );
+        // Not without the address, nor under another port, nor a pattern.
+        for (contents, at) in [
+            (address(KEY_A), None),
+            (format!("[203.0.113.5]:2222 {KEY_A}\n"), at),
+            (format!("203.0.113.* {KEY_A}\n"), at),
+        ] {
+            assert_eq!(
+                check_files(&[&contents], "example.com", at, KEY_B),
+                ask(HostKeyStatus::New, &[]),
+                "{contents:?}"
+            );
+        }
+        // An address entry that cannot be read leaves a new host unchecked.
+        let damaged = "203.0.113.5 ssh-ed25519 not-a-key\n";
+        assert_eq!(
+            check_files(&[damaged], "example.com", at, KEY_A),
+            ask(HostKeyStatus::Unchecked, &[])
+        );
+        assert_eq!(
+            check_files(&[&name(KEY_A), damaged], "example.com", at, KEY_A),
+            KnownHost::Trusted
+        );
+        // Nor is a host said to be new beside another key for its address
+        // when an entry for it cannot be read, which might be of the key.
+        let damaged = "example.com ssh-ed25519 not-a-key\n";
+        assert_eq!(
+            check_files(&[damaged, &address(KEY_C)], "example.com", at, KEY_A),
+            ask(HostKeyStatus::Unchecked, &[])
+        );
+    }
+
+    /// `name` hashed as OpenSSH hashes it in `known_hosts`.
+    fn hashed(name: &str) -> String {
+        use hmac::{KeyInit, Mac};
+        let salt = [0x5a; 20];
+        let hash = hmac::Hmac::<sha1::Sha1>::new_from_slice(&salt)
+            .unwrap()
+            .chain_update(name.as_bytes())
+            .finalize()
+            .into_bytes();
+        let base64 = base64::prelude::BASE64_STANDARD;
+        let entry = format!("|1|{}|{}", base64.encode(salt), base64.encode(hash));
+        assert!(is_hashed_name_strict(entry.as_bytes(), name));
+        entry
+    }
+
+    #[test]
+    fn a_revocation_under_the_address_refuses_the_key() {
+        for revocation in [
+            format!("@revoked 203.0.113.5 {KEY_A}\n"),
+            format!("@revoked 203.0.113.* {KEY_A}\n"),
+            format!("@revoked {} {KEY_A}\n", hashed("203.0.113.5")),
+        ] {
+            let contents = format!("example.com {KEY_A}\n{revocation}");
+            assert_eq!(
+                check_files(&[&contents], "example.com", Some(ADDRESS), KEY_A),
+                KnownHost::Revoked,
+                "{revocation:?}"
+            );
+            assert_eq!(
+                check_files(&[&contents], "example.com", None, KEY_A),
+                KnownHost::Trusted,
+                "{revocation:?}"
+            );
+        }
+        // One that cannot be read might be of the key.
+        let contents = format!("example.com {KEY_A}\n@revoked 203.0.113.5 ssh-ed25519 x\n");
+        assert_eq!(
+            check_files(&[&contents], "example.com", Some(ADDRESS), KEY_A),
+            ask(HostKeyStatus::Unchecked, &[])
+        );
+    }
+
+    #[test]
+    fn addresses_are_looked_up_as_openssh_writes_them() {
+        for (ip, port, expected) in [
+            (ADDRESS, 22, "203.0.113.5"),
+            (ADDRESS, 2222, "[203.0.113.5]:2222"),
+            (v4(10, 0, 0, 1), 22, "10.0.0.1"),
+            (v6("2001:DB8::1"), 2222, "[2001:db8::1]:2222"),
+            // Mapped into IPv6, an IPv4 address is looked up as itself.
+            (v6("::ffff:203.0.113.5"), 22, "203.0.113.5"),
+        ] {
+            assert_eq!(
+                address_name("example.com", ip, port).as_deref(),
+                Some(expected)
+            );
+        }
+        // Not when the host was given as the address, nor a local one.
+        for (name, ip) in [
+            ("203.0.113.5", ADDRESS),
+            ("2001:db8::1", v6("2001:db8::1")),
+            ("example.com", v4(127, 0, 0, 1)),
+            ("example.com", v4(169, 254, 1, 1)),
+            ("example.com", v4(0, 0, 0, 0)),
+            ("example.com", v6("::1")),
+            ("example.com", v6("fe80::1")),
+            ("example.com", v6("::")),
+            ("example.com", v6("::ffff:127.0.0.1")),
+        ] {
+            assert_eq!(address_name(name, ip, 22), None, "{name} {ip}");
         }
     }
 
@@ -4019,12 +5002,18 @@ mod tests {
         // `.invalid` never resolves (RFC 6761), so this only connects if
         // the name is left alone.
         let config = Arc::new(client::Config::default());
+        let mut learned = None;
         let mut handle =
-            connect_checked(config, "server.invalid", 22, Some(vec![addr]), TestClient)
-                .await
-                .expect("the checked address should connect");
+            connect_checked(config, "server.invalid", 22, Some(vec![addr]), |address| {
+                learned = address;
+                TestClient
+            })
+            .await
+            .expect("the checked address should connect");
 
         assert!(handle.authenticate_none("test").await.unwrap().success());
+        // The handler is told the address, for its host key check.
+        assert_eq!(learned, Some(addr.ip()));
     }
 
     #[tokio::test]
@@ -4034,11 +5023,17 @@ mod tests {
         // `localhost` may resolve to `::1` first, where nothing listens; as
         // with any name, each address is tried in turn.
         let config = Arc::new(client::Config::default());
-        let mut handle = connect_checked(config, "localhost", addr.port(), None, TestClient)
-            .await
-            .expect("the name should connect");
+        let mut learned = None;
+        let mut handle = connect_checked(config, "localhost", addr.port(), None, |address| {
+            learned = address;
+            TestClient
+        })
+        .await
+        .expect("the name should connect");
 
         assert!(handle.authenticate_none("test").await.unwrap().success());
+        // The address reached, not the first the name resolved to.
+        assert_eq!(learned, Some(addr.ip()));
     }
 
     // ── Tunnels through a jump host ──────────────────────────────────────

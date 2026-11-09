@@ -3,7 +3,7 @@ import { Trans, useTranslation } from "react-i18next";
 import { DialogKeys } from "./DialogKeys";
 
 /** What known_hosts has on record for the host (`HostKeyStatus` in Rust). */
-export type HostKeyStatus = "new" | "changed" | "otherType" | "unchecked";
+export type HostKeyStatus = "new" | "changed" | "otherType" | "addressChanged" | "unchecked";
 
 export interface KnownKey {
   keyType: string;
@@ -17,7 +17,10 @@ export interface HostVerifyRequest {
   fingerprint: string;
   keyType: string;
   status: HostKeyStatus;
-  /** The keys on record: of the offered type when changed, of other types when otherType. */
+  /**
+   * The keys on record: of the offered type when changed, of other types when otherType,
+   * for the address the host was reached at when addressChanged.
+   */
   knownKeys: KnownKey[];
 }
 
@@ -38,12 +41,31 @@ const WARNINGS = {
     text: "hostVerify.otherType",
     confirm: "hostVerify.confirmOtherType",
   },
+  addressChanged: {
+    title: "hostVerify.titleAddressChanged",
+    text: "hostVerify.addressChanged",
+    confirm: "hostVerify.confirmAddressChanged",
+  },
   unchecked: {
     title: "hostVerify.titleUnchecked",
     text: "hostVerify.unchecked",
     confirm: "hostVerify.confirmUnchecked",
   },
 } as const;
+
+type Warning = (typeof WARNINGS)[keyof typeof WARNINGS];
+
+/** The warning for `status`, or none for a first connection. */
+function warningFor(status: HostKeyStatus): Warning | null {
+  if (status === "new") {
+    return null;
+  }
+  // The status comes from the backend: one this webview does not know is
+  // shown as a key that could not be checked, still a warning.
+  return Object.prototype.hasOwnProperty.call(WARNINGS, status)
+    ? WARNINGS[status]
+    : WARNINGS.unchecked;
+}
 
 export function HostVerifyDialog({ request, onRespond }: HostVerifyDialogProps): React.JSX.Element {
   const { t } = useTranslation();
@@ -54,7 +76,7 @@ export function HostVerifyDialog({ request, onRespond }: HostVerifyDialogProps):
   const handleAccept = useCallback(() => {
     onRespond(request.sessionId, true);
   }, [onRespond, request.sessionId]);
-  const warning = request.status === "new" ? null : WARNINGS[request.status];
+  const warning = warningFor(request.status);
   // DialogKeys takes Enter before a focused button sees it, so a focused
   // button in this dialog gets the click. Otherwise Enter accepts only a
   // first connection's key: any other takes a click on Accept, so that a
