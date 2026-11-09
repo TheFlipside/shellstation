@@ -546,14 +546,43 @@ async fn setup_postgres_rls(pool: &sqlx::PgPool) -> Result<(), String> {
     Ok(())
 }
 
+/// Menu `ID` of the app's own quit item; see [`build_app_menu`].
+const QUIT_MENU_ID: &str = "app_quit";
+
 /// Build the application menu, mirroring the Tauri default but using a custom
 /// Help submenu passed by the caller.
+///
+/// The quit item is the app's own. `PredefinedMenuItem::quit` ends the
+/// process on the spot (`terminate:` on macOS, `PostQuitMessage` on Windows)
+/// with no event the app could hold it on, which would leave the sessions
+/// for the operating system to close. This one quits through
+/// `commands::quit_app`, which closes them first. Like the predefined item,
+/// it does not ask to confirm: the confirmation lives in the webview, and the
+/// item must still quit when the webview is hung.
 fn build_app_menu(
     app: &tauri::AppHandle,
     #[cfg_attr(not(target_os = "macos"), allow(unused_variables))]
     about: &tauri::menu::AboutMetadata,
     help_menu: &Submenu<tauri::Wry>,
 ) -> Result<Menu<tauri::Wry>, Box<dyn std::error::Error>> {
+    #[cfg(target_os = "macos")]
+    let app_name = about.name.as_deref().unwrap_or("ShellStation");
+    #[cfg(target_os = "macos")]
+    let quit = MenuItemBuilder::with_id(QUIT_MENU_ID, format!("Quit {app_name}"))
+        .accelerator("CmdOrCtrl+Q")
+        .build(app)?;
+    // Labelled as the predefined item was; it has no accelerator here either,
+    // since Ctrl+Q reaches the webview.
+    #[cfg(not(any(
+        target_os = "macos",
+        target_os = "linux",
+        target_os = "dragonfly",
+        target_os = "freebsd",
+        target_os = "netbsd",
+        target_os = "openbsd"
+    )))]
+    let quit = MenuItemBuilder::with_id(QUIT_MENU_ID, "&Exit").build(app)?;
+
     #[cfg(not(any(
         target_os = "linux",
         target_os = "dragonfly",
@@ -580,7 +609,7 @@ fn build_app_menu(
             #[cfg(target_os = "macos")]
             &Submenu::with_items(
                 app,
-                about.name.clone().unwrap_or_default(),
+                app_name,
                 true,
                 &[
                     &PredefinedMenuItem::about(app, None, Some(about.clone()))?,
@@ -590,7 +619,7 @@ fn build_app_menu(
                     &PredefinedMenuItem::hide(app, None)?,
                     &PredefinedMenuItem::hide_others(app, None)?,
                     &PredefinedMenuItem::separator(app)?,
-                    &PredefinedMenuItem::quit(app, None)?,
+                    &quit,
                 ],
             )?,
             #[cfg(not(any(
@@ -607,7 +636,7 @@ fn build_app_menu(
                 &[
                     &PredefinedMenuItem::close_window(app, None)?,
                     #[cfg(not(target_os = "macos"))]
-                    &PredefinedMenuItem::quit(app, None)?,
+                    &quit,
                 ],
             )?,
             &Submenu::with_items(
@@ -934,6 +963,9 @@ pub fn run() {
                         // happens in the plugin itself.
                         let _ = handle.emit("updater:check-requested", ());
                     }
+                    // Straight from here, not through the frontend, so that
+                    // the item still quits when the webview is hung.
+                    QUIT_MENU_ID => commands::quit_app(handle),
                     _ => {}
                 }
             });
@@ -1162,6 +1194,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             // Terminal ready signal (all protocols)
             commands::terminal_ready,
+            // Quitting, once every session is closed
+            commands::app_quit,
             // PTY
             commands::pty_spawn,
             commands::pty_write,

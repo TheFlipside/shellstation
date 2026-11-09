@@ -331,6 +331,8 @@
     "quitConfirmMessage": "有 {{count}} 个开放的会话。确定要退出吗？",
     "quitConfirmTitle": "退出 ShellStation",
     "quit": "退出",
+    "quittingTitle": "正在关闭会话…",
+    "quittingMessage": "正在结束远程主机上的会话。完成后 ShellStation 将立即关闭，最多只需几秒钟。",
     "close": "关闭",
     "terminal": "终端",
     "fontFamilyLabel": "字体",

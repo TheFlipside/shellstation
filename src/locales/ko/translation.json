@@ -331,6 +331,8 @@
     "quitConfirmMessage": "{{count}}개의 열린 세션이 있습니다. 정말 종료하시겠습니까?",
     "quitConfirmTitle": "ShellStation 종료",
     "quit": "종료",
+    "quittingTitle": "세션을 닫는 중…",
+    "quittingMessage": "원격 호스트의 세션을 종료하는 중입니다. 완료되는 즉시, 늦어도 몇 초 안에 ShellStation이 종료됩니다.",
     "close": "닫기",
     "terminal": "터미널",
     "fontFamilyLabel": "글꼴",

@@ -31,14 +31,14 @@ pub use ssh::*;
 pub use telnet::*;
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 
 use crate::pty::PtyState;
 use crate::session_logger::SessionLogState;
-use crate::ssh::SshState;
-use crate::telnet::TelnetState;
+use crate::ssh::{SshSession, SshState, DISCONNECT_TIMEOUT};
+use crate::telnet::{TelnetSession, TelnetState};
 
 /// Senders for the "terminal ready" signal. Each protocol's reader task/thread
 /// waits on the corresponding receiver before entering its read loop. This
@@ -58,6 +58,9 @@ pub struct TerminalReadyState {
     /// load discards the frontend's tabs, so a session set up before it can
     /// never be shown or closed; see [`close_all_sessions`].
     page_loads: AtomicU64,
+    /// Set once the app has begun to quit, and never cleared; see
+    /// [`quit_app`].
+    quitting: AtomicBool,
 }
 
 impl TerminalReadyState {
@@ -133,9 +136,16 @@ impl<'a> ConnectSetup<'a> {
     /// tab that asked for the session is gone, and nothing would ever show
     /// or close it. Call it under the manager lock, right before registering,
     /// so that [`close_all_sessions`] either sees the session or refuses it.
+    ///
+    /// Fail as well once the app is quitting: [`quit_app`] has taken, or is
+    /// about to take, the sessions it closes, and one registered after that
+    /// would be left to the operating system.
     fn check_page_unchanged(&self) -> Result<(), String> {
         if self.ready.page_load() != self.page_load {
             return Err("The window was reloaded while the session was connecting".to_string());
+        }
+        if self.ready.quitting.load(Ordering::SeqCst) {
+            return Err("The app is quitting".to_string());
         }
         Ok(())
     }
@@ -197,21 +207,7 @@ pub fn close_all_sessions(app: &tauri::AppHandle) {
             return;
         };
 
-        // Count the page load and drain the SSH and Telnet managers while
-        // holding both their locks. A connect checks the count under its
-        // manager's lock right before registering, so one from before the
-        // load is either drained here or refused, and one from the new page
-        // is neither. Pending prompts belong to connects from before the load
-        // too; dropping them ends those connects now rather than at their
-        // timeout.
-        let (ssh_sessions, telnet_sessions) = {
-            let mut ssh_manager = ssh.manager.lock().await;
-            let mut telnet_manager = telnet.0.lock().await;
-            ready.page_loads.fetch_add(1, Ordering::SeqCst);
-            lock_or_recover(&ssh.host_verify_senders).clear();
-            lock_or_recover(&ssh.kbd_interactive_senders).clear();
-            (ssh_manager.take_all(), telnet_manager.take_all())
-        };
+        let (ssh_sessions, telnet_sessions) = take_remote_sessions(&ready, &ssh, &telnet).await;
         let mut count = ssh_sessions.len() + telnet_sessions.len();
         // Dropping a session closes it (see the `Drop` impls); then forget
         // what the session kept outside its manager.
@@ -224,39 +220,189 @@ pub fn close_all_sessions(app: &tauri::AppHandle) {
             release_session(&id, &ready, &logger);
         }
 
-        // Local shells are drained apart, on a blocking thread: their lock
-        // is a blocking one, which a stuck write to a shell can hold, and the
-        // SSH and Telnet locks must not wait on it. `pty_spawn` checks the
-        // count under this lock as well. A shell the new page starts in the
-        // moment before this drain would be closed with the old ones; it
-        // shows as an exited tab.
-        let pty_app = app.clone();
-        let killed = tauri::async_runtime::spawn_blocking(move || {
-            let (Some(pty), Some(ready), Some(logger)) = (
-                pty_app.try_state::<PtyState>(),
-                pty_app.try_state::<TerminalReadyState>(),
-                pty_app.try_state::<SessionLogState>(),
-            ) else {
-                return 0;
-            };
-            let shells = lock_or_recover(&pty.0).take_all();
-            let killed = shells.len();
-            for (id, shell) in shells {
-                shell.shut_down(&id);
-                release_session(&id, &ready, &logger);
-            }
-            killed
-        })
-        .await;
-        match killed {
-            Ok(killed) => count += killed,
-            Err(e) => tracing::warn!(error = %e, "Closing the local shells failed"),
-        }
+        // Local shells are drained apart, after the SSH and Telnet locks are
+        // released. A shell the new page starts in the moment before this
+        // drain would be closed with the old ones; it shows as an exited tab.
+        count += close_local_shells(&app).await;
 
         if count > 0 {
             tracing::info!(count, "Closed the sessions left behind by a page load");
         }
     });
+}
+
+/// The SSH and Telnet sessions [`take_remote_sessions`] takes, with their `ID`s.
+type RemoteSessions = (Vec<(String, SshSession)>, Vec<(String, TelnetSession)>);
+
+/// Take every SSH and Telnet session out of its manager, and end the connects
+/// still in flight.
+///
+/// The page-load count goes up while both manager locks are held. A connect
+/// checks the count under its manager's lock right before registering, so
+/// one from before this is either taken here or refused, and one that reads
+/// the new count is neither. Pending prompts belong to connects from before
+/// this too; dropping them ends those connects now rather than at their
+/// timeout.
+async fn take_remote_sessions(
+    ready: &TerminalReadyState,
+    ssh: &SshState,
+    telnet: &TelnetState,
+) -> RemoteSessions {
+    let mut ssh_manager = ssh.manager.lock().await;
+    let mut telnet_manager = telnet.0.lock().await;
+    ready.page_loads.fetch_add(1, Ordering::SeqCst);
+    lock_or_recover(&ssh.host_verify_senders).clear();
+    lock_or_recover(&ssh.kbd_interactive_senders).clear();
+    (ssh_manager.take_all(), telnet_manager.take_all())
+}
+
+/// Kill every local shell and forget what it kept outside its manager,
+/// returning how many there were.
+///
+/// This runs on a blocking thread: the shells' lock is a blocking one, which
+/// a stuck write to a shell can hold, and the SSH and Telnet locks must not
+/// wait on it. `pty_spawn` checks the page-load count under this lock as well.
+async fn close_local_shells(app: &tauri::AppHandle) -> usize {
+    let app = app.clone();
+    let killed = tauri::async_runtime::spawn_blocking(move || {
+        let (Some(pty), Some(ready), Some(logger)) = (
+            app.try_state::<PtyState>(),
+            app.try_state::<TerminalReadyState>(),
+            app.try_state::<SessionLogState>(),
+        ) else {
+            return 0;
+        };
+        let shells = lock_or_recover(&pty.0).take_all();
+        let killed = shells.len();
+        for (id, shell) in shells {
+            shell.shut_down(&id);
+            release_session(&id, &ready, &logger);
+        }
+        killed
+    })
+    .await;
+    killed.unwrap_or_else(|e| {
+        tracing::warn!(error = %e, "Closing the local shells failed");
+        0
+    })
+}
+
+/// Event telling the frontend that the app is closing its SSH and Telnet
+/// sessions before it quits, so that it can say so while that takes.
+const QUITTING_EVENT: &str = "app:quitting";
+
+/// How long quitting waits, in all, for the sessions to close before it
+/// exits anyway. The SSH chains close side by side, each giving up after
+/// [`DISCONNECT_TIMEOUT`]; the extra second is for a local shell slow to
+/// exit, or a manager lock held by a stuck write.
+const QUIT_TIMEOUT: std::time::Duration =
+    std::time::Duration::from_secs(DISCONNECT_TIMEOUT.as_secs() + 1);
+
+/// Quit the app, once its sessions are closed: see [`quit_app`]. The frontend
+/// calls this for Ctrl+Q / Cmd+Q and the window's close button, after asking
+/// to confirm where the settings say so.
+#[tauri::command]
+pub fn app_quit(app: tauri::AppHandle) {
+    quit_app(&app);
+}
+
+/// Quit the app once its sessions are closed. Each SSH connection, the jump
+/// hosts included, is sent `SSH_MSG_DISCONNECT` and waited for, as when its
+/// tab is closed, so a device sees the session end and does not go on
+/// counting it; each Telnet socket is closed, each local shell killed, and
+/// each session log flushed. Called by [`app_quit`], and by the menu's quit
+/// item directly, so that the item works even when the webview does not.
+///
+/// Returns at once; the closing runs on a task of its own, and the app exits
+/// within [`QUIT_TIMEOUT`], whatever is still closing then. A session still
+/// closing at that point gets only what its `Drop` can send before the
+/// process ends. A second call while this runs does nothing.
+pub fn quit_app(app: &tauri::AppHandle) {
+    let Some(ready) = app.try_state::<TerminalReadyState>() else {
+        app.exit(0);
+        return;
+    };
+    if !begin_quit(&ready) {
+        return;
+    }
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let started = std::time::Instant::now();
+        // On a task of its own, so that a panic there still ends in the exit
+        // below rather than leaving an app that refuses every connect and
+        // every further quit.
+        let closing_app = app.clone();
+        let closing =
+            tauri::async_runtime::spawn(async move { close_sessions_for_quit(&closing_app).await });
+        match tokio::time::timeout(QUIT_TIMEOUT, closing).await {
+            Ok(Ok(0)) => {}
+            Ok(Ok(count)) => {
+                tracing::info!(count, elapsed = ?started.elapsed(), "Closed the sessions before quitting");
+            }
+            Ok(Err(e)) => {
+                tracing::warn!(error = %e, "Closing the sessions at quit failed; quitting anyway");
+            }
+            Err(_) => {
+                tracing::warn!(timeout = ?QUIT_TIMEOUT, "Sessions still closing at quit; quitting anyway");
+            }
+        }
+        app.exit(0);
+    });
+}
+
+/// Mark the app as quitting, returning whether this call did so. The mark is
+/// never taken back, since the app exits after it: from then on every
+/// connect is refused (see [`ConnectSetup::check_page_unchanged`]).
+fn begin_quit(ready: &TerminalReadyState) -> bool {
+    !ready.quitting.swap(true, Ordering::SeqCst)
+}
+
+/// Close every session for [`quit_app`], all at the same time, so quitting
+/// takes as long as the slowest close rather than all of them in turn.
+/// Returns how many there were. When some are SSH or Telnet sessions, the
+/// frontend is told first.
+async fn close_sessions_for_quit(app: &tauri::AppHandle) -> usize {
+    let (Some(ready), Some(logger), Some(ssh), Some(telnet)) = (
+        app.try_state::<TerminalReadyState>(),
+        app.try_state::<SessionLogState>(),
+        app.try_state::<SshState>(),
+        app.try_state::<TelnetState>(),
+    ) else {
+        tracing::warn!("Terminal state not set up yet; no sessions to close");
+        return 0;
+    };
+
+    let (ssh_sessions, telnet_sessions) = take_remote_sessions(&ready, &ssh, &telnet).await;
+    let remote = ssh_sessions.len() + telnet_sessions.len();
+    if remote > 0 {
+        if let Err(e) = app.emit(QUITTING_EVENT, ()) {
+            tracing::warn!(error = %e, "Failed to tell the frontend that the app is quitting");
+        }
+    }
+
+    let mut closing = tokio::task::JoinSet::new();
+    for (id, session) in ssh_sessions {
+        closing.spawn(async move {
+            session.close().await;
+            id
+        });
+    }
+    for (id, session) in telnet_sessions {
+        closing.spawn(async move {
+            session.close().await;
+            id
+        });
+    }
+    let close_remote = async {
+        while let Some(closed) = closing.join_next().await {
+            match closed {
+                Ok(id) => release_session(&id, &ready, &logger),
+                Err(e) => tracing::warn!(error = %e, "Closing a session failed"),
+            }
+        }
+    };
+    let ((), shells) = tokio::join!(close_remote, close_local_shells(app));
+    remote + shells
 }
 
 /// Maximum terminal dimensions to prevent resource exhaustion.
@@ -408,6 +554,28 @@ mod tests {
         // A connect that starts after the load is unaffected.
         let later = fx.begin("d");
         assert!(later.check_page_unchanged().is_ok());
+    }
+
+    #[test]
+    fn connect_finishing_while_the_app_quits_is_refused() {
+        // `quit_app` closes the sessions registered so far; one registered
+        // after it began would be left to the operating system.
+        let fx = Fixture::new();
+        let setup = fx.begin("c");
+        assert!(setup.check_page_unchanged().is_ok());
+
+        assert!(begin_quit(&fx.ready));
+        assert!(setup.check_page_unchanged().is_err());
+        assert!(fx.begin("d").check_page_unchanged().is_err());
+    }
+
+    #[test]
+    fn quit_begins_only_once() {
+        // A second request — the menu item and Ctrl+Q together, say — must
+        // not start a second closing.
+        let ready = TerminalReadyState::default();
+        assert!(begin_quit(&ready));
+        assert!(!begin_quit(&ready));
     }
 
     #[test]

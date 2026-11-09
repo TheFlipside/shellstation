@@ -331,6 +331,8 @@
     "quitConfirmMessage": "Det finns {{count}} öppna session(er). Är du säker på att du vill avsluta?",
     "quitConfirmTitle": "Avsluta ShellStation",
     "quit": "Avsluta",
+    "quittingTitle": "Stänger sessioner…",
+    "quittingMessage": "Avslutar sessionerna på fjärrvärdarna. ShellStation stängs så snart det är klart, inom några sekunder.",
     "close": "Stäng",
     "terminal": "Terminal",
     "fontFamilyLabel": "Typsnitt",

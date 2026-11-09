@@ -703,6 +703,46 @@ body,
   transition: width 120ms ease-out;
 }
 
+/* While the app closes its sessions before quitting: above everything,
+   toasts included, since nothing else can be used any more. */
+.dialog-overlay-quitting {
+  z-index: 10000;
+}
+
+/* It holds the focus only to keep it from the terminals. */
+.dialog-overlay-quitting .dialog:focus {
+  outline: none;
+}
+
+/* A progress bar with no known end: a segment sweeping across the track. */
+.dialog-progress-indeterminate {
+  position: relative;
+  background: var(--color-surface1);
+}
+
+.dialog-progress-indeterminate .dialog-update-progress-bar {
+  position: absolute;
+  width: 40%;
+  animation: progress-indeterminate 1.2s ease-in-out infinite;
+}
+
+@keyframes progress-indeterminate {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(250%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dialog-progress-indeterminate .dialog-update-progress-bar {
+    width: 100%;
+    animation: none;
+    opacity: 0.6;
+  }
+}
+
 .dialog-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;

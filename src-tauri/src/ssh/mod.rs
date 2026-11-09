@@ -114,7 +114,7 @@ pub struct ResizeRequest {
 /// waits, in all, for its connections to close. Once it has passed, the rest
 /// are still sent `SSH_MSG_DISCONNECT` where it can go out at once, but not
 /// waited for.
-const DISCONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
+pub(crate) const DISCONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
 
 /// The connection under a session: the target, and the jump hosts it runs
 /// through, nearest the client first. Shared by the session and its reader

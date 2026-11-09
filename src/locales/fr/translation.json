@@ -331,6 +331,8 @@
     "quitConfirmMessage": "Il y a {{count}} session(s) ouverte(s). Êtes-vous sûr de vouloir quitter ?",
     "quitConfirmTitle": "Quitter ShellStation",
     "quit": "Quitter",
+    "quittingTitle": "Fermeture des sessions…",
+    "quittingMessage": "Fermeture des sessions sur les hôtes distants. ShellStation se fermera dès que ce sera fait, en quelques secondes au plus.",
     "close": "Fermer",
     "terminal": "Terminal",
     "fontFamilyLabel": "Police de caractères",

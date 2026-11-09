@@ -331,6 +331,8 @@
     "quitConfirmMessage": "Hay {{count}} sesión(es) abierta(s). ¿Estás seguro de que deseas salir?",
     "quitConfirmTitle": "Salir de ShellStation",
     "quit": "Salir",
+    "quittingTitle": "Cerrando sesiones…",
+    "quittingMessage": "Finalizando las sesiones en los hosts remotos. ShellStation se cerrará en cuanto termine, en pocos segundos como máximo.",
     "close": "Cerrar",
     "terminal": "Terminal",
     "fontFamilyLabel": "Familia de fuentes",

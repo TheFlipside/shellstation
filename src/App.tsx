@@ -1,16 +1,17 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
-import { getCurrentWindow } from "@tauri-apps/api/window";
 import "./App.css";
 import { ConfirmDialog } from "./components/ConfirmDialog";
 import { DatabaseStatusBanner } from "./components/DatabaseStatusBanner";
+import { QuittingOverlay } from "./components/QuittingOverlay";
 import { SessionSidebar } from "./components/SessionSidebar";
 import { SettingsDialog } from "./components/SettingsDialog";
 import { TerminalTabs } from "./components/TerminalTabs";
 import { ToastContainer } from "./components/ToastContainer";
 import { UpdateDialog } from "./components/UpdateDialog";
 import { UserIdentDialog } from "./components/UserIdentDialog";
+import { useAppQuit } from "./hooks/useAppQuit";
 import { useTheme } from "./hooks/useTheme";
 import { showPrivateIpCheckOffNotice } from "./privateIpCheckNotice";
 import { useAppStore } from "./stores/appStore";
@@ -31,7 +32,8 @@ function App(): React.JSX.Element {
   const sidebarWidth = useSettingsStore((s) => s.sidebarWidth);
   const setSidebarWidth = useSettingsStore((s) => s.setSidebarWidth);
   useTheme();
-  const [showQuitConfirm, setShowQuitConfirm] = useState(false);
+  const { confirming, quitting, confirmQuit, cancelQuit } = useAppQuit();
+  const aliveTabCount = useTerminalStore((s) => s.tabs.filter((tb) => !tb.exited).length);
   const [dbStatus, setDbStatus] = useState<DbStatus | null>(null);
   const [showSettingsFromBanner, setShowSettingsFromBanner] = useState(false);
   const dragging = useRef(false);
@@ -123,57 +125,6 @@ function App(): React.JSX.Element {
     document.addEventListener("mouseup", handleMouseUp);
   }, [setSidebarWidth, uiScale]);
 
-  const requestQuit = useCallback(() => {
-    const tabs = useTerminalStore.getState().tabs;
-    const aliveTabs = tabs.filter((t) => !t.exited);
-    if (aliveTabs.length === 0) {
-      void getCurrentWindow().destroy();
-      return;
-    }
-    const { confirmOnQuit } = useSettingsStore.getState();
-    if (confirmOnQuit) {
-      setShowQuitConfirm(true);
-    } else {
-      void getCurrentWindow().destroy();
-    }
-  }, []);
-
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent): void => {
-      const modKey = e.metaKey || e.ctrlKey;
-      if (modKey && e.key.toLowerCase() === "q") {
-        e.preventDefault();
-        requestQuit();
-      }
-    };
-    document.addEventListener("keydown", handleKeyDown, true);
-    return () => {
-      document.removeEventListener("keydown", handleKeyDown, true);
-    };
-  }, [requestQuit]);
-
-  useEffect(() => {
-    const unlisten = getCurrentWindow().onCloseRequested((event) => {
-      const tabs = useTerminalStore.getState().tabs;
-      const aliveTabs = tabs.filter((t) => !t.exited);
-      const { confirmOnQuit } = useSettingsStore.getState();
-      if (aliveTabs.length > 0 && confirmOnQuit) {
-        event.preventDefault();
-        setShowQuitConfirm(true);
-      }
-    });
-    return () => {
-      void unlisten.then((fn) => {
-        fn();
-      });
-    };
-  }, []);
-
-  const handleQuitConfirm = useCallback(() => {
-    setShowQuitConfirm(false);
-    void getCurrentWindow().destroy();
-  }, []);
-
   return (
     <div className="app" style={{ "--ui-zoom": uiScale / 100 } as React.CSSProperties}>
       <ToastContainer />
@@ -204,16 +155,12 @@ function App(): React.JSX.Element {
           <TerminalTabs uiScale={uiScale} />
         </div>
       </div>
-      {showQuitConfirm && (
+      {confirming && (
         <ConfirmDialog
-          message={t("settings.quitConfirmMessage", {
-            count: String(useTerminalStore.getState().tabs.filter((tb) => !tb.exited).length),
-          })}
+          message={t("settings.quitConfirmMessage", { count: String(aliveTabCount) })}
           confirmLabel={t("settings.quit")}
-          onConfirm={handleQuitConfirm}
-          onCancel={() => {
-            setShowQuitConfirm(false);
-          }}
+          onConfirm={confirmQuit}
+          onCancel={cancelQuit}
         />
       )}
       {showSettingsFromBanner && (
@@ -230,6 +177,7 @@ function App(): React.JSX.Element {
           }}
         />
       )}
+      {quitting && <QuittingOverlay />}
     </div>
   );
 }

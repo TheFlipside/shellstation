@@ -331,6 +331,8 @@
     "quitConfirmMessage": "{{count}}件のセッションが開いています。本当に終了しますか？",
     "quitConfirmTitle": "ShellStationを終了",
     "quit": "終了",
+    "quittingTitle": "セッションを終了しています…",
+    "quittingMessage": "リモートホスト上のセッションを終了しています。完了し次第、数秒以内にShellStationが終了します。",
     "close": "閉じる",
     "terminal": "ターミナル",
     "fontFamilyLabel": "フォント",

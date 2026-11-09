@@ -331,6 +331,8 @@
     "quitConfirmMessage": "Er zijn {{count}} open sessie(s). Weet u zeker dat u wilt afsluiten?",
     "quitConfirmTitle": "ShellStation afsluiten",
     "quit": "Afsluiten",
+    "quittingTitle": "Sessies worden gesloten…",
+    "quittingMessage": "De sessies op de externe hosts worden beëindigd. ShellStation sluit zodra dat klaar is, binnen enkele seconden.",
     "close": "Sluiten",
     "terminal": "Terminal",
     "fontFamilyLabel": "Lettertype",

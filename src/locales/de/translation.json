@@ -331,6 +331,8 @@
     "quitConfirmMessage": "Es sind {{count}} Sitzung(en) geöffnet. Möchten Sie wirklich beenden?",
     "quitConfirmTitle": "ShellStation beenden",
     "quit": "Beenden",
+    "quittingTitle": "Sitzungen werden beendet…",
+    "quittingMessage": "Die Sitzungen auf den entfernten Hosts werden beendet. ShellStation schließt sich, sobald das erledigt ist, spätestens nach wenigen Sekunden.",
     "close": "Schließen",
     "terminal": "Terminal",
     "fontFamilyLabel": "Schriftart",

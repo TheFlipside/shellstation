@@ -331,6 +331,8 @@
     "quitConfirmMessage": "{{count}} açık oturum var. Çıkmak istediğinizden emin misiniz?",
     "quitConfirmTitle": "ShellStation’dan Çık",
     "quit": "Çık",
+    "quittingTitle": "Oturumlar kapatılıyor…",
+    "quittingMessage": "Uzak sunuculardaki oturumlar sonlandırılıyor. ShellStation bu işlem biter bitmez, en geç birkaç saniye içinde kapanacak.",
     "close": "Kapat",
     "terminal": "Terminal",
     "fontFamilyLabel": "Yazı tipi",
