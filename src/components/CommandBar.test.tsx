@@ -116,6 +116,52 @@ describe("CommandBar scroll-to-prompt", () => {
   });
 });
 
+describe("CommandBar escapes", () => {
+  it("sends a control character's octal code as the character, as SecureCRT does", async () => {
+    // Imported SecureCRT buttons keep their control codes as written.
+    useSettingsStore.getState().updateCommandButton(BUTTON_ID, {
+      command: "\\003x\\033[A\\162\\155\\\\033\\200\\08",
+    });
+    addSession("tab-1");
+    render(<CommandBar uiScale={100} />);
+
+    fireEvent.click(screen.getByText("uptime-btn"));
+
+    // \003 is Ctrl+C and \033 ESC. Printable codes are sent as written, so
+    // digits never type text: \162\155 would otherwise type "rm". So are an
+    // escaped backslash before digits, a code above \177 and fewer than
+    // three digits.
+    const sent = `${String.fromCharCode(3)}x${String.fromCharCode(0x1b)}[A\\162\\155\\033\\200\\08`;
+    await vi.waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("ssh_write", { id: "tab-1", data: sent });
+    });
+  });
+
+  it("reads the octal range's edges as the SecureCRT import checks them", async () => {
+    // The same inputs as `send_string_control_codes_are_kept_as_written` and
+    // `send_string_raw_bytes_the_command_bar_cannot_send_skip_the_button` in
+    // src-tauri/src/import/securecrt.rs: what the import keeps must be read
+    // here as SecureCRT reads it, and what it skips is sent here as text.
+    useSettingsStore.getState().updateCommandButton(BUTTON_ID, {
+      command: "\\000\\037\\040\\176\\177\\\\\\003\\8\\200\\0é\\",
+    });
+    addSession("tab-1");
+    render(<CommandBar uiScale={100} />);
+
+    fireEvent.click(screen.getByText("uptime-btn"));
+
+    // \000 to \037 and \177 are the control codes; \040 and \176, the
+    // printable range's ends, are sent as written. After an escaped
+    // backslash, \003 is still Ctrl+C. \8, \200 (above \177), \0 before a
+    // non-digit and a trailing backslash are sent as written.
+    const control = (code: number): string => String.fromCharCode(code);
+    const sent = `${control(0)}${control(0o37)}\\040\\176${control(0x7f)}\\${control(3)}\\8\\200\\0é\\`;
+    await vi.waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("ssh_write", { id: "tab-1", data: sent });
+    });
+  });
+});
+
 describe("CommandBar closed-session reporting", () => {
   afterEach(() => {
     // clearMocks keeps implementations, so put the default back.

@@ -17,22 +17,30 @@ import {
 } from "../dataTransfer";
 import { isImportableButton, useSettingsStore, type CommandButton } from "../stores/settingsStore";
 
-interface SectionOption {
+export interface SectionOption {
   detail: string;
+  /**
+   * A further sentence, shown as its own line after the detail rather than
+   * joined to it, so each language can word and punctuate both freely.
+   */
+  note?: string;
   available: boolean;
   /** Shown under the detail line, e.g. the buttons a file would add. */
   preview?: React.ReactNode;
 }
 
-interface SectionPickerDialogProps {
+interface SectionPickerDialogProps<S extends string> {
   idPrefix: string;
   title: string;
   info: string | null;
-  options: Record<DataSection, SectionOption>;
+  /** The sections, in the order they are shown. */
+  sections: readonly S[];
+  labels: Record<S, string>;
+  options: Record<S, SectionOption>;
   confirmLabel: string;
   /** Whether Enter outside a button confirms; otherwise only a click does. */
   confirmOnEnter: boolean;
-  onConfirm: (selection: SectionSelection) => void;
+  onConfirm: (selection: Record<S, boolean>) => void;
   onCancel: () => void;
 }
 
@@ -44,6 +52,14 @@ const SECTION_LABEL_KEYS: Record<DataSection, string> = {
 
 function sectionLabel(t: TFunction, section: DataSection): string {
   return t(SECTION_LABEL_KEYS[section]);
+}
+
+function sectionLabels(t: TFunction): Record<DataSection, string> {
+  return {
+    database: sectionLabel(t, "database"),
+    settings: sectionLabel(t, "settings"),
+    commandButtons: sectionLabel(t, "commandButtons"),
+  };
 }
 
 /** One line of the outcome shown under the export / import buttons. */
@@ -125,23 +141,29 @@ export function importFileErrorMessage(t: TFunction, error: unknown): string {
  * taking everything is the common case; unavailable ones stay unchecked and
  * disabled, with the reason in their detail line.
  */
-function SectionPickerDialog({
+export function SectionPickerDialog<S extends string>({
   idPrefix,
   title,
   info,
+  sections,
+  labels,
   options,
   confirmLabel,
   confirmOnEnter,
   onConfirm,
   onCancel,
-}: SectionPickerDialogProps): React.JSX.Element {
+}: SectionPickerDialogProps<S>): React.JSX.Element {
   const { t } = useTranslation();
-  const [selection, setSelection] = useState<SectionSelection>(() => ({
-    database: options.database.available,
-    settings: options.settings.available,
-    commandButtons: options.commandButtons.available,
-  }));
-  const anySelected = DATA_SECTIONS.some((section) => selection[section]);
+  // Complete only because every caller lists all of its section keys in
+  // `sections`; a key left out would read as unselected but be missing
+  // from what `onConfirm` receives.
+  const [selection, setSelection] = useState(
+    () =>
+      Object.fromEntries(
+        sections.map((section) => [section, options[section].available]),
+      ) as Record<S, boolean>,
+  );
+  const anySelected = sections.some((section) => selection[section]);
   // The parent closes the dialog asynchronously; a repeated Enter before
   // that must not start a second export or import.
   const confirmed = useRef(false);
@@ -160,7 +182,7 @@ function SectionPickerDialog({
       confirm();
     }
   };
-  const firstAvailable = DATA_SECTIONS.find((section) => options[section].available);
+  const firstAvailable = sections.find((section) => options[section].available);
 
   return ReactDOM.createPortal(
     <div className="dialog-overlay" role="presentation">
@@ -175,7 +197,7 @@ function SectionPickerDialog({
           {title}
         </h3>
         {info !== null && <p className="dialog-text">{info}</p>}
-        {DATA_SECTIONS.map((section) => {
+        {sections.map((section) => {
           const option = options[section];
           const inputId = `${idPrefix}-${section}`;
           return (
@@ -194,17 +216,26 @@ function SectionPickerDialog({
                   checked={selection[section]}
                   disabled={!option.available}
                   autoFocus={section === firstAvailable}
-                  aria-describedby={`${inputId}-detail`}
+                  aria-describedby={
+                    option.note === undefined
+                      ? `${inputId}-detail`
+                      : `${inputId}-detail ${inputId}-note`
+                  }
                   onChange={(e) => {
                     const checked = e.target.checked;
                     setSelection((prev) => ({ ...prev, [section]: checked }));
                   }}
                 />
-                <label htmlFor={inputId}>{sectionLabel(t, section)}</label>
+                <label htmlFor={inputId}>{labels[section]}</label>
               </div>
               <p className="data-section-detail" id={`${inputId}-detail`}>
                 {option.detail}
               </p>
+              {option.note !== undefined && (
+                <p className="data-section-detail" id={`${inputId}-note`}>
+                  {option.note}
+                </p>
+              )}
               {option.available && option.preview}
             </div>
           );
@@ -244,6 +275,8 @@ export function DataExportDialog({
       idPrefix="data-export"
       title={t("settings.dbExport")}
       info={t("settings.dataExportInfo")}
+      sections={DATA_SECTIONS}
+      labels={sectionLabels(t)}
       options={{
         database: { detail: t("settings.dataExportDatabaseDetail"), available: true },
         settings: { detail: t("settings.dataExportSettingsDetail"), available: true },
@@ -287,7 +320,7 @@ function fileInfo(t: TFunction, language: string, file: ParsedExportFile): strin
  * shown before anything is imported, not only how many there are. The list
  * scrolls, so it takes focus to let the keyboard scroll it too.
  */
-function ButtonPreview({
+export function ButtonPreview({
   buttons,
   label,
 }: {
@@ -304,7 +337,10 @@ function ButtonPreview({
             style={{ backgroundColor: button.color }}
             aria-hidden="true"
           />
-          <span className="data-button-preview-name">{button.name}</span>
+          {/* The name may be cut short with an ellipsis; the title shows it whole. */}
+          <span className="data-button-preview-name" title={button.name}>
+            {button.name}
+          </span>
           <code className="data-button-preview-command">{button.command}</code>
         </li>
       ))}
@@ -331,6 +367,8 @@ export function DataImportDialog({
       idPrefix="data-import"
       title={t("settings.dbImport")}
       info={fileInfo(t, i18n.language, file)}
+      sections={DATA_SECTIONS}
+      labels={sectionLabels(t)}
       options={{
         database: option("database", () =>
           t("settings.dataImportDatabaseDetail", {

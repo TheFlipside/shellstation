@@ -272,13 +272,8 @@ fn emit_progress(app: &AppHandle, phase: &'static str, current: u32, total: u32)
 // counts but never writes out; `finalize_warnings` sanitizes and caps them on
 // the way to the UI.
 
-#[tauri::command]
-pub async fn import_mremoteng(
-    app: AppHandle,
-    state: State<'_, DbState>,
-    xml: String,
-) -> Result<ImportResult, String> {
-    tracing::info!("mRemoteNG import started ({} bytes)", xml.len());
+/// Refuse an import file over `MAX_XML_SIZE`.
+fn check_xml_size(xml: &str) -> Result<(), String> {
     if xml.len() > MAX_XML_SIZE {
         return Err(format!(
             "File too large ({:.1} MB, max {:.0} MB)",
@@ -286,6 +281,17 @@ pub async fn import_mremoteng(
             MAX_XML_SIZE as f64 / 1_048_576.0,
         ));
     }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn import_mremoteng(
+    app: AppHandle,
+    state: State<'_, DbState>,
+    xml: String,
+) -> Result<ImportResult, String> {
+    tracing::info!("mRemoteNG import started ({} bytes)", xml.len());
+    check_xml_size(&xml)?;
 
     emit_progress(&app, "parsing", 0, 0);
     let (folders, sessions, skipped, warnings) = mremoteng::parse(&xml)
@@ -310,13 +316,7 @@ pub async fn import_securecrt(
     xml: String,
 ) -> Result<ImportResult, String> {
     tracing::info!("SecureCRT import started ({} bytes)", xml.len());
-    if xml.len() > MAX_XML_SIZE {
-        return Err(format!(
-            "File too large ({:.1} MB, max {:.0} MB)",
-            xml.len() as f64 / 1_048_576.0,
-            MAX_XML_SIZE as f64 / 1_048_576.0,
-        ));
-    }
+    check_xml_size(&xml)?;
 
     emit_progress(&app, "parsing", 0, 0);
     let (folders, sessions, skipped, warnings) = securecrt::parse(&xml)
@@ -332,6 +332,67 @@ pub async fn import_securecrt(
         warnings,
     )
     .await
+}
+
+/// How many folders and sessions a file would import.
+#[derive(Debug, Serialize)]
+pub struct SessionCounts {
+    pub folders: u32,
+    pub sessions: u32,
+}
+
+/// What a `SecureCRT` export holds, for the import dialog to offer. A part
+/// is `None` when the file has no block for it.
+#[derive(Debug, Serialize)]
+pub struct SecureCrtContents {
+    pub sessions: Option<SessionCounts>,
+    pub button_bars: Option<securecrt::ImportedButtons>,
+    pub command_manager: Option<securecrt::ImportedButtons>,
+}
+
+/// Read a `SecureCRT` export without importing anything, so the user can
+/// choose what to import. Sessions are then imported by `import_securecrt`;
+/// buttons are returned here, because the command bar lives in the
+/// webview's `localStorage`, and the webview adds them itself.
+///
+/// Button names and commands are passed on as the file has them, within
+/// the command bar's length limits: the webview checks them for hidden
+/// characters exactly as it checks buttons from its own export files.
+/// The warnings quote file content, so they are sanitized and capped.
+///
+/// `async` runs it off the main thread, which a large file would hold up.
+#[tauri::command(async)]
+pub fn inspect_securecrt(xml: String) -> Result<SecureCrtContents, String> {
+    tracing::info!("SecureCRT file read for import ({} bytes)", xml.len());
+    check_xml_size(&xml)?;
+
+    let file = securecrt::parse_file(&xml)
+        .inspect_err(|_| tracing::warn!("SecureCRT file failed to parse"))
+        .map_err(|e| sanitize_message(&e))?;
+    let finish = |mut buttons: securecrt::ImportedButtons| {
+        buttons.warnings = finalize_warnings(buttons.warnings);
+        buttons
+    };
+    let contents = SecureCrtContents {
+        sessions: file
+            .sessions
+            .map(|(folders, sessions, _, _)| SessionCounts {
+                folders: folders.len() as u32,
+                sessions: sessions.len() as u32,
+            }),
+        button_bars: file.button_bars.map(finish),
+        command_manager: file.command_manager.map(finish),
+    };
+    tracing::info!(
+        "SecureCRT file holds: {} sessions, {} button bar buttons, {} Command Manager commands",
+        contents.sessions.as_ref().map_or(0, |s| s.sessions),
+        contents.button_bars.as_ref().map_or(0, |b| b.buttons.len()),
+        contents
+            .command_manager
+            .as_ref()
+            .map_or(0, |b| b.buttons.len()),
+    );
+    Ok(contents)
 }
 
 // ── Shared import-to-DB logic ───────────────────────────────────────

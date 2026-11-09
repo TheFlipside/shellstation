@@ -1,6 +1,7 @@
 import React, { useCallback, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { DialogKeys } from "./DialogKeys";
+import { DEFAULT_BUTTON_COLOR } from "../stores/settingsStore";
 
 export interface CommandButtonFormData {
   name: string;
@@ -14,7 +15,7 @@ const MAX_COMMAND_LENGTH = 1024;
 /** Preset colors for command button color picker. */
 const COLOR_PRESETS = [
   // Row 1 — pastel (Catppuccin Mocha)
-  "#f38ba8", // red
+  DEFAULT_BUTTON_COLOR, // red
   "#eba0ac", // maroon
   "#fab387", // peach
   "#f9e2af", // yellow
@@ -58,12 +59,12 @@ export function CommandButtonDialog({
   const { t } = useTranslation();
   const [name, setName] = useState(initial?.name ?? "");
   const [command, setCommand] = useState(initial?.command ?? "");
-  const [color, setColor] = useState(initial?.color ?? COLOR_PRESETS[0]);
+  const [color, setColor] = useState(initial?.color ?? DEFAULT_BUTTON_COLOR);
 
   const handleClear = useCallback((): void => {
     setName("");
     setCommand("");
-    setColor(COLOR_PRESETS[0]);
+    setColor(DEFAULT_BUTTON_COLOR);
   }, []);
 
   const handleSave = useCallback((): void => {

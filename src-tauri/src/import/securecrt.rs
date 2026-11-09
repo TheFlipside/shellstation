@@ -1,4 +1,5 @@
-//! `SecureCRT` `XML` session-store parser.
+//! `SecureCRT` `XML` export parser: sessions, button bars and the Command
+//! Manager.
 //!
 //! `SecureCRT` stores sessions as a recursive `<key>` tree where a key is
 //! a folder iff it has child `<key>` elements, and a session iff it has
@@ -13,9 +14,25 @@
 //! branchiness reflects a genuinely ambiguous grammar, not avoidable
 //! accidental complexity. Each branch is exercised by a fixture in the
 //! test module at the bottom of this file.
+//!
+//! Buttons come from two blocks that share one entry format. `ButtonBarV5`
+//! holds one `<array>` per button bar, named after the bar. `Commands` is
+//! the Command Manager: its folders are nested `<key>`s and each list of
+//! commands is an `<array>`. Every `<string>` in an array is one button:
+//!
+//! ```text
+//! SEND,show version \\r,sh ver,,,0,1,,
+//! ```
+//!
+//! The fields are separated by commas, and a backslash escapes the
+//! character after it. The first three are the function, its argument and
+//! the label; the rest (eight or nine fields in all, depending on the
+//! `SecureCRT` version) are not used. Only `SEND` (Send String) has a
+//! command bar equivalent; see `convert_send_string` for its argument.
 
 use quick_xml::events::Event;
 use quick_xml::Reader;
+use serde::Serialize;
 
 use super::{
     check_parsed_counts, dropped_sessions_note, ImportedFolder, ImportedSession, ParseResult,
@@ -25,6 +42,33 @@ use super::{
 /// Maximum allowed folder nesting depth to prevent stack exhaustion from
 /// pathologically deep `XML` structures.
 const MAX_NESTING_DEPTH: usize = 100;
+
+/// Most button entries kept from one block (the button bars, or the Command
+/// Manager): buttons, and entries skipped with a warning. Unassigned entries
+/// do not count. The command bar holds at most 1000 buttons in all
+/// (`MAX_COMMAND_BUTTONS` in src/stores/settingsStore.ts, enforced by
+/// `importCommandButtons` for both blocks together), so a block with more
+/// could not be imported whole anyway. Entries past this are counted, not
+/// kept.
+const MAX_BUTTON_ENTRIES: u32 = 1000;
+
+/// Most characters of a name from the file that a warning quotes: a bar,
+/// key or session name, a label, a function or a protocol.
+const MAX_QUOTED_LEN: usize = 64;
+
+/// Longest button entry taken apart, in bytes. The longest command a button
+/// can have, written as escaped octal codes (`\\101`, five bytes a
+/// character), fits about twelve times over. A longer entry cannot become
+/// a button, so it is skipped before it is split and copied into fields.
+const MAX_BUTTON_ENTRY_BYTES: usize = 64 * 1024;
+
+/// Longest button name, in UTF-16 code units as JavaScript counts them.
+/// Matches `MAX_BUTTON_NAME_LENGTH` in src/stores/settingsStore.ts.
+const MAX_BUTTON_NAME_LEN: usize = 32;
+
+/// Longest button command, counted the same way. Matches
+/// `MAX_BUTTON_COMMAND_LENGTH` in src/stores/settingsStore.ts.
+const MAX_BUTTON_COMMAND_LEN: usize = 1024;
 
 /// Names of `SecureCRT`'s built-in session templates. They sit directly under
 /// `Sessions`, and are skipped there only: further down, the same name is a
@@ -36,22 +80,98 @@ const SKIP_SESSIONS: &[&str] = &[
     "Default_Serial",
 ];
 
+/// What a `SecureCRT` export holds that `ShellStation` can import. Each part
+/// is `None` when the file has no block for it: `SecureCRT` exports only the
+/// parts the user picked.
+#[derive(Debug, Default)]
+pub struct SecureCrtFile {
+    /// From `<key name="Sessions">`.
+    pub sessions: Option<ParseResult>,
+    /// From `<key name="ButtonBarV5">`.
+    pub button_bars: Option<ImportedButtons>,
+    /// From `<key name="Commands">`.
+    pub command_manager: Option<ImportedButtons>,
+}
+
+/// A `SecureCRT` button that sends a string, as a command bar button.
+#[derive(Debug, PartialEq, Eq, Serialize)]
+pub struct ImportedButton {
+    pub name: String,
+    pub command: String,
+}
+
+/// The buttons read from one block of a `SecureCRT` export.
+#[derive(Debug, Default, Serialize)]
+pub struct ImportedButtons {
+    pub buttons: Vec<ImportedButton>,
+    /// Entries that did not become a button. Each has a warning, except
+    /// that those past `MAX_BUTTON_ENTRIES` share one.
+    pub skipped: u32,
+    pub warnings: Vec<String>,
+}
+
 /// Parse a `SecureCRT` `XML` export into folders and sessions.
 ///
 /// `SecureCRT` uses a nested `<key>` structure under `<key name="Sessions">`.
 /// Each key is either a folder (contains child keys) or a session
 /// (has `<dword name="Is Session">1</dword>`).
 pub fn parse(xml: &str) -> Result<ParseResult, String> {
+    parse_file(xml)?
+        .sessions
+        .ok_or_else(|| "No <key name=\"Sessions\"> block found in SecureCRT XML".to_string())
+}
+
+/// Parse a `SecureCRT` `XML` export: its sessions, button bars and Command
+/// Manager, whichever it has.
+///
+/// The blocks are read where they sit at the top level; a block of the same
+/// name nested in another one is not one of them. If a block appears more
+/// than once, only the first is read; `SecureCRT` writes each one once. The
+/// file must be complete: one cut off inside any block fails.
+pub fn parse_file(xml: &str) -> Result<SecureCrtFile, String> {
     let mut reader = Reader::from_str(xml);
     // Already the default; the parse relies on every end tag matching its
     // start tag to tell a whole file from a truncated one.
     reader.config_mut().check_end_names = true;
 
-    // Navigate to the <key name="Sessions"> block.
-    if !find_sessions_key(&mut reader)? {
-        return Err("No <key name=\"Sessions\"> block found in SecureCRT XML".to_string());
+    let mut file = SecureCrtFile::default();
+    loop {
+        match reader.read_event() {
+            Ok(Event::Start(ref e)) if e.local_name().as_ref() == "key" => {
+                match get_attr(e, "name").as_deref() {
+                    Some("Sessions") if file.sessions.is_none() => {
+                        file.sessions = Some(parse_sessions(&mut reader)?);
+                    }
+                    Some("ButtonBarV5") if file.button_bars.is_none() => {
+                        let mut buttons = ButtonCollector::default();
+                        parse_button_bars(&mut reader, &mut buttons)?;
+                        file.button_bars = Some(buttons.finish());
+                    }
+                    Some("Commands") if file.command_manager.is_none() => {
+                        let mut buttons = ButtonCollector::default();
+                        parse_command_manager(&mut reader, &mut buttons, 0)?;
+                        file.command_manager = Some(buttons.finish());
+                    }
+                    // Global options, keymaps and the like, or a second copy
+                    // of a block already read.
+                    _ => skip_through_end(&mut reader, "key")?,
+                }
+            }
+            Ok(Event::Eof) => return Ok(file),
+            Err(e) => {
+                return Err(format!(
+                    "XML parse error at position {}: {e}",
+                    reader.error_position()
+                ));
+            }
+            _ => {}
+        }
     }
+}
 
+/// Parse the children of `<key name="Sessions">`, with the reader just past
+/// its start tag, through its end tag.
+fn parse_sessions(reader: &mut Reader<&[u8]>) -> Result<ParseResult, String> {
     let mut folders = Vec::new();
     let mut sessions = Vec::new();
     let mut skipped = Vec::new();
@@ -60,9 +180,8 @@ pub fn parse(xml: &str) -> Result<ParseResult, String> {
     let root_temp_id: usize = 0;
     let mut next_temp_id: usize = 1;
 
-    // Parse the children of the Sessions key.
     parse_key_children(
-        &mut reader,
+        reader,
         root_temp_id,
         &mut next_temp_id,
         &mut folders,
@@ -73,33 +192,6 @@ pub fn parse(xml: &str) -> Result<ParseResult, String> {
     )?;
 
     Ok((folders, sessions, skipped, warnings))
-}
-
-/// Advance the reader past `<key name="Sessions">`, leaving it positioned
-/// at the first child element. Returns `false` if the block is not found.
-///
-/// If the `XML` contains multiple `<key name="Sessions">` blocks only the
-/// first one is processed; `SecureCRT` exports are expected to have exactly one.
-fn find_sessions_key(reader: &mut Reader<&[u8]>) -> Result<bool, String> {
-    loop {
-        match reader.read_event() {
-            Ok(Event::Start(ref e)) if e.local_name().as_ref() == "key" => {
-                if get_attr(e, "name").as_deref() == Some("Sessions") {
-                    return Ok(true);
-                }
-                // Not the Sessions key — skip its entire subtree.
-                skip_through_end(reader, "key")?;
-            }
-            Ok(Event::Eof) => return Ok(false),
-            Err(e) => {
-                return Err(format!(
-                    "XML parse error at position {}: {e}",
-                    reader.error_position()
-                ));
-            }
-            _ => {}
-        }
-    }
 }
 
 /// Parse immediate `<key>` children of the current block until the
@@ -222,8 +314,9 @@ fn parse_key_block(
                         } else {
                             let dropped = skip_dropped_key(reader, skipped, depth + 1)?;
                             warnings.push(format!(
-                                "In \"{key_name}\": skipped <key> element without name \
+                                "In \"{}\": skipped <key> element without name \
                                  attribute{}",
+                                quoted(key_name),
                                 dropped_sessions_note(dropped)
                             ));
                         }
@@ -231,7 +324,8 @@ fn parse_key_block(
                     "string" => {
                         let Some(attr_name) = get_attr(e, "name") else {
                             warnings.push(format!(
-                                "In \"{key_name}\": ignored <string> element without name attribute"
+                                "In \"{}\": ignored <string> element without name attribute",
+                                quoted(key_name)
                             ));
                             skip_through_end(reader, "string")?;
                             continue;
@@ -259,7 +353,8 @@ fn parse_key_block(
                         props.set_string(&attr_name, "");
                     } else {
                         warnings.push(format!(
-                            "In \"{key_name}\": ignored empty <string> element without name attribute"
+                            "In \"{}\": ignored empty <string> element without name attribute",
+                            quoted(key_name)
                         ));
                     }
                 }
@@ -430,13 +525,14 @@ fn build_session(
 ) -> Result<ImportedSession, String> {
     let Some(protocol) = map_protocol(&props.protocol) else {
         return Err(format!(
-            "Skipped \"{name}\" — unsupported protocol: {}",
-            props.protocol
+            "Skipped \"{}\" — unsupported protocol: {}",
+            quoted(name),
+            quoted(&props.protocol)
         ));
     };
 
     if props.hostname.is_empty() {
-        return Err(format!("Skipped \"{name}\" — no hostname"));
+        return Err(format!("Skipped \"{}\" — no hostname", quoted(name)));
     }
 
     let port = if protocol == "ssh" {
@@ -466,11 +562,461 @@ fn build_session(
     })
 }
 
-/// Read text content until the matching end tag.
+// ── Buttons ─────────────────────────────────────────────────────────
+
+/// Collects the buttons of one block, up to `MAX_BUTTON_ENTRIES` entries.
+#[derive(Default)]
+struct ButtonCollector {
+    result: ImportedButtons,
+    /// Entries kept so far: buttons, and entries skipped with a warning.
+    kept: u32,
+    /// Entries past `MAX_BUTTON_ENTRIES`, counted but not kept.
+    over_limit: u32,
+}
+
+impl ButtonCollector {
+    /// Read the `<string>` entry the reader has just entered, in `place`
+    /// (as a warning names it), through its end tag. An unassigned entry is
+    /// passed over and does not count toward the limit.
+    fn read_entry(&mut self, reader: &mut Reader<&[u8]>, place: &str) -> Result<(), String> {
+        let entry = read_text(reader, "string")?;
+        let outcome = if entry.len() > MAX_BUTTON_ENTRY_BYTES {
+            Some(Err(format!(
+                "Skipped an entry in {place}: it is longer than any button that can be imported"
+            )))
+        } else {
+            parse_button_entry(&entry, place)
+        };
+        let Some(outcome) = outcome else {
+            return Ok(());
+        };
+        if self.kept >= MAX_BUTTON_ENTRIES {
+            self.over_limit = self.over_limit.saturating_add(1);
+            return Ok(());
+        }
+        self.kept += 1;
+        match outcome {
+            Ok(button) => self.result.buttons.push(button),
+            Err(warning) => {
+                self.result.skipped += 1;
+                self.result.warnings.push(warning);
+            }
+        }
+        Ok(())
+    }
+
+    fn finish(mut self) -> ImportedButtons {
+        if self.over_limit > 0 {
+            self.result.skipped = self.result.skipped.saturating_add(self.over_limit);
+            self.result.warnings.push(format!(
+                "Skipped {} more buttons: an import takes at most {MAX_BUTTON_ENTRIES} \
+                 from the button bars, and as many from the Command Manager",
+                self.over_limit
+            ));
+        }
+        self.result
+    }
+}
+
+/// Read the children of `<key name="ButtonBarV5">` through its end tag: one
+/// `<array>` per button bar.
+fn parse_button_bars(
+    reader: &mut Reader<&[u8]>,
+    buttons: &mut ButtonCollector,
+) -> Result<(), String> {
+    loop {
+        match reader.read_event() {
+            Ok(Event::Start(ref e)) => {
+                let local = e.local_name();
+                if local.as_ref() == "array" {
+                    // Named once per bar, cut: the name goes into the warning
+                    // of every entry on the bar that is skipped.
+                    let bar = quoted(&get_attr(e, "name").unwrap_or_default());
+                    parse_button_array(reader, &format!("button bar \"{bar}\""), buttons)?;
+                } else {
+                    skip_through_end(reader, local.as_ref())?;
+                }
+            }
+            // Every child is read through its own end tag, so this is the
+            // block's: `check_end_names` fails a file where it would not be.
+            Ok(Event::End(_)) => return Ok(()),
+            Ok(Event::Eof) => return Err("Unexpected end of XML".to_string()),
+            Err(e) => {
+                return Err(format!(
+                    "XML parse error at position {}: {e}",
+                    reader.error_position()
+                ));
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Read the children of `<key name="Commands">`, or of a folder in it,
+/// through its end tag. `depth` is the folder's depth below `Commands`.
+fn parse_command_manager(
+    reader: &mut Reader<&[u8]>,
+    buttons: &mut ButtonCollector,
+    depth: usize,
+) -> Result<(), String> {
+    check_depth(depth)?;
+    loop {
+        match reader.read_event() {
+            Ok(Event::Start(ref e)) => {
+                let local = e.local_name();
+                match local.as_ref() {
+                    "key" => parse_command_manager(reader, buttons, depth + 1)?,
+                    "array" => parse_button_array(reader, "the Command Manager", buttons)?,
+                    other => skip_through_end(reader, other)?,
+                }
+            }
+            // The block's or folder's own end tag, as in `parse_button_bars`.
+            Ok(Event::End(_)) => return Ok(()),
+            Ok(Event::Eof) => return Err("Unexpected end of XML".to_string()),
+            Err(e) => {
+                return Err(format!(
+                    "XML parse error at position {}: {e}",
+                    reader.error_position()
+                ));
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Read the `<string>` entries of an `<array>` through its end tag. An
+/// empty `<string/>` holds no button and is passed over.
+fn parse_button_array(
+    reader: &mut Reader<&[u8]>,
+    place: &str,
+    buttons: &mut ButtonCollector,
+) -> Result<(), String> {
+    loop {
+        match reader.read_event() {
+            Ok(Event::Start(ref e)) => {
+                let local = e.local_name();
+                if local.as_ref() == "string" {
+                    buttons.read_entry(reader, place)?;
+                } else {
+                    skip_through_end(reader, local.as_ref())?;
+                }
+            }
+            // The array's own end tag, as in `parse_button_bars`.
+            Ok(Event::End(_)) => return Ok(()),
+            Ok(Event::Eof) => return Err("Unexpected end of XML".to_string()),
+            Err(e) => {
+                return Err(format!(
+                    "XML parse error at position {}: {e}",
+                    reader.error_position()
+                ));
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Turn one button entry from `place` into a command bar button. `None`
+/// for an unassigned button, which has neither a function nor a label;
+/// `Err` with a warning for one that cannot become a command bar button.
+fn parse_button_entry(entry: &str, place: &str) -> Option<Result<ImportedButton, String>> {
+    let [function, argument, label] = leading_fields(entry);
+    let function = function.trim();
+    let label = decode_label(&label);
+    if function.is_empty() && label.is_empty() {
+        return None;
+    }
+    // Built only for an entry that is skipped, and from cut names: a warning
+    // is made for each one, and the file decides how long the names are.
+    let skip = |reason: &str| {
+        let button = if label.is_empty() {
+            format!("a button without a label in {place}")
+        } else {
+            format!("\"{}\" in {place}", quoted(&label))
+        };
+        Some(Err(format!("Skipped {button}: {reason}")))
+    };
+    if function != "SEND" {
+        return skip(&if function.is_empty() {
+            "it has no function; only buttons that send a string can be imported".to_string()
+        } else {
+            format!(
+                "its function, {}, has no command bar equivalent; only buttons that send a \
+                 string can be imported",
+                quoted(function)
+            )
+        });
+    }
+    if label.is_empty() {
+        return skip("a command bar button needs one");
+    }
+    if argument.is_empty() {
+        return skip("it sends nothing");
+    }
+    let command = match convert_send_string(&argument) {
+        Ok(command) => command,
+        Err(Unsendable::RawByte(code)) => {
+            return skip(&format!(
+                "it sends character code \\{code:03o}, which a command bar button cannot send"
+            ));
+        }
+        Err(Unsendable::Ambiguous) => {
+            return skip(
+                "its octal codes, written for the command bar, would run into the characters \
+                 around them and send something else",
+            );
+        }
+    };
+    if utf16_len(&command) > MAX_BUTTON_COMMAND_LEN {
+        return skip(&format!(
+            "its command is longer than {MAX_BUTTON_COMMAND_LEN} characters"
+        ));
+    }
+    Some(Ok(ImportedButton {
+        name: truncate_utf16(&label, MAX_BUTTON_NAME_LEN),
+        command,
+    }))
+}
+
+/// The first three comma-separated fields of a button entry: its function,
+/// its argument and its label. A backslash escapes the character after it,
+/// so `\,` is a comma inside a field and `\\` one backslash. A field the
+/// entry does not have is empty, and the fields after the third are not
+/// read, so an entry made of commas costs no more than three strings.
+fn leading_fields(entry: &str) -> [String; 3] {
+    let mut fields: [String; 3] = Default::default();
+    let mut index = 0;
+    let mut chars = entry.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            ',' => {
+                index += 1;
+                if index == fields.len() {
+                    break;
+                }
+            }
+            '\\' => fields[index].push(chars.next().unwrap_or('\\')),
+            _ => fields[index].push(c),
+        }
+    }
+    fields
+}
+
+/// A button label as `SecureCRT` shows it: `&&` stands for `&`, and a single
+/// `&` marks the letter after it as the button's access key (a Windows
+/// mnemonic), so it is dropped.
+fn decode_label(raw: &str) -> String {
+    let mut label = String::with_capacity(raw.len());
+    let mut chars = raw.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c != '&' {
+            label.push(c);
+        } else if chars.next_if_eq(&'&').is_some() {
+            label.push('&');
+        }
+    }
+    label.trim().to_string()
+}
+
+/// A `SecureCRT` send string as a command bar command.
+///
+/// Both read the same backslash escapes (`\r`, `\n`, `\t`, `\b`, `\e`, `\p`
+/// for a one-second pause, `\v` to paste the clipboard, `\\` for a
+/// backslash), and the command bar reads `SecureCRT`'s three-digit octal
+/// codes for control characters, `\000` to `\037` and `\177` (`\003` is
+/// Ctrl+C; see `parseEscapes` in src/components/CommandBar.tsx, which scans
+/// the same way). Those carry over as written.
+///
+/// A printable character written as a code, `\040` to `\176`, becomes that
+/// character, with `\134` becoming `\\`. The command bar sends such codes as
+/// written, since a command spelled in them would show as digits in the
+/// import dialog while typing text: written out, it reads as what it types.
+///
+/// The result is checked to send what the send string sends, read as each
+/// side reads it (see `sent`), and refused if it does not.
+fn convert_send_string(raw: &str) -> Result<String, Unsendable> {
+    let command = write_out_codes(raw)?;
+    if sent(&command, CodesRead::Control) == sent(raw, CodesRead::Ascii) {
+        Ok(command)
+    } else {
+        Err(Unsendable::Ambiguous)
+    }
+}
+
+/// Why a send string cannot become a command bar command.
+#[derive(Debug, PartialEq, Eq)]
+enum Unsendable {
+    /// The first octal code above `\177`: `SecureCRT` sends it as a single
+    /// raw byte, which the command bar, sending text, cannot do.
+    RawByte(u32),
+    /// Written out, a code runs together with the characters around it: in
+    /// `\0\061\062`, `\0` is no code, but with the codes written out it
+    /// would start `\012`, which the command bar reads as a line feed.
+    Ambiguous,
+}
+
+/// `raw` with its printable octal codes written out, as `convert_send_string`
+/// describes.
+fn write_out_codes(raw: &str) -> Result<String, Unsendable> {
+    let mut command = String::with_capacity(raw.len());
+    let mut rest = raw;
+    while let Some(backslash) = rest.find('\\') {
+        command.push_str(&rest[..backslash]);
+        let after = &rest[backslash + 1..];
+        if let Some(code) = octal_code(after) {
+            match code {
+                0..=0o37 | 0o177 => {
+                    command.push('\\');
+                    command.push_str(&after[..3]);
+                }
+                0o134 => command.push_str(r"\\"),
+                _ => match char::from_u32(code) {
+                    Some(c @ ' '..='~') => command.push(c),
+                    _ => return Err(Unsendable::RawByte(code)),
+                },
+            }
+            rest = &after[3..];
+        } else if let Some(next) = after.chars().next() {
+            // An escape both read alike, or a backslash both send as it is.
+            // Taken as a pair, as the command bar takes it, so the `\` of
+            // `\\` never starts another escape.
+            command.push('\\');
+            command.push(next);
+            rest = &after[next.len_utf8()..];
+        } else {
+            command.push('\\');
+            rest = "";
+        }
+    }
+    command.push_str(rest);
+    Ok(command)
+}
+
+/// Which octal codes a reading of a send string takes as characters.
+#[derive(Clone, Copy)]
+enum CodesRead {
+    /// Control characters only, `\000` to `\037` and `\177`, as the command
+    /// bar reads a command.
+    Control,
+    /// Every ASCII character, `\000` to `\177`, as `SecureCRT` reads a send
+    /// string.
+    Ascii,
+}
+
+/// One thing a command sends.
+#[derive(Debug, PartialEq, Eq)]
+enum Sent {
+    Char(char),
+    /// `\p`, a one-second pause.
+    Pause,
+    /// `\v`, the clipboard's text.
+    Paste,
+}
+
+/// What `s` sends, read the way `parseEscapes` in
+/// src/components/CommandBar.tsx reads a command, taking the octal codes
+/// `codes` says. An escape it does not know sends its backslash, and the
+/// character after it is read on its own. Control characters are named by
+/// their codes.
+fn sent(s: &str, codes: CodesRead) -> Vec<Sent> {
+    let ascii = |code: u8| Sent::Char(char::from(code));
+    let chars: Vec<char> = s.chars().collect();
+    let mut out = Vec::with_capacity(chars.len());
+    let mut i = 0;
+    while let Some(&c) = chars.get(i) {
+        i += 1;
+        if c != '\\' {
+            out.push(Sent::Char(c));
+            continue;
+        }
+        let named = match chars.get(i) {
+            Some('r') => Some(ascii(13)),
+            Some('n') => Some(ascii(10)),
+            Some('t') => Some(ascii(9)),
+            Some('b') => Some(ascii(8)),
+            Some('e') => Some(ascii(27)),
+            Some('\\') => Some(ascii(92)),
+            Some('p') => Some(Sent::Pause),
+            Some('v') => Some(Sent::Paste),
+            _ => None,
+        };
+        if let Some(named) = named {
+            out.push(named);
+            i += 1;
+            continue;
+        }
+        let code = chars
+            .get(i..i + 3)
+            .filter(|digits| digits.iter().all(|d| matches!(d, '0'..='7')))
+            .map(|digits| {
+                digits
+                    .iter()
+                    .fold(0, |n, d| n * 8 + d.to_digit(8).unwrap_or(0))
+            });
+        let read = match (code, codes) {
+            (Some(code), CodesRead::Control) => code <= 0o37 || code == 0o177,
+            (Some(code), CodesRead::Ascii) => code <= 0o177,
+            (None, _) => false,
+        };
+        match code.and_then(char::from_u32) {
+            Some(character) if read => {
+                out.push(Sent::Char(character));
+                i += 3;
+            }
+            _ => out.push(Sent::Char('\\')),
+        }
+    }
+    out
+}
+
+/// The value of the three octal digits `s` starts with, if it does.
+fn octal_code(s: &str) -> Option<u32> {
+    let digits = s.get(..3)?;
+    if digits.bytes().all(|b| matches!(b, b'0'..=b'7')) {
+        u32::from_str_radix(digits, 8).ok()
+    } else {
+        None
+    }
+}
+
+/// `s` as a warning quotes it: at most `MAX_QUOTED_LEN` characters, with
+/// `…` when it was cut.
+fn quoted(s: &str) -> String {
+    let mut chars = s.chars();
+    let mut cut: String = chars.by_ref().take(MAX_QUOTED_LEN).collect();
+    if chars.next().is_some() {
+        cut.push('…');
+    }
+    cut
+}
+
+/// The length of `s` in UTF-16 code units, as JavaScript counts it.
+fn utf16_len(s: &str) -> usize {
+    s.chars().map(char::len_utf16).sum()
+}
+
+/// `s` cut to at most `max` UTF-16 code units, never inside a character,
+/// and without the spaces the cut may leave at its end.
+fn truncate_utf16(s: &str, max: usize) -> String {
+    let mut len = 0;
+    let end = s
+        .char_indices()
+        .find(|&(_, c)| {
+            len += c.len_utf16();
+            len > max
+        })
+        .map_or(s.len(), |(i, _)| i);
+    s[..end].trim_end().to_string()
+}
+
+/// Read text content until the matching end tag. An element nested in it is
+/// skipped with everything in it: read as text, a nested element of the same
+/// name would end the read at its own end tag, leaving the outer end tag to
+/// be taken for the end of whatever encloses it.
 fn read_text(reader: &mut Reader<&[u8]>, end_tag: &str) -> Result<String, String> {
     let mut text = String::new();
     loop {
         match reader.read_event() {
+            Ok(Event::Start(ref e)) => skip_through_end(reader, e.local_name().as_ref())?,
             Ok(Event::Text(ref e)) => {
                 // SecureCRT exports declare `<?xml version="1.0"?>`, so we apply
                 // XML 1.0 EOL normalization (CR/CRLF -> LF). This is a deliberate
@@ -1014,5 +1560,545 @@ mod tests {
         );
         let (_, sessions, _, _) = parse(&xml).unwrap();
         assert_eq!(sessions[0].username.as_deref(), Some("a&custom;b&#0;c"));
+    }
+
+    // ── Buttons ─────────────────────────────────────────────────────
+
+    /// A file with `blocks` at its top level.
+    fn export(blocks: &str) -> String {
+        format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?><VanDyke version="3.0">{blocks}</VanDyke>"#
+        )
+    }
+
+    fn button(name: &str, command: &str) -> ImportedButton {
+        ImportedButton {
+            name: name.to_string(),
+            command: command.to_string(),
+        }
+    }
+
+    /// The button an entry becomes, or the warning it is skipped with.
+    fn entry(raw: &str) -> Result<ImportedButton, String> {
+        parse_button_entry(raw, "button bar \"Default\"").expect("an assigned button")
+    }
+
+    #[test]
+    fn parse_file_reads_sessions_button_bars_and_the_command_manager() {
+        // Laid out as SecureCRT 9.7 exports them, with the blocks around them.
+        let xml = export(
+            r#"
+            <string name="Product Version">Version 9.7.3</string>
+            <key name="Global"><dword name="User Button Bar">1</dword></key>
+            <key name="Sessions">
+                <key name="host1">
+                    <dword name="Is Session">1</dword>
+                    <string name="Hostname">10.0.0.1</string>
+                    <string name="Protocol Name">SSH2</string>
+                    <string name="User Button Bar Name">Default</string>
+                </key>
+            </key>
+            <key name="ButtonBarV5">
+                <array name="Default">
+                    <string>SEND,show version \\r,sh ver,,,0,1,,</string>
+                    <string>SEND,show running-config \\r,sh run,,,0,3,,</string>
+                </array>
+                <array name="Empty"/>
+                <array name="Cisco">
+                    <string>SEND,sh ip int br\\r,ip br,,,0,4,</string>
+                </array>
+            </key>
+            <key name="Commands">
+                <key name="__Commands__">
+                    <array name="Default">
+                        <string>SEND,show version \\r,sh vers,,,0,1,,</string>
+                    </array>
+                </key>
+            </key>
+            <key name="SSH2"><string name="Identity Filename V2"/></key>"#,
+        );
+        let file = parse_file(&xml).unwrap();
+        let (_, sessions, _, _) = file.sessions.unwrap();
+        assert_eq!(sessions.len(), 1);
+        let bars = file.button_bars.unwrap();
+        assert_eq!(
+            bars.buttons,
+            [
+                button("sh ver", "show version \\r"),
+                button("sh run", "show running-config \\r"),
+                button("ip br", "sh ip int br\\r"),
+            ]
+        );
+        assert_eq!(bars.skipped, 0);
+        assert_eq!(bars.warnings, Vec::<String>::new());
+        let commands = file.command_manager.unwrap();
+        assert_eq!(commands.buttons, [button("sh vers", "show version \\r")]);
+    }
+
+    #[test]
+    fn parse_file_leaves_out_the_blocks_a_file_does_not_have() {
+        // SecureCRT exports only what the user picked, so a file may hold
+        // buttons and no sessions.
+        let xml = export(
+            r#"<key name="ButtonBarV5"><array name="Default">
+                <string>SEND,uptime\\r,up,,,0,1,,</string>
+            </array></key>"#,
+        );
+        let file = parse_file(&xml).unwrap();
+        assert!(file.sessions.is_none());
+        assert!(file.command_manager.is_none());
+        assert_eq!(
+            file.button_bars.unwrap().buttons,
+            [button("up", "uptime\\r")]
+        );
+        // The sessions import still needs a Sessions block.
+        assert!(parse(&xml).unwrap_err().contains("Sessions"));
+
+        let empty = parse_file(&export("")).unwrap();
+        assert!(empty.sessions.is_none() && empty.button_bars.is_none());
+    }
+
+    #[test]
+    fn parse_file_reads_command_manager_folders() {
+        // As SecureCRT 9.7 exports a folder: a key with a command list of its
+        // own, written before the top-level list. Commands are taken in file
+        // order, folders included, at any depth.
+        let xml = export(
+            r#"<key name="Commands">
+                <key name="more commands">
+                    <key name="__Commands__">
+                        <array name="Default">
+                            <string>SEND,show inventory \\r,sh inv,,,0,4,,</string>
+                        </array>
+                    </key>
+                    <key name="deeper">
+                        <dword name="Is Expanded">1</dword>
+                        <key name="__Commands__">
+                            <array name="Default"><string>SEND,b\\r,b,,,0,1,,</string></array>
+                        </key>
+                    </key>
+                </key>
+                <key name="__Commands__">
+                    <array name="Default">
+                        <string>SEND,show version \\r,sh vers,,,0,1,,</string>
+                    </array>
+                </key>
+            </key>"#,
+        );
+        let commands = parse_file(&xml).unwrap().command_manager.unwrap();
+        assert_eq!(
+            commands.buttons,
+            [
+                button("sh inv", r"show inventory \r"),
+                button("b", r"b\r"),
+                button("sh vers", r"show version \r"),
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_file_reads_each_block_once_and_only_at_the_top_level() {
+        let xml = export(
+            r#"<key name="Global">
+                <key name="ButtonBarV5"><array name="Nested">
+                    <string>SEND,nested\\r,nested,,,0,1,,</string>
+                </array></key>
+            </key>
+            <key name="ButtonBarV5"><array name="Default">
+                <string>SEND,first\\r,first,,,0,1,,</string>
+            </array></key>
+            <key name="ButtonBarV5"><array name="Default">
+                <string>SEND,second\\r,second,,,0,1,,</string>
+            </array></key>"#,
+        );
+        let bars = parse_file(&xml).unwrap().button_bars.unwrap();
+        assert_eq!(bars.buttons, [button("first", "first\\r")]);
+    }
+
+    #[test]
+    fn parse_file_rejects_a_file_cut_off_in_a_button_block() {
+        let head = r#"<?xml version="1.0"?><VanDyke version="3.0">"#;
+        for cut in [
+            format!(r#"{head}<key name="ButtonBarV5"><array name="Default">"#),
+            format!(r#"{head}<key name="ButtonBarV5"><array name="D"><string>SEND,a"#),
+            format!(r#"{head}<key name="Commands"><key name="__Commands__">"#),
+        ] {
+            assert!(parse_file(&cut).is_err(), "{cut}");
+        }
+    }
+
+    #[test]
+    fn parse_file_limits_the_entries_read_from_each_block() {
+        let entries =
+            r"<string>SEND,x\\r,x,,,0,1,,</string>".repeat(MAX_BUTTON_ENTRIES as usize + 5);
+        let xml = export(&format!(
+            r#"<key name="ButtonBarV5"><array name="Default">{entries}</array></key>
+            <key name="Commands"><key name="__Commands__"><array name="Default">
+                <string>SEND,y\\r,y,,,0,1,,</string>
+            </array></key></key>"#
+        ));
+        let file = parse_file(&xml).unwrap();
+        let bars = file.button_bars.unwrap();
+        assert_eq!(bars.buttons.len(), MAX_BUTTON_ENTRIES as usize);
+        assert_eq!(bars.skipped, 5);
+        assert_eq!(bars.warnings.len(), 1);
+        assert!(
+            bars.warnings[0].starts_with("Skipped 5 more buttons"),
+            "{bars:?}"
+        );
+        // The other block has a limit of its own.
+        assert_eq!(file.command_manager.unwrap().buttons, [button("y", "y\\r")]);
+    }
+
+    #[test]
+    fn button_fields_unescape_commas_and_backslashes() {
+        // As SecureCRT 9.7 writes a comma in a command.
+        assert_eq!(
+            entry(r"SEND,show interface range g1/0/1 - 2 \, g1/0/5 \\r,sh range,,,0,6,,"),
+            Ok(button(
+                "sh range",
+                r"show interface range g1/0/1 - 2 , g1/0/5 \r"
+            ))
+        );
+        // And in a label, written the same way.
+        assert_eq!(
+            entry(r"SEND,a,int\, range,,,0,1,,").unwrap().name,
+            "int, range"
+        );
+        // SecureCRT 8.x writes one field fewer; only the first three count.
+        assert_eq!(
+            entry(r"SEND,exit\\r,exit,,,0,10,"),
+            Ok(button("exit", "exit\\r"))
+        );
+        // A dangling backslash is kept.
+        assert_eq!(entry(r"SEND,a\\,b\"), Ok(button("b\\", "a\\")));
+    }
+
+    #[test]
+    fn leading_fields_stops_after_the_third() {
+        let [function, argument, label] = leading_fields(&format!("SEND,a,b{}", ",".repeat(10)));
+        assert_eq!((&*function, &*argument, &*label), ("SEND", "a", "b"));
+        let [function, argument, label] = leading_fields("SEND");
+        assert_eq!((&*function, &*argument, &*label), ("SEND", "", ""));
+    }
+
+    #[test]
+    fn button_labels_drop_access_key_markers() {
+        assert_eq!(entry(r"SEND,a,&Reload,,,0,1,,").unwrap().name, "Reload");
+        assert_eq!(entry(r"SEND,a,R&&D &,,,0,1,,").unwrap().name, "R&D");
+        assert_eq!(entry(r"SEND,a,  padded  ,,,0,1,,").unwrap().name, "padded");
+    }
+
+    #[test]
+    fn button_names_are_cut_to_the_command_bar_limit() {
+        // 31 units and an emoji of two: the emoji does not fit, and is not split.
+        let label = format!("{}😀tail", "x".repeat(MAX_BUTTON_NAME_LEN - 1));
+        let name = entry(&format!("SEND,a,{label},,,0,1,,")).unwrap().name;
+        assert_eq!(name, "x".repeat(MAX_BUTTON_NAME_LEN - 1));
+        // A cut that ends on a space does not keep it.
+        let label = format!("{} tail", "x".repeat(MAX_BUTTON_NAME_LEN - 1));
+        let name = entry(&format!("SEND,a,{label},,,0,1,,")).unwrap().name;
+        assert_eq!(name, "x".repeat(MAX_BUTTON_NAME_LEN - 1));
+    }
+
+    #[test]
+    fn button_commands_over_the_limit_are_skipped_not_cut() {
+        // Cutting a command would send something other than the button did.
+        let at_limit = "x".repeat(MAX_BUTTON_COMMAND_LEN);
+        assert!(entry(&format!("SEND,{at_limit},x,,,0,1,,")).is_ok());
+        let over = "é".repeat(MAX_BUTTON_COMMAND_LEN + 1);
+        let warning = entry(&format!("SEND,{over},x,,,0,1,,")).unwrap_err();
+        assert!(warning.contains("longer than 1024"), "{warning}");
+    }
+
+    #[test]
+    fn buttons_without_a_command_bar_equivalent_are_skipped_with_a_warning() {
+        assert_eq!(
+            entry("MENU_TOGGLE_KEYWORD_HIGHLIGHTING,,Highlight on/off,,,0,0,"),
+            Err(
+                "Skipped \"Highlight on/off\" in button bar \"Default\": its function, \
+                 MENU_TOGGLE_KEYWORD_HIGHLIGHTING, has no command bar equivalent; only \
+                 buttons that send a string can be imported"
+                    .into()
+            )
+        );
+        assert!(entry(r"RUN_SCRIPT,C:\\scripts\\a.py,script,,,0,0,")
+            .unwrap_err()
+            .contains("RUN_SCRIPT"));
+        assert!(entry(",,label only,,,0,0,,")
+            .unwrap_err()
+            .contains("it has no function"));
+        assert!(entry("SEND,,nothing,,,0,0,,")
+            .unwrap_err()
+            .ends_with("it sends nothing"));
+        assert_eq!(
+            entry("SEND,uptime,,,,0,0,,"),
+            Err(
+                "Skipped a button without a label in button bar \"Default\": a command bar \
+                 button needs one"
+                    .into()
+            )
+        );
+    }
+
+    #[test]
+    fn warnings_quote_names_from_the_file_cut() {
+        // A bar name goes into the warning of every skipped entry on the bar;
+        // uncut, a long one would be copied once per entry.
+        let long = "n".repeat(100_000);
+        // Long, but short enough for the entry to be read.
+        let field = "n".repeat(10_000);
+        let entries = format!("<string>{field},,{field},,,0,0,</string>").repeat(3);
+        let xml = export(&format!(
+            r#"<key name="ButtonBarV5"><array name="{long}">{entries}</array></key>"#
+        ));
+        let bars = parse_file(&xml).unwrap().button_bars.unwrap();
+        assert_eq!(bars.skipped, 3);
+        let cut = format!("{}…", "n".repeat(MAX_QUOTED_LEN));
+        for warning in &bars.warnings {
+            let len = warning.chars().count();
+            assert!(len < 400, "{len} characters");
+            assert_eq!(warning.matches(&cut).count(), 3, "{warning}");
+        }
+        // A name at the limit is quoted whole.
+        let at_limit = "n".repeat(MAX_QUOTED_LEN);
+        assert_eq!(quoted(&at_limit), at_limit);
+    }
+
+    #[test]
+    fn session_warnings_quote_key_names_cut() {
+        // Each nameless element in a key is a warning naming the key, and the
+        // parse allows tens of thousands of warnings.
+        let long = "k".repeat(100_000);
+        let xml = wrap(&format!(
+            r#"<key name="{long}">
+                {}<key><key name="s"/></key>
+                <dword name="Is Session">1</dword>
+                <string name="Protocol Name">{long}</string>
+                <string name="Hostname">h</string>
+            </key>"#,
+            "<string>x</string><string/>".repeat(3)
+        ));
+        let (_, sessions, skipped, warnings) = parse(&xml).unwrap();
+        assert!(sessions.is_empty());
+        assert_eq!(skipped.len(), 1);
+        // Three of each nameless string, the nameless key, the protocol.
+        assert_eq!(warnings.len(), 8);
+        let cut = format!("{}…", "k".repeat(MAX_QUOTED_LEN));
+        for warning in &warnings {
+            let len = warning.chars().count();
+            assert!(len < 300, "{len} characters");
+            assert!(warning.contains(&cut), "{warning}");
+        }
+    }
+
+    #[test]
+    fn a_nested_string_cannot_end_its_block_early() {
+        // Read as text, the inner `</string>` ended the entry and the outer
+        // one the array, so the rest of the block was read as top level, and
+        // a `Sessions` key inside it as the file's sessions.
+        let xml = export(
+            r#"<key name="ButtonBarV5">
+                <array name="Default">
+                    <string><string>SEND,x,inner,,,0,1,,</string>SEND,b\\r,b,,,0,1,,</string>
+                    <string>SEND,c\\r,c,,,0,1,,</string>
+                </array>
+                <key name="Sessions">
+                    <key name="s">
+                        <dword name="Is Session">1</dword>
+                        <string name="Hostname">h</string>
+                        <string name="Protocol Name">SSH2</string>
+                    </key>
+                </key>
+            </key>"#,
+        );
+        let file = parse_file(&xml).unwrap();
+        assert!(file.sessions.is_none());
+        assert_eq!(
+            file.button_bars.unwrap().buttons,
+            [button("b", "b\\r"), button("c", "c\\r")]
+        );
+    }
+
+    #[test]
+    fn button_entries_too_long_to_import_are_skipped_whole() {
+        let label = "x".repeat(MAX_BUTTON_ENTRY_BYTES);
+        let xml = export(&format!(
+            r#"<key name="ButtonBarV5"><array name="Default">
+                <string>SEND,a\\r,{label},,,0,1,,</string>
+            </array></key>"#
+        ));
+        let bars = parse_file(&xml).unwrap().button_bars.unwrap();
+        assert_eq!(bars.buttons, Vec::<ImportedButton>::new());
+        assert_eq!(bars.skipped, 1);
+        assert_eq!(
+            bars.warnings,
+            [
+                "Skipped an entry in button bar \"Default\": it is longer than any button that \
+              can be imported"
+            ]
+        );
+        // Just under the limit, the label is cut instead, as any long one is.
+        let label = "x".repeat(MAX_BUTTON_ENTRY_BYTES - 20);
+        let fits = entry(&format!("SEND,a\\\\r,{label},,,0,1,,"));
+        assert_eq!(fits, Ok(button(&"x".repeat(MAX_BUTTON_NAME_LEN), "a\\r")));
+    }
+
+    #[test]
+    fn parse_file_limits_command_manager_nesting() {
+        // `Commands` is depth 0; each folder in it one more.
+        let nested = |depth: usize| {
+            export(&format!(
+                r#"<key name="Commands">{}{}</key>"#,
+                r#"<key name="f">"#.repeat(depth),
+                "</key>".repeat(depth)
+            ))
+        };
+        assert!(parse_file(&nested(MAX_NESTING_DEPTH - 1)).is_ok());
+        let err = parse_file(&nested(MAX_NESTING_DEPTH)).unwrap_err();
+        assert!(err.contains("nesting"), "{err}");
+    }
+
+    #[test]
+    fn unassigned_entries_do_not_count_toward_the_limit() {
+        let padding = "<string>,,,,,0,0,,</string><string/>".repeat(MAX_BUTTON_ENTRIES as usize);
+        let xml = export(&format!(
+            r#"<key name="ButtonBarV5"><array name="Default">{padding}
+                <string>SEND,x\\r,x,,,0,1,,</string>
+            </array></key>"#
+        ));
+        let bars = parse_file(&xml).unwrap().button_bars.unwrap();
+        assert_eq!(bars.buttons, [button("x", "x\\r")]);
+        assert_eq!(bars.skipped, 0);
+    }
+
+    #[test]
+    fn unassigned_buttons_are_passed_over() {
+        assert_eq!(parse_button_entry("", "here"), None);
+        assert_eq!(parse_button_entry(",,,,,0,0,,", "here"), None);
+        assert_eq!(parse_button_entry(" ,, & ,,,0,0,,", "here"), None);
+    }
+
+    #[test]
+    fn send_strings_keep_the_escapes_the_command_bar_shares() {
+        let shared = r"ena\rpass\p\v\t\b\e\n\\x";
+        assert_eq!(convert_send_string(shared), Ok(shared.to_string()));
+        // Escapes neither knows are sent as they are, by both.
+        assert_eq!(convert_send_string(r"a\qb\"), Ok(r"a\qb\".to_string()));
+        assert_eq!(convert_send_string("überall"), Ok("überall".to_string()));
+    }
+
+    #[test]
+    fn send_string_control_codes_are_kept_as_written() {
+        // The command bar reads \000 to \037 and \177 as SecureCRT does. The
+        // inputs match "reads the octal range's edges as the SecureCRT import
+        // checks them" in src/components/CommandBar.test.tsx.
+        for raw in [
+            r"\033[A\015\012\011\010",
+            r"\000\003\004\037\177",
+            r"\000\177\\\003\8\0é\",
+            // An escaped backslash before digits is no octal code, nor are
+            // fewer than three digits.
+            r"\\012\\\033\01x\8",
+        ] {
+            assert_eq!(convert_send_string(raw), Ok(raw.to_string()));
+        }
+        assert_eq!(
+            entry(r"SEND,\\003,Ctrl-C,,,0,1,,"),
+            Ok(button("Ctrl-C", r"\003"))
+        );
+    }
+
+    #[test]
+    fn send_string_printable_codes_are_written_out() {
+        // A command spelled in codes would show as digits in the import
+        // dialog while it types text; written out, it reads as what it types.
+        assert_eq!(
+            convert_send_string(r"\162\155\040\055\162\146\040\057\015"),
+            Ok(r"rm -rf /\015".to_string())
+        );
+        assert_eq!(
+            convert_send_string(r"\101\176\040x"),
+            Ok("A~ x".to_string())
+        );
+        // A backslash stays one: written out, it is escaped, so it neither
+        // starts an escape nor joins the next character into one.
+        assert_eq!(
+            convert_send_string(r"\134r\134\134"),
+            Ok(r"\\r\\\\".to_string())
+        );
+        // Written-out digits are fine where they cannot complete a code.
+        assert_eq!(
+            convert_send_string(r"\\0\061\062"),
+            Ok(r"\\012".to_string())
+        );
+        assert_eq!(convert_send_string(r"\x\061\062"), Ok(r"\x12".to_string()));
+    }
+
+    #[test]
+    fn send_string_codes_that_would_run_together_skip_the_button() {
+        // `\0` and `\01` are no codes, but with the digits after them written
+        // out they would become `\012`, a line feed SecureCRT never sends.
+        // `\1\067\067` would likewise become `\177`, DEL.
+        for raw in [r"\0\061\062", r"\01\062", r"\0\0612", r"\1\067\067"] {
+            assert_eq!(
+                convert_send_string(raw),
+                Err(Unsendable::Ambiguous),
+                "{raw}"
+            );
+        }
+        // Completing a code the command bar does not read is no harm: it
+        // sends the code as written, and SecureCRT, reading the backslash
+        // before it as no code, sends the same text.
+        assert_eq!(convert_send_string(r"\1\061\061"), Ok(r"\111".to_string()));
+        assert_eq!(
+            convert_send_string(r"\7\067\067x"),
+            Ok(r"\777x".to_string())
+        );
+        assert!(entry(r"SEND,\\0\\061\\062,lf,,,0,1,,")
+            .unwrap_err()
+            .ends_with("would run into the characters around them and send something else"));
+    }
+
+    #[test]
+    fn sent_reads_a_command_as_the_command_bar_or_secure_crt_does() {
+        let ascii = |code: u8| Sent::Char(char::from(code));
+        assert_eq!(
+            sent(r"a\r\p\v\\\003\101\q\", CodesRead::Control),
+            [
+                Sent::Char('a'),
+                ascii(13),
+                Sent::Pause,
+                Sent::Paste,
+                ascii(92),
+                ascii(3),
+                ascii(92),
+                Sent::Char('1'),
+                Sent::Char('0'),
+                Sent::Char('1'),
+                ascii(92),
+                Sent::Char('q'),
+                ascii(92),
+            ]
+        );
+        assert_eq!(sent(r"\101", CodesRead::Ascii), [Sent::Char('A')]);
+    }
+
+    #[test]
+    fn send_string_raw_bytes_the_command_bar_cannot_send_skip_the_button() {
+        // Above \177, SecureCRT sends one raw byte; text cannot carry it.
+        for (raw, code) in [(r"\200", 0o200), (r"ok\003\240", 0o240), (r"\777", 0o777)] {
+            assert_eq!(convert_send_string(raw), Err(Unsendable::RawByte(code)));
+        }
+        // Escaped, it is plain text.
+        assert_eq!(convert_send_string(r"\\240"), Ok(r"\\240".to_string()));
+        assert_eq!(
+            entry(r"SEND,\\240,nbsp,,,0,1,,"),
+            Err(
+                "Skipped \"nbsp\" in button bar \"Default\": it sends character code \
+                 \\240, which a command bar button cannot send"
+                    .into()
+            )
+        );
     }
 }

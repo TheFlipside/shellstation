@@ -1233,6 +1233,7 @@ pub fn run() {
             // Import from external tools
             import::import_mremoteng,
             import::import_securecrt,
+            import::inspect_securecrt,
             // Highlight profiles
             commands::highlight_profile_create,
             commands::highlight_profile_list,

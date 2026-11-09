@@ -39,6 +39,14 @@ import {
   type ParsedExportFile,
   type SectionSelection,
 } from "../dataTransfer";
+import { SecureCrtImportDialog } from "./SecureCrtImportDialog";
+import {
+  hasSecureCrtContent,
+  importSecureCrtButtons,
+  readSecureCrtFile,
+  type SecureCrtFile,
+  type SecureCrtSelection,
+} from "../secureCrtImport";
 
 // eslint-disable-next-line @typescript-eslint/no-empty-function
 const noop = (): void => {};
@@ -200,6 +208,9 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
   const [importFile, setImportFile] = useState<ParsedExportFile | null>(null);
   const [dataBusy, setDataBusy] = useState(false);
   const [dataResults, setDataResults] = useState<DataResultLine[]>([]);
+
+  // SecureCRT import: the file read, while the user picks what to take from it
+  const [secureCrtFile, setSecureCrtFile] = useState<SecureCrtFile | null>(null);
 
   // User identity (PG mode only)
   const appDbBackend = useAppStore((s) => s.dbBackend);
@@ -587,57 +598,124 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
     [t],
   );
 
-  const handleImportExternal = useCallback(
-    (command: "import_mremoteng" | "import_securecrt", accept: string) => {
-      void (async () => {
-        const file = await pickFile(accept);
-        if (!file) return;
-        let unlisten: (() => void) | null = null;
-        try {
-          const MAX_SIZE = 100 * 1024 * 1024;
-          if (file.size > MAX_SIZE) {
-            useToastStore.getState().addToast(t("settings.importTooLarge"));
-            return;
-          }
-          const xml = await file.text();
-          setImportProgress({ phase: "reading", current: 0, total: 0 });
-          unlisten = await listen<{ phase: string; current: number; total: number }>(
-            "import:progress",
-            (event) => {
-              setImportProgress(event.payload);
-            },
-          );
-          const result = await invoke<{
-            folders_created: number;
-            sessions_created: number;
-            skipped: number;
-            warnings: string[];
-          }>(command, { xml });
-          const parts = [
-            `${String(result.folders_created)} folders`,
-            `${String(result.sessions_created)} sessions`,
-          ];
-          if (result.skipped > 0) {
-            parts.push(`${String(result.skipped)} skipped`);
-          }
-          await useSessionStore.getState().loadAll();
-          useToastStore
-            .getState()
-            .addToast(t("settings.importSuccess", { summary: parts.join(", ") }), "success");
-          if (result.warnings.length > 0) {
-            for (const w of result.warnings) {
-              useToastStore.getState().addToast(w, "warning");
-            }
-          }
-        } catch (e) {
-          useToastStore.getState().addToast(String(e));
-        } finally {
-          if (unlisten) unlisten();
-          setImportProgress(null);
+  /** Pick an XML file from another tool and read it, or null if cancelled or too large. */
+  const pickExternalFile = useCallback(async (): Promise<string | null> => {
+    const file = await pickFile(".xml");
+    if (!file) return null;
+    // Mirrors MAX_XML_SIZE in src-tauri/src/import/mod.rs, checked before
+    // the whole file is read into memory and sent over IPC.
+    const MAX_SIZE = 100 * 1024 * 1024;
+    if (file.size > MAX_SIZE) {
+      useToastStore.getState().addToast(t("settings.importTooLarge"));
+      return null;
+    }
+    try {
+      return await file.text();
+    } catch (e) {
+      useToastStore.getState().addToast(String(e));
+      return null;
+    }
+  }, [t]);
+
+  /** Import the sessions of an mRemoteNG or SecureCRT file, with progress and a summary. */
+  const runSessionImport = useCallback(
+    async (command: "import_mremoteng" | "import_securecrt", xml: string): Promise<void> => {
+      let unlisten: (() => void) | null = null;
+      try {
+        setImportProgress({ phase: "reading", current: 0, total: 0 });
+        unlisten = await listen<{ phase: string; current: number; total: number }>(
+          "import:progress",
+          (event) => {
+            setImportProgress(event.payload);
+          },
+        );
+        const result = await invoke<{
+          folders_created: number;
+          sessions_created: number;
+          skipped: number;
+          warnings: string[];
+        }>(command, { xml });
+        const parts = [
+          `${String(result.folders_created)} folders`,
+          `${String(result.sessions_created)} sessions`,
+        ];
+        if (result.skipped > 0) {
+          parts.push(`${String(result.skipped)} skipped`);
         }
-      })();
+        await useSessionStore.getState().loadAll();
+        useToastStore
+          .getState()
+          .addToast(t("settings.importSuccess", { summary: parts.join(", ") }), "success");
+        for (const w of result.warnings) {
+          useToastStore.getState().addToast(w, "warning");
+        }
+      } catch (e) {
+        useToastStore.getState().addToast(String(e));
+      } finally {
+        if (unlisten) unlisten();
+        setImportProgress(null);
+      }
     },
     [t],
+  );
+
+  const handleImportMremoteng = useCallback((): void => {
+    void (async () => {
+      const xml = await pickExternalFile();
+      if (xml !== null) await runSessionImport("import_mremoteng", xml);
+    })();
+  }, [pickExternalFile, runSessionImport]);
+
+  /** Read a SecureCRT export and offer what it holds; nothing is imported yet. */
+  const handleImportSecureCrtPick = useCallback((): void => {
+    void (async () => {
+      const xml = await pickExternalFile();
+      if (xml === null) return;
+      setImportProgress({ phase: "parsing", current: 0, total: 0 });
+      try {
+        const file = await readSecureCrtFile(xml);
+        if (hasSecureCrtContent(file)) {
+          setSecureCrtFile(file);
+        } else {
+          useToastStore.getState().addToast(t("settings.secureCrtNothingToImport"));
+        }
+      } catch (e) {
+        useToastStore.getState().addToast(String(e));
+      } finally {
+        setImportProgress(null);
+      }
+    })();
+  }, [pickExternalFile, t]);
+
+  const handleSecureCrtImport = useCallback(
+    async (file: SecureCrtFile, selection: SecureCrtSelection): Promise<void> => {
+      setSecureCrtFile(null);
+      // Each part on its own, as with a ShellStation export: a failed
+      // session import does not stop the buttons.
+      if (selection.sessions) await runSessionImport("import_securecrt", file.xml);
+      try {
+        const result = importSecureCrtButtons(file, selection);
+        if (result === null) return;
+        useToastStore.getState().addToast(
+          t("settings.dataImportedCommandButtons", {
+            added: result.added,
+            skipped: result.skipped,
+          }),
+          "success",
+        );
+        for (const w of result.warnings) {
+          useToastStore.getState().addToast(w, "warning");
+        }
+      } catch (e) {
+        useToastStore.getState().addToast(
+          t("settings.dataSectionFailed", {
+            section: t("settings.dataSectionCommandButtons"),
+            error: errorText(e),
+          }),
+        );
+      }
+    },
+    [runSessionImport, t],
   );
 
   // Clear sensitive fields from state when the dialog unmounts.
@@ -1695,22 +1773,10 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
         {/* ── Import from External Tools ──────────────────────────── */}
         <h4 className="settings-section-title">{t("settings.importExternal")}</h4>
         <div className="dialog-field dialog-field-row">
-          <button
-            type="button"
-            className="dialog-btn"
-            onClick={() => {
-              handleImportExternal("import_mremoteng", ".xml");
-            }}
-          >
+          <button type="button" className="dialog-btn" onClick={handleImportMremoteng}>
             {t("settings.importMremoteng")}
           </button>
-          <button
-            type="button"
-            className="dialog-btn"
-            onClick={() => {
-              handleImportExternal("import_securecrt", ".xml");
-            }}
-          >
+          <button type="button" className="dialog-btn" onClick={handleImportSecureCrtPick}>
             {t("settings.importSecurecrt")}
           </button>
         </div>
@@ -1776,6 +1842,17 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
           }}
           onCancel={() => {
             setImportFile(null);
+          }}
+        />
+      )}
+      {secureCrtFile && (
+        <SecureCrtImportDialog
+          file={secureCrtFile}
+          onConfirm={(selection) => {
+            void handleSecureCrtImport(secureCrtFile, selection);
+          }}
+          onCancel={() => {
+            setSecureCrtFile(null);
           }}
         />
       )}

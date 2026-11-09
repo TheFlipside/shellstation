@@ -43,6 +43,8 @@ const MAX_COMMAND_BUTTONS = 1000;
 const MAX_BUTTON_NAME_LENGTH = 32;
 const MAX_BUTTON_COMMAND_LENGTH = 1024;
 const HEX_COLOR_RE = /^#[\da-f]{6}$/i;
+/** The color a new command button starts with: the color picker's first preset. */
+export const DEFAULT_BUTTON_COLOR = "#f38ba8";
 const UUID_RE = /^[\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12}$/i;
 
 // The connection settings are Rust integers (u64 / u32) in the backend's

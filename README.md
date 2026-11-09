@@ -24,7 +24,7 @@ ShellStation replaces tools like mRemoteNG and SecureCRT with a modern, open-sou
 - **Jump host chaining** — connect through multiple bastions (A -> B -> C -> target)
 - **Session management** — folders, tags, search, drag-and-drop, bulk editing
 - **Command broadcast** — send commands to multiple sessions simultaneously
-- **Import** — migrate from mRemoteNG XML, SecureCRT XML, or CSV
+- **Import** — migrate from mRemoteNG XML, SecureCRT XML (sessions, button bars and Command Manager), or CSV
 - **Credential manager** — secrets stored in the OS keychain (Keychain, Secret Service, Credential Manager)
 - **Multi-user mode** — shared PostgreSQL database with per-user visibility and credential isolation
 - **Keyword highlighting** — import SecureCRT highlight profiles or create your own

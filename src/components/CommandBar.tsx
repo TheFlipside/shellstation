@@ -23,10 +23,28 @@ const noop = (): void => {};
 type CommandSegment = { type: "text"; value: string } | { type: "pause" } | { type: "clipboard" };
 
 /**
+ * The control character whose three-digit octal code follows the backslash
+ * at `backslash`, as SecureCRT's send strings write one (`\003` is Ctrl+C),
+ * or null. Only control codes are read: \000 to \037, and \177 (DEL).
+ *
+ * A printable character written as a code (\040 to \176) is left as written.
+ * Read, it would let a command shown as digits type text no one reviewed:
+ * `\162\155` would type "rm". A code above \177 is no ASCII character;
+ * SecureCRT sends it as a single raw byte, which text cannot carry.
+ */
+function controlCharacter(raw: string, backslash: number): string | null {
+  const digits = raw.slice(backslash + 1, backslash + 4);
+  if (!/^[0-7]{3}$/.test(digits)) return null;
+  const code = parseInt(digits, 8);
+  return code <= 0o37 || code === 0o177 ? String.fromCharCode(code) : null;
+}
+
+/**
  * Resolve escape sequences in a command string.
  * Supported: \r (CR), \n (LF), \\ (backslash), \t (tab), \b (backspace),
- * \e (ESC 0x1B), \p (1-second pause marker — handled by caller).
- * \v (clipboard paste) is handled separately at execution time.
+ * \e (ESC 0x1B), \000 to \037 and \177 (the control character with that
+ * octal code, as in SecureCRT), \p (1-second pause marker — handled by
+ * caller). \v (clipboard paste) is handled separately at execution time.
  */
 function parseEscapes(raw: string): { segments: CommandSegment[] } {
   const segments: CommandSegment[] = [];
@@ -78,10 +96,22 @@ function parseEscapes(raw: string): { segments: CommandSegment[] } {
           segments.push({ type: "clipboard" });
           i += 2;
           break;
-        default:
-          buf += raw[i];
-          i += 1;
+        default: {
+          // `convert_send_string` in src-tauri/src/import/securecrt.rs scans
+          // imported SecureCRT commands the same way; keep the two in step.
+          const octal = controlCharacter(raw, i);
+          if (octal === null) {
+            // Only the backslash is taken: the character after it is read
+            // again on its own. That is safe, since only `\\` would start
+            // another escape, and its own case above takes it as a pair.
+            buf += raw[i];
+            i += 1;
+          } else {
+            buf += octal;
+            i += 4;
+          }
           break;
+        }
       }
     } else {
       buf += raw[i];
