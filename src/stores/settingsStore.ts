@@ -79,6 +79,63 @@ function isValidButtonShape(
   );
 }
 
+/**
+ * Whether `raw` is a command button. It takes any value, since localStorage
+ * and an import file can hold anything where a button should be, `null`
+ * included, and nothing may be read from it before that is ruled out.
+ */
+function isCommandButton(raw: unknown): raw is CommandButton {
+  if (typeof raw !== "object" || raw === null) return false;
+  const b = raw as Partial<CommandButton>;
+  return typeof b.id === "string" && UUID_RE.test(b.id) && isValidButtonShape(b);
+}
+
+/** A button's own four fields, so that nothing else that came with it is stored. */
+function knownButtonFields({ id, name, command, color }: CommandButton): CommandButton {
+  return { id, name, command, color };
+}
+
+/**
+ * The buttons in what localStorage holds for the command bar, which can be
+ * any JSON value. An entry that is no button is dropped, and so is one whose
+ * id an earlier one has, in either letter case; anything but a list gives no
+ * buttons. The list is cut to the bar's limit before any entry is checked,
+ * which bounds the work. This must not throw: it runs in the startup check
+ * of the stored settings, and a throw there skips every check after it.
+ */
+function storedCommandButtons(raw: unknown): CommandButton[] {
+  if (!Array.isArray(raw)) return [];
+  const ids = new Set<string>();
+  const buttons: CommandButton[] = [];
+  for (const entry of raw.slice(0, MAX_COMMAND_BUTTONS) as unknown[]) {
+    if (!isCommandButton(entry)) continue;
+    const id = entry.id.toLowerCase();
+    if (ids.has(id)) continue;
+    ids.add(id);
+    buttons.push(knownButtonFields(entry));
+  }
+  return buttons;
+}
+
+const COPY_SUFFIX = " (copy)";
+
+/**
+ * The name for a copy of the button called `name`: the name with " (copy)"
+ * after it, shortened first where the two would not fit a button name. It is
+ * cut between characters, never through the two halves of one, and a space
+ * the cut leaves at the end goes too.
+ */
+function copyName(name: string): string {
+  const room = MAX_BUTTON_NAME_LENGTH - COPY_SUFFIX.length;
+  if (name.length <= room) return name + COPY_SUFFIX;
+  let kept = "";
+  for (const character of name) {
+    if (kept.length + character.length > room) break;
+    kept += character;
+  }
+  return kept.trimEnd() + COPY_SUFFIX;
+}
+
 export interface CommandButton {
   id: string;
   name: string;
@@ -177,6 +234,53 @@ function withoutBackendSettings(state: SettingsState): PersistedSettings {
     Object.entries(state).filter(([key]) => !BACKEND_SETTING_KEY_SET.has(key)),
   ) as PersistedSettings;
 }
+
+/**
+ * What the store takes from the settings in localStorage: the values stored
+ * under the names of its own settings, except the backend's. Its actions
+ * live in the same object, so a stored value under an action's name would
+ * otherwise replace the action, and one under any other name would stay in
+ * the store and be written back.
+ */
+function storedSettings(persisted: unknown, current: SettingsState): Partial<PersistedSettings> {
+  if (typeof persisted !== "object" || persisted === null) return {};
+  const known = current as unknown as Record<string, unknown>;
+  return Object.fromEntries(
+    Object.entries(persisted).filter(
+      ([key]) =>
+        Object.prototype.hasOwnProperty.call(known, key) &&
+        typeof known[key] !== "function" &&
+        !BACKEND_SETTING_KEY_SET.has(key),
+    ),
+  );
+}
+
+type BooleanSettingKey = {
+  [K in keyof PersistedSettings]: PersistedSettings[K] extends boolean ? K : never;
+}[keyof PersistedSettings];
+
+/**
+ * Every on/off setting the store persists, with the value it gets at startup
+ * when what is stored for it is no boolean. That is the careful side where
+ * a setting has one, as in the import rules below: confirmations and the
+ * update check on, and whatever makes something happen with less care off.
+ * The others get their default. The type makes a new setting fail to compile
+ * until it is listed here, and with that checked at startup.
+ */
+const BOOLEAN_SETTING_FALLBACKS = {
+  closeOnDisconnect: false,
+  openLocalOnStartup: false,
+  confirmOnQuit: true,
+  confirmOnCloseTab: true,
+  copyOnSelect: false,
+  pasteOnRightClick: false,
+  confirmMultilinePaste: true,
+  toastAutoDismiss: true,
+  autoCheckForUpdates: true,
+} satisfies Record<BooleanSettingKey, boolean>;
+const BOOLEAN_SETTING_KEYS = Object.keys(BOOLEAN_SETTING_FALLBACKS) as BooleanSettingKey[];
+
+const THEME_MODES: ReadonlySet<unknown> = new Set<ThemeMode>(["dark", "light", "system"]);
 
 /** Change the given connection settings; a value left out keeps its setting. */
 function saveConnectionConfig(values: {
@@ -375,20 +479,24 @@ export const useSettingsStore = create<SettingsState>()(
       autoCheckForUpdates: true,
       commandButtons: [],
       addCommandButton: (button: CommandButton) => {
-        if (typeof button.id !== "string" || !UUID_RE.test(button.id)) return;
-        if (!isValidButtonShape(button)) return;
+        if (!isCommandButton(button)) return;
+        // Compared in lowercase: an id is valid in either letter case.
+        const id = button.id.toLowerCase();
         set((state) => {
           if (state.commandButtons.length >= MAX_COMMAND_BUTTONS) return state;
-          if (state.commandButtons.some((b) => b.id === button.id)) return state;
-          return { commandButtons: [...state.commandButtons, button] };
+          if (state.commandButtons.some((b) => b.id.toLowerCase() === id)) return state;
+          return { commandButtons: [...state.commandButtons, knownButtonFields(button)] };
         });
       },
       updateCommandButton: (id: string, updates: Partial<Omit<CommandButton, "id">>) => {
         set((state) => {
           const idx = state.commandButtons.findIndex((b) => b.id === id);
           if (idx === -1) return state;
-          const merged = { ...state.commandButtons[idx], ...updates };
-          if (!isValidButtonShape(merged)) return state;
+          const current = state.commandButtons[idx];
+          // The id is what the button is found by, so it stays, whatever
+          // `updates` holds at run time; so does nothing but the four fields.
+          const merged = knownButtonFields({ ...current, ...updates, id: current.id });
+          if (!isCommandButton(merged)) return state;
           const next = state.commandButtons.slice();
           next[idx] = merged;
           return { commandButtons: next };
@@ -401,13 +509,16 @@ export const useSettingsStore = create<SettingsState>()(
       },
       duplicateCommandButton: (id: string) => {
         set((state) => {
+          if (state.commandButtons.length >= MAX_COMMAND_BUTTONS) return state;
           const source = state.commandButtons.find((b) => b.id === id);
           if (!source) return state;
-          const copy: CommandButton = {
+          const copy = knownButtonFields({
             ...source,
             id: crypto.randomUUID(),
-            name: source.name + " (copy)",
-          };
+            name: copyName(source.name),
+          });
+          // A copy the startup check would drop is not made in the first place.
+          if (!isCommandButton(copy)) return state;
           return { commandButtons: [...state.commandButtons, copy] };
         });
       },
@@ -437,6 +548,8 @@ export const useSettingsStore = create<SettingsState>()(
         set({ language: lang });
       },
       setUiScale: (scale: number) => {
+        // NaN would pass both comparisons below and be stored as it is.
+        if (!Number.isFinite(scale)) return;
         // 150% is intentionally excluded; see SettingsDialog UI_SCALE_OPTIONS.
         const clamped = scale > 125 ? 125 : scale < 75 ? 75 : scale;
         set({ uiScale: clamped });
@@ -552,35 +665,52 @@ export const useSettingsStore = create<SettingsState>()(
       version: 1,
       partialize: withoutBackendSettings,
       // Never read them back either, even from storage that holds them.
-      merge: (persisted, current) => ({
-        ...current,
-        ...(typeof persisted === "object" && persisted !== null
-          ? withoutBackendSettings(persisted as SettingsState)
-          : {}),
-      }),
+      merge: (persisted, current) => ({ ...current, ...storedSettings(persisted, current) }),
       migrate: (persisted, version) => {
         const state: Record<string, unknown> =
           typeof persisted === "object" && persisted !== null ? { ...persisted } : {};
         if (version < 1) stashLegacyConnectionSettings(state);
         return withoutBackendSettings(state as unknown as SettingsState);
       },
+      // Everything the check below uses must be defined above the store,
+      // since at startup it runs while the store is being created.
       onRehydrateStorage: () => {
         return (state?: SettingsState) => {
           if (!state) return;
           // Validate persisted language against the bundled-locales allowlist
           // before passing to i18next, which would otherwise key its resource
-          // lookup map with an attacker-controlled string.
-          if (typeof state.language === "string" && state.language !== "") {
-            if (SUPPORTED_LANGUAGES_SET.has(state.language)) {
-              void i18n.changeLanguage(state.language);
-            } else {
-              state.language = "";
-            }
+          // lookup map with an attacker-controlled string. Anything else,
+          // a value that is no string included, becomes "follow the system".
+          if (SUPPORTED_LANGUAGES_SET.has(state.language)) {
+            void i18n.changeLanguage(state.language);
+          } else {
+            state.language = "";
+          }
+          // An on/off setting must be a boolean: a stored string, even
+          // "false", would count as on wherever the setting is read. One
+          // that is not gets its fallback, so a damaged entry can neither
+          // switch on pasting on a right-click nor switch a confirmation off.
+          for (const key of BOOLEAN_SETTING_KEYS) {
+            if (typeof state[key] !== "boolean") state[key] = BOOLEAN_SETTING_FALLBACKS[key];
+          }
+          if (!THEME_MODES.has(state.themeMode)) {
+            state.themeMode = "system";
+          }
+          // The range the setter allows.
+          if (
+            !Number.isFinite(state.terminalFontSize) ||
+            state.terminalFontSize < 6 ||
+            state.terminalFontSize > 72
+          ) {
+            state.terminalFontSize = 14;
           }
           // Clamp uiScale to the supported range (75-125). 150% used to be
           // selectable but was dropped because dnd-kit overlay positioning
           // leaves a residual offset at that exact ratio under wry's webview.
-          if (!Number.isFinite(state.uiScale) || state.uiScale > 125) {
+          // A value that is no number becomes the default, not the largest.
+          if (!Number.isFinite(state.uiScale)) {
+            state.uiScale = 100;
+          } else if (state.uiScale > 125) {
             state.uiScale = 125;
           } else if (state.uiScale < 75) {
             state.uiScale = 75;
@@ -615,14 +745,9 @@ export const useSettingsStore = create<SettingsState>()(
           // Sanitize persisted commandButtons against corrupted localStorage:
           // cap total entries, require UUID-format ids, enforce per-field
           // length limits, and validate color format. Prevents startup hangs
-          // from pathological payloads.
-          if (Array.isArray(state.commandButtons)) {
-            state.commandButtons = state.commandButtons
-              .slice(0, MAX_COMMAND_BUTTONS)
-              .filter(
-                (b) => typeof b.id === "string" && UUID_RE.test(b.id) && isValidButtonShape(b),
-              );
-          }
+          // from pathological payloads. The command bar needs a list of
+          // buttons to render at all.
+          state.commandButtons = storedCommandButtons(state.commandButtons);
           // Sanitize persisted font family against the allowlist.
           if (!ALLOWED_TERMINAL_FONTS_SET.has(state.terminalFontFamily)) {
             state.terminalFontFamily = "JetBrains Mono";
@@ -645,12 +770,6 @@ export const useSettingsStore = create<SettingsState>()(
               !HEX_COLOR_RE.test(state.terminalForegroundColor))
           ) {
             state.terminalForegroundColor = null;
-          }
-          // Older app versions didn't have this field; default to on (the
-          // documented user-friendly behavior described in the changelog
-          // for the updater feature).
-          if (typeof state.autoCheckForUpdates !== "boolean") {
-            state.autoCheckForUpdates = true;
           }
         };
       },
@@ -776,8 +895,6 @@ function importColor(apply: ApplySetting<string | null>): SettingImporter {
   };
 }
 
-const THEME_MODES: ReadonlySet<string> = new Set<ThemeMode>(["dark", "light", "system"]);
-
 /**
  * Applies one imported setting through its setter, so a value from a file
  * gets the same validation as a change made in the Settings dialog. The
@@ -888,9 +1005,7 @@ export async function importSettings(raw: Readonly<Record<string, unknown>>): Pr
 
 /** The current command buttons as they go into an export file. */
 export function getExportableCommandButtons(): CommandButton[] {
-  return useSettingsStore
-    .getState()
-    .commandButtons.map(({ id, name, command, color }) => ({ id, name, command, color }));
+  return useSettingsStore.getState().commandButtons.map(knownButtonFields);
 }
 
 // Characters that change how a button looks without being seen: control
@@ -899,6 +1014,12 @@ export function getExportableCommandButtons(): CommandButton[] {
 // surrogates, and characters that render as blanks. Private-use characters
 // are allowed: icon fonts such as Nerd Fonts put their glyphs there.
 const HIDDEN_CHARACTER_RE = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Cs}\u034f\u115f\u1160\u2800\u3164\uffa0]/u;
+// Characters Unicode defines as showing nothing, which the categories above
+// do not all cover: the Khmer inherent vowels, which are combining marks,
+// and code points set aside for such characters but not assigned yet.
+// Variation selectors are left to the check below: a name may hold them,
+// as emoji and East Asian and Mongolian text do.
+const DEFAULT_IGNORABLE_RE = /(?!\p{Variation_Selector})\p{Default_Ignorable_Code_Point}/u;
 // Every space character except the ordinary one, which the button list
 // collapses, so runs of them cannot push a command out of view.
 const UNUSUAL_SPACE_RE = /[\u00a0\u1680\u2000-\u200a\u202f\u205f\u3000]/u;
@@ -916,20 +1037,24 @@ const ZERO_WIDTH_JOINER_RE = /\u200d/g;
  * needs them.
  */
 function hasHiddenCharacters(text: string): boolean {
-  return HIDDEN_CHARACTER_RE.test(text) || UNUSUAL_SPACE_RE.test(text);
+  return (
+    HIDDEN_CHARACTER_RE.test(text) || UNUSUAL_SPACE_RE.test(text) || DEFAULT_IGNORABLE_RE.test(text)
+  );
 }
 
-/** Whether an entry from an export file can become a command button. */
+/**
+ * Whether an entry from an export file can become a command button. Its
+ * name must show something: a button with a blank label would hide what it
+ * is for, and a name of nothing but joiners or spaces is one.
+ */
 export function isImportableButton(raw: unknown): raw is CommandButton {
-  if (typeof raw !== "object" || raw === null) return false;
-  const b = raw as Partial<CommandButton>;
+  if (!isCommandButton(raw)) return false;
+  const name = raw.name.replace(ZERO_WIDTH_JOINER_RE, "");
   return (
-    typeof b.id === "string" &&
-    UUID_RE.test(b.id) &&
-    isValidButtonShape(b) &&
-    !hasHiddenCharacters(b.name.replace(ZERO_WIDTH_JOINER_RE, "")) &&
-    !hasHiddenCharacters(b.command) &&
-    !COMMAND_ONLY_HIDDEN_RE.test(b.command)
+    name.trim() !== "" &&
+    !hasHiddenCharacters(name) &&
+    !hasHiddenCharacters(raw.command) &&
+    !COMMAND_ONLY_HIDDEN_RE.test(raw.command)
   );
 }
 

@@ -780,6 +780,492 @@ describe("connection settings", () => {
   });
 });
 
+describe("command buttons left in localStorage", () => {
+  function storeState(state: Record<string, unknown>): void {
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify({ state, version: 1 }));
+  }
+
+  it("keeps the buttons of a list that also holds other values", async () => {
+    storeState({
+      commandButtons: [
+        null,
+        button(ID_A, "a"),
+        "uptime",
+        7,
+        [],
+        {},
+        { ...button(ID_B, "b"), color: "red" },
+        button(ID_C, "c"),
+      ],
+    });
+    await useSettingsStore.persist.rehydrate();
+    expect(useSettingsStore.getState().commandButtons).toEqual([
+      button(ID_A, "a"),
+      button(ID_C, "c"),
+    ]);
+  });
+
+  it("still checks the settings that come after a list holding null", async () => {
+    storeState({
+      commandButtons: [null],
+      terminalFontFamily: "Comic Sans MS",
+      terminalBackgroundColor: "red",
+      autoCheckForUpdates: "no",
+    });
+    await useSettingsStore.persist.rehydrate();
+    const state = useSettingsStore.getState();
+    expect(state.commandButtons).toEqual([]);
+    expect(state.terminalFontFamily).toBe("JetBrains Mono");
+    expect(state.terminalBackgroundColor).toBeNull();
+    expect(state.autoCheckForUpdates).toBe(true);
+    expect(useSettingsStore.persist.hasHydrated()).toBe(true);
+  });
+
+  it.each([
+    ["null", null],
+    ["a string", "uptime"],
+    ["a number", 7],
+    ["an object", { 0: button(ID_A, "a"), length: 1 }],
+  ])("starts with no buttons when %s is stored in place of the list", async (_label, value) => {
+    storeState({ commandButtons: value });
+    await useSettingsStore.persist.rehydrate();
+    expect(useSettingsStore.getState().commandButtons).toEqual([]);
+  });
+
+  it("takes no more entries than the bar holds", async () => {
+    storeState({
+      commandButtons: Array.from({ length: 1001 }, (_, i) =>
+        button(`00000000-0000-4000-8000-${String(i).padStart(12, "0")}`, `b${String(i)}`),
+      ),
+    });
+    await useSettingsStore.persist.rehydrate();
+    expect(useSettingsStore.getState().commandButtons).toHaveLength(1000);
+  });
+
+  // The cut comes before the check, so a huge list costs no more than a full bar.
+  it("does not look past the limit for buttons", async () => {
+    storeState({
+      commandButtons: [...Array.from({ length: 1000 }, () => null), button(ID_A, "a")],
+    });
+    await useSettingsStore.persist.rehydrate();
+    expect(useSettingsStore.getState().commandButtons).toEqual([]);
+  });
+
+  it("keeps only a button's own fields", async () => {
+    storeState({ commandButtons: [{ ...button(ID_A, "a"), extra: "<script>" }] });
+    await useSettingsStore.persist.rehydrate();
+    expect(useSettingsStore.getState().commandButtons).toEqual([button(ID_A, "a")]);
+  });
+
+  // The hidden-character check is for buttons from someone else's file. A
+  // button made in the app may hold such a character, and must not vanish.
+  it("keeps a button the import would refuse for a hidden character", async () => {
+    const own = button(ID_A, "up\u00a0time");
+    expect(importCommandButtons([own])).toEqual({ added: 0, skipped: 1 });
+    storeState({ commandButtons: [own] });
+    await useSettingsStore.persist.rehydrate();
+    expect(useSettingsStore.getState().commandButtons).toEqual([own]);
+  });
+
+  it("drops a button whose id an earlier one has, in either letter case", async () => {
+    storeState({
+      commandButtons: [
+        button(ID_A, "first"),
+        button(ID_A, "same id"),
+        button(ID_A.toUpperCase(), "same id in uppercase"),
+        button(ID_B, "b"),
+      ],
+    });
+    await useSettingsStore.persist.rehydrate();
+    expect(useSettingsStore.getState().commandButtons).toEqual([
+      button(ID_A, "first"),
+      button(ID_B, "b"),
+    ]);
+  });
+});
+
+describe("settings left in localStorage", () => {
+  function storeState(state: Record<string, unknown>): void {
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify({ state, version: 1 }));
+  }
+
+  const ON_OFF_DEFAULTS = {
+    closeOnDisconnect: false,
+    openLocalOnStartup: false,
+    confirmOnQuit: true,
+    confirmOnCloseTab: true,
+    copyOnSelect: false,
+    pasteOnRightClick: false,
+    confirmMultilinePaste: false,
+    toastAutoDismiss: true,
+    autoCheckForUpdates: true,
+  };
+  const ON_OFF_KEYS = Object.keys(ON_OFF_DEFAULTS) as (keyof typeof ON_OFF_DEFAULTS)[];
+  // What a setting gets when the stored value is no boolean: the careful
+  // side. Only the multi-line paste confirmation differs from its default.
+  const ON_OFF_FALLBACKS = { ...ON_OFF_DEFAULTS, confirmMultilinePaste: true };
+
+  it("keeps the defaults of settings that are not stored", async () => {
+    storeState({});
+    await useSettingsStore.persist.rehydrate();
+    expect(useSettingsStore.getState()).toMatchObject({
+      ...ON_OFF_DEFAULTS,
+      language: "",
+      uiScale: 100,
+      themeMode: "system",
+      terminalFontSize: 14,
+      commandButtons: [],
+    });
+  });
+
+  it("lists every on/off setting the store persists", () => {
+    const initial = useSettingsStore.getInitialState();
+    const booleans = Object.entries(initial)
+      .filter(([key, value]) => typeof value === "boolean" && !BACKEND_KEYS.includes(key))
+      .map(([key]) => key);
+    expect(booleans.sort()).toEqual([...ON_OFF_KEYS].sort());
+    expect(initial).toMatchObject(ON_OFF_DEFAULTS);
+  });
+
+  it("reads each on/off setting when it is a boolean", async () => {
+    const flipped = Object.fromEntries(ON_OFF_KEYS.map((key) => [key, !ON_OFF_DEFAULTS[key]]));
+    storeState(flipped);
+    await useSettingsStore.persist.rehydrate();
+    expect(useSettingsStore.getState()).toMatchObject(flipped);
+  });
+
+  // A string is truthy, "false" included, so it would count as on. Whatever
+  // is stored, a confirmation must not end up off, nor pasting on a
+  // right-click, copying on selection or closing a tab on disconnect on.
+  it.each([
+    ["the string of its value", (on: boolean) => String(on)],
+    ["the string of its opposite", (on: boolean) => String(!on)],
+    ["a number", (on: boolean) => (on ? 0 : 1)],
+    ["null", () => null],
+    ["an object", () => ({})],
+  ])("takes the careful side for an on/off setting stored as %s", async (_label, damaged) => {
+    storeState(Object.fromEntries(ON_OFF_KEYS.map((key) => [key, damaged(ON_OFF_DEFAULTS[key])])));
+    await useSettingsStore.persist.rehydrate();
+    expect(useSettingsStore.getState()).toMatchObject(ON_OFF_FALLBACKS);
+  });
+
+  it.each([["sepia"], [7], [null], [["dark"]]])(
+    "follows the system theme when %j is stored as the theme",
+    async (value) => {
+      storeState({ themeMode: value });
+      await useSettingsStore.persist.rehydrate();
+      expect(useSettingsStore.getState().themeMode).toBe("system");
+    },
+  );
+
+  it.each([[5], [73], [5.99], ["20"], [null]])(
+    "uses the default font size when %j is stored as the size",
+    async (value) => {
+      storeState({ terminalFontSize: value });
+      await useSettingsStore.persist.rehydrate();
+      expect(useSettingsStore.getState().terminalFontSize).toBe(14);
+    },
+  );
+
+  it.each([[6], [20], [72]])("reads a stored font size of %d", async (value) => {
+    storeState({ terminalFontSize: value });
+    await useSettingsStore.persist.rehydrate();
+    expect(useSettingsStore.getState().terminalFontSize).toBe(value);
+  });
+
+  it.each([["dark"], ["light"], ["system"]])("reads the stored theme %j", async (value) => {
+    storeState({ themeMode: value });
+    await useSettingsStore.persist.rehydrate();
+    expect(useSettingsStore.getState().themeMode).toBe(value);
+  });
+
+  it.each([
+    [75, 75],
+    [110, 110],
+    [125, 125],
+    [150, 125],
+    [10, 75],
+    ["110", 100],
+    [null, 100],
+    [{}, 100],
+  ])("reads a stored UI scale of %j as %d", async (value, expected) => {
+    storeState({ uiScale: value });
+    await useSettingsStore.persist.rehydrate();
+    expect(useSettingsStore.getState().uiScale).toBe(expected);
+  });
+
+  it.each([["xx"], [7], [null], [["de"]]])(
+    "follows the system language when %j is stored as the language",
+    async (value) => {
+      storeState({ language: value });
+      await useSettingsStore.persist.rehydrate();
+      expect(useSettingsStore.getState().language).toBe("");
+      expect(changeLanguage).not.toHaveBeenCalled();
+    },
+  );
+
+  it("never lets a stored value replace an action", async () => {
+    storeState({ addCommandButton: "x", setThemeMode: null, themeMode: "light" });
+    await useSettingsStore.persist.rehydrate();
+    const state = useSettingsStore.getState();
+    expect(state.themeMode).toBe("light");
+    expect(typeof state.addCommandButton).toBe("function");
+    expect(typeof state.setThemeMode).toBe("function");
+  });
+
+  // Written as text, since `__proto__` in an object literal would set the
+  // prototype instead of a key; parsed from JSON it is a key like any other.
+  // The last three are names every object answers to without having them.
+  it("takes nothing stored under a name it does not know", async () => {
+    const unknown = ["somethingElse", "__proto__", "constructor", "toString"];
+    localStorage.setItem(
+      SETTINGS_KEY,
+      `{"state":{"somethingElse":1,"__proto__":{"polluted":true},"constructor":"x",` +
+        `"toString":"x","themeMode":"light"},"version":1}`,
+    );
+    expect(Object.keys(stored().state)).toEqual([...unknown, "themeMode"]);
+    await useSettingsStore.persist.rehydrate();
+    const state = useSettingsStore.getState();
+    expect(state.themeMode).toBe("light");
+    expect(Object.keys(state).filter((key) => unknown.includes(key))).toEqual([]);
+    expect(Object.getPrototypeOf(state)).toBe(Object.prototype);
+    // Nor is it written back with the next change.
+    state.setThemeMode("dark");
+    expect(Object.keys(stored().state).filter((key) => unknown.includes(key))).toEqual([]);
+  });
+
+  // At startup the check runs while the store is being created, before the
+  // rest of the module has run. A fresh copy of the module shows that it
+  // gets through there too; `rehydrate` above only ever runs later.
+  it("is checked when the app starts", async () => {
+    storeState({
+      language: 7,
+      themeMode: "sepia",
+      pasteOnRightClick: "false",
+      confirmOnQuit: "false",
+      confirmMultilinePaste: 0,
+      uiScale: "big",
+      terminalFontSize: 500,
+      terminalFontFamily: "Comic Sans MS",
+      terminalBackgroundColor: "red",
+      commandButtons: [null, button(ID_A, "a"), button(ID_A, "again")],
+      setThemeMode: "x",
+    });
+    // The fresh copy stays out of the other tests: they use the copy this
+    // file imported, it is not changed here, so it writes nothing, and it
+    // calls no backend command while it loads.
+    vi.resetModules();
+    const fresh = await import("./settingsStore");
+    expect(fresh.useSettingsStore).not.toBe(useSettingsStore);
+    expect(fresh.useSettingsStore.persist.hasHydrated()).toBe(true);
+    const state = fresh.useSettingsStore.getState();
+    expect(state).toMatchObject({
+      language: "",
+      themeMode: "system",
+      pasteOnRightClick: false,
+      confirmOnQuit: true,
+      confirmMultilinePaste: true,
+      uiScale: 100,
+      terminalFontSize: 14,
+      terminalFontFamily: "JetBrains Mono",
+      terminalBackgroundColor: null,
+      commandButtons: [button(ID_A, "a")],
+    });
+    expect(typeof state.setThemeMode).toBe("function");
+  });
+});
+
+describe("setUiScale", () => {
+  it.each([
+    [100, 100],
+    [75, 75],
+    [125, 125],
+    [150, 125],
+    [10, 75],
+  ])("stores %d as %d", (scale, expected) => {
+    useSettingsStore.getState().setUiScale(scale);
+    expect(useSettingsStore.getState().uiScale).toBe(expected);
+  });
+
+  it.each([[Number.NaN], [Number.POSITIVE_INFINITY], [Number.NEGATIVE_INFINITY]])(
+    "ignores %d",
+    (scale) => {
+      useSettingsStore.getState().setUiScale(110);
+      useSettingsStore.getState().setUiScale(scale);
+      expect(useSettingsStore.getState().uiScale).toBe(110);
+    },
+  );
+});
+
+describe("addCommandButton", () => {
+  it("adds a button with its own fields only", () => {
+    const withExtra = { ...button(ID_A, "a"), extra: "<script>" };
+    useSettingsStore.getState().addCommandButton(withExtra);
+    expect(useSettingsStore.getState().commandButtons).toEqual([button(ID_A, "a")]);
+  });
+
+  it.each([
+    ["null", null],
+    ["a string", "uptime"],
+    ["an empty object", {}],
+    ["a button without a UUID", button("not-a-uuid", "a")],
+    ["a button with a bad color", { ...button(ID_A, "a"), color: "red" }],
+    ["a button with too long a name", button(ID_A, "x".repeat(33))],
+  ])("ignores %s", (_label, value) => {
+    useSettingsStore.setState({ commandButtons: [button(ID_B, "b")] });
+    useSettingsStore.getState().addCommandButton(value as CommandButton);
+    expect(useSettingsStore.getState().commandButtons).toEqual([button(ID_B, "b")]);
+  });
+
+  // The startup check keeps an id as it is stored, so the bar can hold one
+  // in uppercase; either side of the comparison may be the uppercase one.
+  it.each([
+    ["the same id", ID_A, ID_A],
+    ["its id in uppercase", ID_A, ID_A.toUpperCase()],
+    ["its id in lowercase", ID_A.toUpperCase(), ID_A],
+  ])("ignores a button when one in the bar has %s", (_label, inBar, added) => {
+    useSettingsStore.setState({ commandButtons: [button(inBar, "a")] });
+    useSettingsStore.getState().addCommandButton(button(added, "other", "ls\\r"));
+    expect(useSettingsStore.getState().commandButtons).toEqual([button(inBar, "a")]);
+  });
+
+  it("ignores a button when the bar is full", () => {
+    const full = Array.from({ length: 1000 }, (_, i) =>
+      button(`00000000-0000-4000-8000-${String(i).padStart(12, "0")}`, `b${String(i)}`),
+    );
+    useSettingsStore.setState({ commandButtons: full });
+    useSettingsStore.getState().addCommandButton(button(ID_A, "a"));
+    expect(useSettingsStore.getState().commandButtons).toHaveLength(1000);
+  });
+});
+
+describe("updateCommandButton", () => {
+  beforeEach(() => {
+    useSettingsStore.setState({ commandButtons: [button(ID_A, "a"), button(ID_B, "b")] });
+  });
+
+  it("changes the fields it is given", () => {
+    useSettingsStore.getState().updateCommandButton(ID_B, { name: "new", color: "#a6e3a1" });
+    expect(useSettingsStore.getState().commandButtons).toEqual([
+      button(ID_A, "a"),
+      { ...button(ID_B, "new"), color: "#a6e3a1" },
+    ]);
+  });
+
+  // The type keeps an id out of the changes; this is for a caller that
+  // passes one anyway, which would leave two buttons with one id.
+  it("keeps the id, and takes nothing but a button's own fields", () => {
+    const changes = { name: "new", id: ID_A, extra: "<script>" };
+    useSettingsStore.getState().updateCommandButton(ID_B, changes);
+    expect(useSettingsStore.getState().commandButtons).toEqual([
+      button(ID_A, "a"),
+      button(ID_B, "new"),
+    ]);
+  });
+
+  it.each([
+    ["an empty name", { name: "" }],
+    ["too long a name", { name: "x".repeat(33) }],
+    ["an empty command", { command: "" }],
+    ["too long a command", { command: "x".repeat(1025) }],
+    ["a bad color", { color: "red" }],
+    ["a name that is no string", { name: 7 as unknown as string }],
+    ["a name set to undefined", { name: undefined as unknown as string }],
+  ])("leaves the button as it is for %s", (_label, changes) => {
+    useSettingsStore.getState().updateCommandButton(ID_B, changes);
+    expect(useSettingsStore.getState().commandButtons).toEqual([
+      button(ID_A, "a"),
+      button(ID_B, "b"),
+    ]);
+  });
+
+  it("does nothing for an id that is not there", () => {
+    useSettingsStore.getState().updateCommandButton(ID_C, { name: "new" });
+    expect(useSettingsStore.getState().commandButtons).toEqual([
+      button(ID_A, "a"),
+      button(ID_B, "b"),
+    ]);
+  });
+});
+
+describe("duplicateCommandButton", () => {
+  const UUID = /^[\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12}$/;
+
+  /** Duplicate the only button, named `name`, and return the copy's name. */
+  function copyNameOf(name: string): string | undefined {
+    useSettingsStore.setState({ commandButtons: [button(ID_A, name)] });
+    useSettingsStore.getState().duplicateCommandButton(ID_A);
+    return useSettingsStore.getState().commandButtons[1]?.name;
+  }
+
+  it("adds a copy under a new id after the existing buttons", () => {
+    useSettingsStore.setState({ commandButtons: [button(ID_A, "a", "ls\\r"), button(ID_B, "b")] });
+    useSettingsStore.getState().duplicateCommandButton(ID_A);
+    const buttons = useSettingsStore.getState().commandButtons;
+    expect(buttons).toHaveLength(3);
+    const copyId = buttons[2]?.id;
+    expect(buttons[2]).toEqual({ ...button(ID_A, "a (copy)", "ls\\r"), id: copyId });
+    expect(copyId).toMatch(UUID);
+    expect([ID_A, ID_B]).not.toContain(copyId);
+  });
+
+  // A name that fits is kept as it is, a space at its end included.
+  it("does not touch a name that leaves room for the suffix", () => {
+    expect(copyNameOf("ls ")).toBe("ls  (copy)");
+  });
+
+  // Such a button can only come from a store filled past its own checks.
+  it("copies only a button's own fields, and nothing that is no button", () => {
+    const withExtra = { ...button(ID_A, "a"), extra: "<script>" };
+    useSettingsStore.setState({ commandButtons: [withExtra] });
+    useSettingsStore.getState().duplicateCommandButton(ID_A);
+    const afterCopy = useSettingsStore.getState().commandButtons;
+    expect(afterCopy).toHaveLength(2);
+    expect(Object.keys(afterCopy[1]).sort()).toEqual(["color", "command", "id", "name"]);
+
+    const malformed = { ...button(ID_B, "b"), color: "red" };
+    useSettingsStore.setState({ commandButtons: [malformed] });
+    useSettingsStore.getState().duplicateCommandButton(ID_B);
+    expect(useSettingsStore.getState().commandButtons).toEqual([malformed]);
+  });
+
+  it.each([
+    ["a name with room for the suffix", "x".repeat(25), "x".repeat(25) + " (copy)"],
+    ["a name one character too long for it", "x".repeat(26), "x".repeat(25) + " (copy)"],
+    ["a name of the full length", "x".repeat(32), "x".repeat(25) + " (copy)"],
+    ["a name cut at a space", "x".repeat(24) + " yz", "x".repeat(24) + " (copy)"],
+    // The emoji is two UTF-16 units, and the cut would fall between them.
+    ["a name cut at an emoji", "x".repeat(24) + "\u{1F600}yz", "x".repeat(24) + " (copy)"],
+  ])("shortens %s so that the copy's name fits", (_label, name, expected) => {
+    const copy = copyNameOf(name);
+    expect(copy).toBe(expected);
+    expect(copy?.length).toBeLessThanOrEqual(32);
+  });
+
+  it("makes a copy that is still there after a restart", async () => {
+    copyNameOf("x".repeat(32));
+    const before = useSettingsStore.getState().commandButtons;
+    expect(before).toHaveLength(2);
+    await useSettingsStore.persist.rehydrate();
+    expect(useSettingsStore.getState().commandButtons).toEqual(before);
+  });
+
+  it("does nothing when the bar is full", () => {
+    const full = Array.from({ length: 1000 }, (_, i) =>
+      button(`00000000-0000-4000-8000-${String(i).padStart(12, "0")}`, `b${String(i)}`),
+    );
+    useSettingsStore.setState({ commandButtons: full });
+    useSettingsStore.getState().duplicateCommandButton(full[0]?.id ?? "");
+    expect(useSettingsStore.getState().commandButtons).toHaveLength(1000);
+  });
+
+  it("does nothing for an id that is not there", () => {
+    useSettingsStore.setState({ commandButtons: [button(ID_A, "a")] });
+    useSettingsStore.getState().duplicateCommandButton(ID_B);
+    expect(useSettingsStore.getState().commandButtons).toEqual([button(ID_A, "a")]);
+  });
+});
+
 describe("importCommandButtons", () => {
   it("adds buttons after the existing ones", () => {
     useSettingsStore.setState({ commandButtons: [button(ID_A, "a")] });
@@ -840,9 +1326,52 @@ describe("importCommandButtons", () => {
     ["a no-break space", "uptime\u00a0-p"],
     ["a blank braille pattern", "uptime\u2800"],
     ["a lone surrogate", "uptime\ud800"],
+    ["a Khmer inherent vowel, which shows nothing", "uptime\u17b4"],
+    ["the other Khmer inherent vowel", "uptime\u17b5"],
   ])("skips a button whose name or command holds %s", (_label, text) => {
     const result = importCommandButtons([button(ID_A, text), button(ID_B, "b", text)]);
     expect(result).toEqual({ added: 0, skipped: 2 });
+  });
+
+  // Code points Unicode sets aside for characters that show nothing, but
+  // has not assigned yet: no category covers them, only that property does.
+  it.each([[0x2065], [0xfff0], [0xe0fff]])(
+    "skips a button whose name or command holds the unassigned invisible character %i",
+    (codePoint) => {
+      const text = `up${String.fromCodePoint(codePoint)}time`;
+      const result = importCommandButtons([button(ID_A, text), button(ID_B, "b", text)]);
+      expect(result).toEqual({ added: 0, skipped: 2 });
+    },
+  );
+
+  // An emoji's presentation selector, a Mongolian one and an ideographic one.
+  it.each([[0xfe0f], [0x180b], [0xe0100]])(
+    "keeps the variation selector %i in a name, but not in a command",
+    (codePoint) => {
+      const text = `a${String.fromCodePoint(codePoint)}`;
+      const result = importCommandButtons([button(ID_A, text), button(ID_B, "b", text)]);
+      expect(result).toEqual({ added: 1, skipped: 1 });
+      expect(useSettingsStore.getState().commandButtons[0]?.name).toBe(text);
+    },
+  );
+
+  it.each([
+    ["a space", " "],
+    ["spaces", "   "],
+    ["an emoji joiner", String.fromCodePoint(0x200d)],
+    [
+      "emoji joiners and spaces",
+      ` ${String.fromCodePoint(0x200d)} ${String.fromCodePoint(0x200d)}`,
+    ],
+  ])("skips a button whose name is nothing but %s", (_label, name) => {
+    const result = importCommandButtons([button(ID_A, name)]);
+    expect(result).toEqual({ added: 0, skipped: 1 });
+  });
+
+  it("keeps a name with spaces around what it shows", () => {
+    const result = importCommandButtons([button(ID_A, " a b ")]);
+    expect(result).toEqual({ added: 1, skipped: 0 });
+    expect(useSettingsStore.getState().commandButtons[0]?.name).toBe(" a b ");
   });
 
   it("keeps emoji sequences in a name, but not the joiner in a command", () => {
