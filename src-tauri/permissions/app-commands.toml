@@ -1,0 +1,120 @@
+# The app's own commands. This file is the app manifest: because it exists,
+# Tauri checks every app command against the capabilities, and a webview
+# that no capability grants `app-commands` to can call none of them.
+# Without it, any local webview could call every one.
+#
+# Keep the list in step with `generate_handler!` in `src/lib.rs`. A command
+# missing here is refused at run time ("not allowed by ACL"); the test
+# `app_commands_are_granted_to_the_main_window_only` fails on any difference.
+
+[[permission]]
+identifier = "app-commands"
+description = "Every command of the app itself. Meant for the main window only."
+commands.allow = [
+  # Terminal ready signal (all protocols)
+  "terminal_ready",
+  # Quitting, once every session is closed
+  "app_quit",
+  # PTY
+  "pty_spawn",
+  "pty_write",
+  "pty_resize",
+  "pty_kill",
+  # SSH
+  "ssh_connect",
+  "ssh_write",
+  "ssh_resize",
+  "ssh_disconnect",
+  "ssh_host_verify_response",
+  "ssh_kbd_interactive_response",
+  # Telnet
+  "telnet_connect",
+  "telnet_write",
+  "telnet_resize",
+  "telnet_disconnect",
+  # Folders
+  "folder_create",
+  "folder_list",
+  "folder_rename",
+  "folder_move",
+  "folder_delete",
+  # Sessions
+  "session_create",
+  "session_get",
+  "session_list_all",
+  "session_update",
+  "session_move",
+  "session_delete",
+  "session_search",
+  "session_data_fingerprint",
+  "session_connect",
+  # Reordering
+  "folder_reorder",
+  "session_reorder",
+  "folder_sort_alphabetically",
+  "session_sort_alphabetically",
+  "session_sort_by_hostname",
+  # Credential Profiles
+  "credential_profile_create",
+  "credential_profile_list",
+  "credential_profile_get_secret",
+  "credential_profile_update",
+  "credential_profile_delete",
+  # Bulk operations
+  "folder_apply_credential_profile",
+  "folder_bulk_edit_sessions",
+  # Visibility (multi-user)
+  "set_visibility",
+  # Session credentials (multi-user)
+  "set_session_credential",
+  "get_session_credential",
+  "bulk_set_session_credentials",
+  # Database config & migration
+  "app_restart",
+  "db_get_config",
+  "db_get_status",
+  "get_user_ident",
+  "set_user_ident",
+  "get_os_username",
+  "db_test_connection",
+  "db_create_database",
+  "db_pick_sqlite_path",
+  "db_save_config",
+  "db_export",
+  "data_export_file",
+  "db_import",
+  # Import from external tools
+  "import_mremoteng",
+  "import_securecrt",
+  "inspect_securecrt",
+  # Highlight profiles
+  "highlight_profile_create",
+  "highlight_profile_list",
+  "highlight_profile_get",
+  "highlight_profile_update",
+  "highlight_profile_delete",
+  "import_securecrt_highlights",
+  # Login Sequences
+  "login_sequence_create",
+  "login_sequence_list",
+  "login_sequence_get",
+  "login_sequence_update",
+  "login_sequence_delete",
+  "folder_apply_login_sequence",
+  # Session login sequences (multi-user)
+  "set_session_login_sequence",
+  "get_session_login_sequence",
+  "bulk_set_session_login_sequences",
+  # Session logging
+  "logging_get_config",
+  "logging_pick_directory",
+  "logging_save_config",
+  # Application logging
+  "app_logging_get_config",
+  "app_logging_pick_directory",
+  "app_logging_save_config",
+  # Connection settings
+  "connection_get_config",
+  "connection_save_config",
+  "connection_set_restrict_private_ips",
+]

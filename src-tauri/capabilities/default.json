@@ -4,6 +4,7 @@
   "description": "Capability for the main window",
   "windows": ["main"],
   "permissions": [
+    "app-commands",
     "core:default",
     "core:event:default",
     "core:window:allow-close",

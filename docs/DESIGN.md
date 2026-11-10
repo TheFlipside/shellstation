@@ -119,6 +119,8 @@ The application follows a clean separation between the Tauri/Rust backend and th
 
 Communication flow: The frontend invokes Tauri commands (e.g., `ssh_connect`, `session_create`, `broadcast_command`) via the `@tauri-apps/api`. The Rust backend processes these asynchronously and streams terminal output back to xterm.js instances via Tauri events.
 
+Only the main window may invoke these commands. They are listed in the app manifest, `src-tauri/permissions/app-commands.toml`, as one permission, `app-commands`, and `src-tauri/capabilities/default.json` grants it to the window `main` alone. Tauri checks an app's own commands against the capabilities only when the app has a manifest; without one, every webview the app opens can call all of them. With it, any other window or webview is refused, and so is a page that is not the app's own. A new command goes into both `generate_handler!` in `lib.rs` and the manifest, or the main window is refused it; a test in `lib.rs` fails when the two differ.
+
 ### 4.2 Database Schema (Core Tables)
 
 The schema is designed to be identical across SQLite and PostgreSQL, using only standard SQL types. Migrations are managed via sqlx-cli.
@@ -365,6 +367,8 @@ The repository follows standard Tauri 2.x conventions with a clear separation of
 | `src-tauri/src/db/`          | Database abstraction trait, SQLite and PostgreSQL implementations, migrations. |
 | `src-tauri/src/commands/`    | Tauri IPC command handlers (session CRUD, connect, broadcast, etc.).           |
 | `src-tauri/src/credentials/` | Keychain integration via keyring-rs.                                           |
+| `src-tauri/permissions/`     | App manifest: the app's own commands, as a permission for the capabilities.    |
+| `src-tauri/capabilities/`    | Which window may use which permission. Only the main window has any.           |
 | `src-tauri/src/import/`      | Parsers for mRemoteNG XML, SecureCRT XML, and CSV import.                      |
 | `src/components/`            | React UI components: SessionTree, TerminalTabs, CommandPalette, Settings.      |
 | `src/hooks/`                 | Custom React hooks for Tauri IPC, terminal lifecycle, and state management.    |

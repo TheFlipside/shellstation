@@ -1346,6 +1346,88 @@ mod tests {
         }
     }
 
+    /// The commands in `run`'s `generate_handler!`, read from this file. The
+    /// first occurrence is the one in `run`; the test module comes after it.
+    /// It expects one command per line, `//` comments only and no `]` inside
+    /// the list. Anything else makes the test below fail, not pass.
+    fn registered_commands() -> std::collections::BTreeSet<String> {
+        let (_, after) = include_str!("lib.rs")
+            .split_once("generate_handler![")
+            .unwrap();
+        let (list, _) = after.split_once(']').unwrap();
+        list.lines()
+            .map(|line| line.split("//").next().unwrap_or_default())
+            .map(|path| path.trim().trim_end_matches(','))
+            .filter(|path| !path.is_empty())
+            .map(|path| path.rsplit("::").next().unwrap_or(path).to_string())
+            .collect()
+    }
+
+    /// Tauri checks the app's own commands against the capabilities only
+    /// when the app has a manifest (`permissions/`). Without one, any local
+    /// webview can call every command. With one, a command that no
+    /// capability grants is refused, so a command registered in
+    /// `generate_handler!` but missing from the manifest would fail at run
+    /// time. This resolves what the build script wrote for
+    /// `generate_context!`, as Tauri does.
+    #[test]
+    fn app_commands_are_granted_to_the_main_window_only() {
+        use std::collections::{BTreeMap, BTreeSet};
+        use tauri::utils::acl::{
+            capability::Capability, manifest::Manifest, resolved::Resolved, ExecutionContext,
+            APP_ACL_KEY,
+        };
+
+        let acl: BTreeMap<String, Manifest> = serde_json::from_str(include_str!(concat!(
+            env!("OUT_DIR"),
+            "/acl-manifests.json"
+        )))
+        .unwrap();
+        let capabilities: BTreeMap<String, Capability> =
+            serde_json::from_str(include_str!(concat!(env!("OUT_DIR"), "/capabilities.json")))
+                .unwrap();
+        assert!(acl.contains_key(APP_ACL_KEY), "the app has no manifest");
+
+        let resolved = Resolved::resolve(
+            &acl,
+            capabilities,
+            tauri::utils::platform::Target::current(),
+        )
+        .unwrap();
+        assert!(resolved.has_app_acl);
+
+        // A plugin's commands are listed as `plugin:<name>|<command>`.
+        let granted: BTreeSet<String> = resolved
+            .allowed_commands
+            .keys()
+            .filter(|command| !command.starts_with("plugin:"))
+            .cloned()
+            .collect();
+        let registered = registered_commands();
+        assert!(registered.contains("ssh_connect"), "{registered:?}");
+        let not_granted: Vec<_> = registered.difference(&granted).collect();
+        let not_registered: Vec<_> = granted.difference(&registered).collect();
+        assert!(
+            not_granted.is_empty() && not_registered.is_empty(),
+            "missing from permissions/app-commands.toml: {not_granted:?}, \
+             missing from generate_handler!: {not_registered:?}"
+        );
+
+        for command in &granted {
+            for grant in &resolved.allowed_commands[command] {
+                assert_eq!(grant.context, ExecutionContext::Local, "{command}");
+                let windows: Vec<String> = grant.windows.iter().map(ToString::to_string).collect();
+                assert_eq!(windows, ["main"], "{command}");
+                assert!(grant.webviews.is_empty(), "{command}");
+            }
+        }
+        // Nothing takes one of them away again either.
+        assert!(resolved
+            .denied_commands
+            .keys()
+            .all(|command| command.starts_with("plugin:")));
+    }
+
     /// The rules for configured paths, which startup and saving the `SQLite`
     /// path in Settings share.
     #[test]
