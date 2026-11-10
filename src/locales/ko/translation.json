@@ -230,7 +230,7 @@
     "sshConnectionFailed": "SSH 연결 실패: {{message}}",
     "tabContextReconnect": "재연결",
     "reconnectHint": "[Enter 키를 눌러 재연결]",
-    "notLogged": "\"{{name}}\" 세션은 로그에 기록되지 않습니다. 로그 파일을 만들 수 없었습니다. 자세한 내용은 애플리케이션 로그에 있습니다."
+    "notLogged": "\"{{name}}\" 세션은 로그에 기록되지 않습니다. 로그 파일을 만들 수 없었거나 로그 파일에 쓸 수 없었습니다. 자세한 내용은 애플리케이션 로그에 있습니다."
   },
   "hostVerify": {
     "title": "호스트 키 확인",

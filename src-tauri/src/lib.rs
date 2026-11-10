@@ -1051,10 +1051,11 @@ pub fn run() {
                 app_config.logging.filename_format.clone(),
             );
             // A session that goes on without a log says so in its tab, which
-            // shows a toast (`Terminal.tsx`). The logger calls this under
-            // its lock, which the output of every session waits for, so the
-            // event is sent from a task of its own: sending takes locks of
-            // Tauri's and hands work to the webview.
+            // shows a toast (`Terminal.tsx`). The logger calls this from a
+            // log's writer thread, where a session's reader waits for its
+            // log, or under its lock, which the output of every session
+            // waits for, so the event is sent from a task of its own:
+            // sending takes locks of Tauri's and hands work to the webview.
             let notify_handle = app.handle().clone();
             log_manager.notify_when_given_up(move |id| {
                 let handle = notify_handle.clone();

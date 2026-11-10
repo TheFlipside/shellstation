@@ -230,7 +230,7 @@
     "sshConnectionFailed": "Connessione SSH fallita: {{message}}",
     "tabContextReconnect": "Riconnetti",
     "reconnectHint": "[Premi Invio per riconnetterti]",
-    "notLogged": "La sessione \"{{name}}\" non viene registrata: non è stato possibile creare il suo file di registro. Il registro dell'applicazione contiene i dettagli."
+    "notLogged": "La sessione \"{{name}}\" non viene registrata: non è stato possibile creare il suo file di registro o scrivervi. Il registro dell'applicazione contiene i dettagli."
   },
   "hostVerify": {
     "title": "Verifica chiave dell'host",

@@ -602,9 +602,12 @@ pub async fn establish_ssh_connection(
                             | ChannelMsg::ExtendedData { ref data, ext: 1 },
                         ) => {
                             if let Some(ref lg) = logger {
-                                if let Ok(mut mgr) = lg.lock() {
-                                    mgr.write_log(&session_id, data.as_ref());
-                                }
+                                crate::session_logger::log_output_async(
+                                    lg,
+                                    &session_id,
+                                    data.as_ref(),
+                                )
+                                .await;
                             }
                             let payload = base64::prelude::BASE64_STANDARD.encode(data.as_ref());
                             if app.emit(&event_name, &payload).is_err() {

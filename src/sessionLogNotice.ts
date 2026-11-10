@@ -4,9 +4,12 @@ import { useToastStore } from "./stores/toastStore";
 
 /**
  * The event the backend sends to a session's tab when session logging is on
- * but this session has no log: its file could not be created. The backend
- * sends it once, with the session's first output, and without a payload; the
- * reason is in the application log.
+ * but this session has no log: its file or its directory could not be
+ * created, too many logs are still being written, or the log was given up
+ * later, because its file stopped taking writes. The backend sends it once
+ * and without a payload: with the session's first output for a log that
+ * could not be created, and later for one that was given up. The reason is
+ * in the application log.
  */
 export function sessionNotLoggedEvent(sessionId: string): string {
   return `terminal-log-failed-${sessionId}`;

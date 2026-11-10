@@ -153,9 +153,7 @@ impl PtyManager {
                     Ok(n) => {
                         let data = &buf[..n];
                         if let Some(ref lg) = logger {
-                            if let Ok(mut mgr) = lg.lock() {
-                                mgr.write_log(&session_id, data);
-                            }
+                            crate::session_logger::log_output(lg, &session_id, data);
                         }
                         let payload = base64_encode(data);
                         if app_handle.emit(&event_name, &payload).is_err() {

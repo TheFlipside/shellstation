@@ -364,10 +364,12 @@ async fn telnet_io_loop(
 
                         // Emit clean terminal data to frontend.
                         if !out_buf.is_empty() {
+                            // A log that is far behind is waited for
+                            // here, and this task does nothing else
+                            // meanwhile: it sends no keys either.
                             if let Some(ref lg) = logger {
-                                if let Ok(mut mgr) = lg.lock() {
-                                    mgr.write_log(session_id, &out_buf);
-                                }
+                                crate::session_logger::log_output_async(lg, session_id, &out_buf)
+                                    .await;
                             }
                             let payload = base64::prelude::BASE64_STANDARD.encode(&out_buf);
                             if app.emit(event_name, &payload).is_err() {

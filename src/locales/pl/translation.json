@@ -230,7 +230,7 @@
     "sshConnectionFailed": "Błąd połączenia SSH: {{message}}",
     "tabContextReconnect": "Połącz ponownie",
     "reconnectHint": "[Naciśnij Enter, aby połączyć ponownie]",
-    "notLogged": "Sesja „{{name}}” nie jest zapisywana w dzienniku: nie udało się utworzyć pliku logu. Szczegóły są w dzienniku aplikacji."
+    "notLogged": "Sesja „{{name}}” nie jest zapisywana w dzienniku: nie udało się utworzyć pliku logu lub zapisać do niego. Szczegóły są w dzienniku aplikacji."
   },
   "hostVerify": {
     "title": "Weryfikacja klucza hosta",

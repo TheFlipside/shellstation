@@ -230,7 +230,7 @@
     "sshConnectionFailed": "SSH-verbinding mislukt: {{message}}",
     "tabContextReconnect": "Opnieuw verbinden",
     "reconnectHint": "[Druk op Enter om opnieuw te verbinden]",
-    "notLogged": "Sessie \"{{name}}\" wordt niet gelogd: het logbestand kon niet worden aangemaakt. Het applicatielogboek bevat de details."
+    "notLogged": "Sessie \"{{name}}\" wordt niet gelogd: het logbestand kon niet worden aangemaakt of er kon niet naar worden geschreven. Het applicatielogboek bevat de details."
   },
   "hostVerify": {
     "title": "Hostsleutel verifiëren",

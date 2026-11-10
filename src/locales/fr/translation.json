@@ -230,7 +230,7 @@
     "sshConnectionFailed": "Échec de la connexion SSH : {{message}}",
     "tabContextReconnect": "Reconnecter",
     "reconnectHint": "[Appuyez sur Entrée pour reconnecter]",
-    "notLogged": "La session « {{name}} » n'est pas journalisée : son fichier journal n'a pas pu être créé. Le journal de l'application contient les détails."
+    "notLogged": "La session « {{name}} » n'est pas journalisée : son fichier journal n'a pas pu être créé ou écrit. Le journal de l'application contient les détails."
   },
   "hostVerify": {
     "title": "Vérifier la clé de l'hôte",

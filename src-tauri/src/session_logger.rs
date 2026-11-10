@@ -1,20 +1,36 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::fs::File;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
+use std::thread;
+use std::time::Duration;
 
 use chrono::{Datelike, Local, Timelike};
 use tracing::{info, warn};
 
 use crate::private_fs;
 
-/// A log entry is either waiting for its first write (Pending) or actively
-/// writing to a file (Active).  Pending entries never touch the filesystem,
-/// so failed connections leave no empty log files behind.
+/// What the manager keeps for a session's log. The file is not here: it
+/// belongs to the log's writer, a thread of its own (see [`LogWriter`]), so
+/// that nothing done under the lock all sessions share touches the file
+/// system.
 enum LogEntry {
-    /// The name the log is to get, but no file created yet. The file may
-    /// end up with a number after the name: see [`create_log_file`].
+    /// A writer has the log. The session's text is handed to it here.
+    Writing(LogQueue),
+    /// The log could not even be handed to a writer when the session
+    /// connected. Kept so that the session's first output says so in its
+    /// tab, as a writer does for a file that cannot be created: the readers
+    /// hold output back until the tab has said that it is listening.
+    Unavailable,
+}
+
+/// Where a log's writer is with the file.
+enum LogFile {
+    /// The name the log is to get, but no file created yet: that waits for
+    /// the first text, so failed connections leave no empty log files
+    /// behind. The file may end up with a number after the name: see
+    /// [`create_log_file`].
     Pending(PathBuf),
     /// File created on first write.
     Active {
@@ -22,15 +38,549 @@ enum LogEntry {
         /// Whether the last write to the file failed: see [`write_text`].
         after_failed_write: bool,
     },
-    /// The log could not even be prepared when the session connected. Kept
-    /// so that the session's first output says so in its tab, as it does
-    /// for a file that cannot be created: the readers hold output back
-    /// until the tab has said that it is listening.
+    /// The log directory could not be prepared, or the file not created.
+    /// The session's first output says so in its tab.
     Unavailable,
 }
 
 /// Called with the connection ID of a session whose log is given up.
-type GivenUpNotifier = Box<dyn Fn(&str) + Send>;
+type GivenUpNotifier = Arc<dyn Fn(&str) + Send + Sync>;
+
+/// How much text may wait for a log's writer, in bytes, what the writer has
+/// taken and not yet written included, before the session waits for the
+/// writer. A session's output is handed to the writer and does not wait for
+/// the file, so text collects while a write takes its time. With more than
+/// this waiting, the session's own reader waits until the writer has caught
+/// up (see [`LogBehind`]): a log directory that is slow then slows the
+/// sessions that are logged there by megabytes, as it did before each log
+/// had a writer, and nothing is lost. No other session waits. It also bounds
+/// the memory a log can take while its directory does not answer: this much
+/// text and one output of the session, in buffers that can be up to twice as
+/// large as the text they hold.
+const MAX_WAITING_BYTES: usize = 1024 * 1024;
+
+/// How long a session waits for a log that is behind and gets no further:
+/// with nothing written in this time, the log is given up, and the session
+/// goes on without one. A session's output is thus held up by its log once,
+/// for this long, when its log directory stops answering.
+const STALL_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// How much a writer hands to the file in one write: the outputs of the
+/// session that wait, together, as far as they fit in this, and a single
+/// output whatever its size. A file that is slow to write to then takes few
+/// writes rather than one for each output. After each write the session is
+/// told how far the writer has got, so that one waiting for it goes on as
+/// soon as there is room, and a write that is slow but gets somewhere is not
+/// taken for one that does not: this much in [`STALL_TIMEOUT`] is enough. A
+/// write that fails loses no more than this, or the one output.
+const WRITE_PIECE_BYTES: usize = 64 * 1024;
+
+/// How long a test waits for a log's writer before it fails.
+#[cfg(test)]
+const TEST_WAIT: Duration = Duration::from_secs(30);
+
+/// Lock a mutex that a panic elsewhere may have poisoned: what these locks
+/// guard stays usable.
+fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// What a session's reader and the writer of its log share. Its lock is
+/// held only to add text or to take it, never while the file is written.
+#[derive(Default)]
+struct LogShared {
+    state: Mutex<LogState>,
+    /// Told when there is text to write, when some of it has been written,
+    /// and when the log is closed or given up.
+    changed: Condvar,
+}
+
+#[derive(Default)]
+struct LogState {
+    /// The outputs of the session, stripped, that the writer has not taken
+    /// yet, the oldest first. Small ones are joined as they come (see
+    /// [`LogQueue::hand_on`]), so that what the queue takes besides the text
+    /// stays small however small the outputs are.
+    queue: VecDeque<String>,
+    /// How many bytes `queue` holds.
+    queued: usize,
+    /// How many bytes the writer has taken and is writing.
+    writing: usize,
+    /// Whether the session is done with the log: the writer writes what is
+    /// left and ends.
+    closed: bool,
+    /// Whether the log has been given up: by the session's side, when it
+    /// hands text on or waits for the writer, or by the writer. Whichever
+    /// sets it tells the window, so that is done once.
+    given_up: bool,
+    /// Whether the writer has nothing to do: it waits for text, or has
+    /// ended. For tests, which wait for it.
+    #[cfg(test)]
+    idle: bool,
+}
+
+impl LogState {
+    /// How many bytes of text the file has not taken yet.
+    fn waiting(&self) -> usize {
+        self.queued + self.writing
+    }
+
+    /// Take what goes into the next write from the front of the queue: see
+    /// [`WRITE_PIECE_BYTES`]. `None` when nothing waits.
+    fn take_piece(&mut self) -> Option<String> {
+        let mut piece = self.queue.pop_front()?;
+        while let Some(next) = self.queue.front() {
+            if piece.len() + next.len() > WRITE_PIECE_BYTES {
+                break;
+            }
+            piece.push_str(next);
+            self.queue.pop_front();
+        }
+        self.queued = self.queued.saturating_sub(piece.len());
+        self.writing = piece.len();
+        Some(piece)
+    }
+
+    /// Drop the text that waits.
+    fn drop_text(&mut self) {
+        self.queue = VecDeque::new();
+        self.queued = 0;
+        self.writing = 0;
+    }
+}
+
+/// A session's end of its log: where its text is handed to the writer.
+/// Dropping it closes the log, once the writer has written what it has.
+struct LogQueue(Arc<LogShared>);
+
+/// What became of text handed to a writer.
+enum Handed {
+    /// The writer has it, or will take it.
+    Queued,
+    /// As [`Handed::Queued`], and more than [`MAX_WAITING_BYTES`] wait now:
+    /// the session is to wait for the writer before it hands on more.
+    Behind,
+    /// The log was given up before, and that was said then.
+    GivenUp,
+    /// More than [`MAX_WAITING_BYTES`] waited already, so the session did
+    /// not wait for the writer when it was to: the log is given up here,
+    /// which is still to be said.
+    TooMuchWaiting,
+}
+
+impl LogQueue {
+    /// Hand `text`, an output of the session, to the writer. It joins the
+    /// last output that waits if the two fit in one write (see
+    /// [`WRITE_PIECE_BYTES`]): a host that sends a byte at a time while the
+    /// log directory does not answer would otherwise have each byte cost a
+    /// buffer of its own, many times what the limit on waiting text counts.
+    fn hand_on(&self, text: String) -> Handed {
+        let mut state = lock(&self.0.state);
+        if state.given_up {
+            return Handed::GivenUp;
+        }
+        if text.is_empty() {
+            return Handed::Queued;
+        }
+        if state.waiting() > MAX_WAITING_BYTES {
+            state.given_up = true;
+            return Handed::TooMuchWaiting;
+        }
+        state.queued += text.len();
+        match state.queue.back_mut() {
+            Some(last) if last.len() + text.len() <= WRITE_PIECE_BYTES => last.push_str(&text),
+            _ => state.queue.push_back(text),
+        }
+        let behind = state.waiting() > MAX_WAITING_BYTES;
+        drop(state);
+        self.0.changed.notify_all();
+        if behind {
+            Handed::Behind
+        } else {
+            Handed::Queued
+        }
+    }
+}
+
+impl Drop for LogQueue {
+    fn drop(&mut self) {
+        lock(&self.0.state).closed = true;
+        self.0.changed.notify_all();
+    }
+}
+
+/// A log that is behind its session: more than [`MAX_WAITING_BYTES`] of the
+/// session's text wait to be written. The session's reader waits here until
+/// the writer has caught up, without the lock all sessions share, so that
+/// only the session whose log is slow is held up.
+pub struct LogBehind {
+    shared: Arc<LogShared>,
+    connection_id: String,
+    on_given_up: Option<GivenUpNotifier>,
+    stall_timeout: Duration,
+}
+
+impl LogBehind {
+    /// Wait until no more than [`MAX_WAITING_BYTES`] wait to be written, or
+    /// the log is closed or given up. A log whose writer completes no write
+    /// for as long as the stall timeout is given up here: the session goes on
+    /// without one, and the window is told. What waits is left to the
+    /// writer: if the log directory answers again, the writer writes it,
+    /// and the log ends there.
+    ///
+    /// This blocks: a reader that is a task waits through
+    /// [`log_output_async`].
+    fn wait(self) {
+        let mut state = lock(&self.shared.state);
+        loop {
+            let waiting = state.waiting();
+            if state.given_up || state.closed || waiting <= MAX_WAITING_BYTES {
+                return;
+            }
+            // Only the writer changes what waits while the session is here,
+            // and only downwards.
+            let (next, wait) = self
+                .shared
+                .changed
+                .wait_timeout_while(state, self.stall_timeout, |state| {
+                    !state.given_up && !state.closed && state.waiting() == waiting
+                })
+                .unwrap_or_else(PoisonError::into_inner);
+            state = next;
+            if wait.timed_out() {
+                break;
+            }
+        }
+        state.given_up = true;
+        drop(state);
+        self.shared.changed.notify_all();
+        warn!(
+            connection_id = %self.connection_id,
+            timeout = ?self.stall_timeout,
+            "The session log takes no writes; this session is no longer logged"
+        );
+        if let Some(notify) = &self.on_given_up {
+            notify(&self.connection_id);
+        }
+    }
+}
+
+/// Hand the output of a session to its log, for a reader that is a thread of
+/// its own. It takes the lock all sessions share for as long as stripping
+/// the output takes, and touches no file. Should the log be behind, it then
+/// waits for the log's writer, without that lock: see [`LogBehind`].
+pub fn log_output(logger: &Mutex<SessionLogManager>, connection_id: &str, data: &[u8]) {
+    let behind = lock(logger).write_log(connection_id, data);
+    if let Some(behind) = behind {
+        behind.wait();
+    }
+}
+
+/// [`log_output`] for a reader that is a task: the wait for a log that is
+/// behind is on a blocking thread, so that it holds up this task and none of
+/// the runtime's threads.
+pub async fn log_output_async(logger: &Mutex<SessionLogManager>, connection_id: &str, data: &[u8]) {
+    let behind = lock(logger).write_log(connection_id, data);
+    if let Some(behind) = behind {
+        // An error is a wait that panicked or a runtime that is shutting
+        // down: the session goes on either way.
+        if let Err(e) = tokio::task::spawn_blocking(move || behind.wait()).await {
+            warn!(error = %e, "Waiting for a session log failed");
+        }
+    }
+}
+
+/// Counts the log writers that are still running, so that quitting can wait
+/// until the logs are written: see [`SessionLogManager::close_all`].
+#[derive(Default)]
+pub struct LogWriters {
+    running: Mutex<usize>,
+    all_done: Condvar,
+}
+
+/// How many log writers may run at a time. Each session with a log has one,
+/// and at most 300 sessions are open at a time (100 each of SSH, Telnet and
+/// local shell), so this is reached only when writers outlive their
+/// sessions: a writer stuck in a write to a log directory that does not
+/// answer stays, with the text it has, until the write returns. Sessions
+/// opened one after the other could otherwise leave any number of them
+/// behind. With every one of them stuck and holding all the text a log may
+/// have waiting (see [`MAX_WAITING_BYTES`]), that is somewhat over half a
+/// gigabyte of text, in buffers of up to twice that.
+const MAX_WRITERS: usize = 512;
+
+impl LogWriters {
+    /// Count one more writer, until what is returned is dropped. `None`
+    /// when [`MAX_WRITERS`] are running already.
+    fn count(self: &Arc<Self>) -> Option<RunningWriter> {
+        let mut running = lock(&self.running);
+        if *running >= MAX_WRITERS {
+            return None;
+        }
+        *running += 1;
+        Some(RunningWriter(Arc::clone(self)))
+    }
+
+    /// Wait until every writer has ended, for at most `timeout`. Returns
+    /// whether they all have. A writer ends once its log is closed and
+    /// written, so this is for when the logs have been closed.
+    pub fn wait_until_done(&self, timeout: Duration) -> bool {
+        let (running, _) = self
+            .all_done
+            .wait_timeout_while(lock(&self.running), timeout, |running| *running > 0)
+            .unwrap_or_else(PoisonError::into_inner);
+        *running == 0
+    }
+}
+
+/// One writer among those [`LogWriters`] counts, for as long as it lives.
+struct RunningWriter(Arc<LogWriters>);
+
+impl Drop for RunningWriter {
+    fn drop(&mut self) {
+        let mut running = lock(&self.0.running);
+        *running = running.saturating_sub(1);
+        if *running == 0 {
+            self.0.all_done.notify_all();
+        }
+    }
+}
+
+/// Writes one session's log, on a thread of its own, so that no session's
+/// output waits for the file system under the lock all sessions share: a
+/// log directory that is slow, such as one on a network share that does not
+/// answer, holds up this thread, and the session whose log it is once that
+/// log is far behind (see [`LogBehind`]), and nothing else. It makes sure
+/// the log directory is there when the session connects, creates the file
+/// on the session's first text, writes the text that waits a piece at a
+/// time (see [`WRITE_PIECE_BYTES`]), and ends when the session has closed
+/// the log and nothing is left to write, or when it has to give the log up.
+struct LogWriter {
+    connection_id: String,
+    shared: Arc<LogShared>,
+    on_given_up: Option<GivenUpNotifier>,
+    /// Counts this writer among the running ones until it ends.
+    _running: RunningWriter,
+    /// Held by a test for as long as writing is to take.
+    #[cfg(test)]
+    write_gate: Arc<Mutex<()>>,
+}
+
+/// A writer that ends in a panic gives its log up on the way out: nothing
+/// would take the session's text any more, and nothing else would say that
+/// the session is no longer logged.
+impl Drop for LogWriter {
+    fn drop(&mut self) {
+        if thread::panicking() {
+            warn!(
+                connection_id = %self.connection_id,
+                "The session log's writer panicked; this session is no longer logged"
+            );
+            self.give_up();
+        }
+    }
+}
+
+impl LogWriter {
+    fn run(self, log_dir: &Path, base: PathBuf) {
+        self.write_until_closed(log_dir, base);
+        #[cfg(test)]
+        {
+            lock(&self.shared.state).idle = true;
+            self.shared.changed.notify_all();
+        }
+    }
+
+    fn write_until_closed(&self, log_dir: &Path, base: PathBuf) {
+        let mut log = match prepare_log_dir(&self.connection_id, log_dir, &base) {
+            Ok(()) => LogFile::Pending(base),
+            Err(e) => {
+                warn!(
+                    connection_id = %self.connection_id,
+                    error = %e,
+                    "Failed to prepare session log; this session is not logged"
+                );
+                LogFile::Unavailable
+            }
+        };
+
+        while let Some(text) = self.next_text() {
+            // Promote Pending → Active on first real data.
+            if let LogFile::Pending(base) = &log {
+                log = match create_log_file(base) {
+                    Ok((file, path)) => {
+                        info!(
+                            connection_id = %self.connection_id,
+                            path = %path.display(),
+                            "Session log file created"
+                        );
+                        LogFile::Active {
+                            file,
+                            after_failed_write: false,
+                        }
+                    }
+                    Err(e) => {
+                        warn!(
+                            connection_id = %self.connection_id,
+                            path = %base.display(),
+                            error = %e,
+                            "Failed to create session log file; this session is not logged"
+                        );
+                        LogFile::Unavailable
+                    }
+                };
+            }
+            let LogFile::Active {
+                file,
+                after_failed_write,
+            } = &mut log
+            else {
+                // The reason is in the application log by now. Trying again
+                // with each output would also mean up to a thousand failed
+                // creates per output where every name is taken.
+                self.give_up();
+                return;
+            };
+
+            self.write(file, after_failed_write, &text);
+        }
+
+        match log {
+            LogFile::Active { mut file, .. } => {
+                if let Err(e) = file.flush() {
+                    warn!(
+                        connection_id = %self.connection_id,
+                        error = %e,
+                        "Failed to flush session log"
+                    );
+                }
+                info!(connection_id = %self.connection_id, "Session log closed");
+            }
+            LogFile::Pending(_) => {
+                info!(
+                    connection_id = %self.connection_id,
+                    "Session log closed (no data written, no file created)"
+                );
+            }
+            LogFile::Unavailable => {}
+        }
+    }
+
+    /// Write a piece of the session's text to the log. One that cannot be
+    /// written is lost, and said in the application log.
+    fn write(&self, file: &mut File, after_failed_write: &mut bool, piece: &str) {
+        #[cfg(test)]
+        let _writing = lock(&self.write_gate);
+        if let Err(e) = write_text(file, after_failed_write, piece) {
+            warn!(
+                connection_id = %self.connection_id,
+                error = %e,
+                "Failed to write session log"
+            );
+        }
+    }
+
+    /// Wait for text of the session and take the next piece of it to write:
+    /// see [`WRITE_PIECE_BYTES`]. `None` once the session has closed the log
+    /// and nothing is left.
+    fn next_text(&self) -> Option<String> {
+        let mut state = lock(&self.shared.state);
+        // What was taken before is written, or could not be: a session
+        // that waits for the writer is told that less waits now.
+        if std::mem::take(&mut state.writing) > 0 {
+            self.shared.changed.notify_all();
+        }
+        loop {
+            if let Some(piece) = state.take_piece() {
+                return Some(piece);
+            }
+            if state.closed {
+                return None;
+            }
+            #[cfg(test)]
+            {
+                state.idle = true;
+                self.shared.changed.notify_all();
+            }
+            state = self
+                .shared
+                .changed
+                .wait(state)
+                .unwrap_or_else(PoisonError::into_inner);
+            #[cfg(test)]
+            {
+                state.idle = false;
+            }
+        }
+    }
+
+    /// Give the log up: drop the text that waits, have the session's side
+    /// hand on no more and wait no longer, and tell the window, unless that
+    /// side gave the log up first and has told it.
+    fn give_up(&self) {
+        let said = {
+            let mut state = lock(&self.shared.state);
+            state.drop_text();
+            std::mem::replace(&mut state.given_up, true)
+        };
+        self.shared.changed.notify_all();
+        if !said {
+            if let Some(notify) = &self.on_given_up {
+                notify(&self.connection_id);
+            }
+        }
+    }
+}
+
+/// Make sure the log directory is there for the log at `path`, restricted
+/// to its owner where it can be.
+fn prepare_log_dir(connection_id: &str, log_dir: &Path, path: &Path) -> Result<(), String> {
+    // A missing log directory is created for its owner alone (0700 on
+    // Unix, an access list of its own on Windows, as part of the create),
+    // so it is never open to others.
+    private_fs::create_private_dir(log_dir)
+        .map_err(|e| format!("Failed to create log directory: {e}"))?;
+    // One that was already there is restricted as before on Unix, as
+    // far as it can be, and left as it is on Windows. A directory that
+    // is not the user's, or on a file system without Unix modes, is
+    // still used: each log file is created owner-only on its own. A
+    // directory with a link at its name is still used as well, but the
+    // link is not followed to restrict what it leads to, since the
+    // directory may be where others can put one. That goes for the
+    // default directory too, as it does for the application log. Said
+    // in the application log for each session, as the line for a
+    // network share is, since nothing else tells the user.
+    if let Err(e) = private_fs::restrict_dir_to_owner_nofollow(log_dir) {
+        info!(
+            connection_id = %connection_id,
+            error = %e,
+            "The session log directory could not be restricted to its owner: \
+             others may see the names of the logs in it, but cannot open them"
+        );
+    }
+
+    // The log stays in the log directory because its name holds no path
+    // separator (see `log_path`), and it is never written through a link
+    // because it is created rather than opened (see `create_log_file`).
+    // Neither covers the log directory itself: someone able to replace
+    // it, or a directory above it, with a link decides where it leads.
+
+    // Said in the application log, as nothing else tells the user.
+    if private_fs::on_network_share(path) {
+        info!(
+            connection_id = %connection_id,
+            "The session log directory is on a network share: the log gets \
+             the access list of the directory there, not one of its own"
+        );
+    }
+
+    info!(
+        connection_id = %connection_id,
+        path = %path.display(),
+        "Session log prepared (file created on first write)"
+    );
+    Ok(())
+}
 
 /// The event that tells a session's tab that the session is not logged,
 /// although session logging is on. It carries nothing: the reason may name
@@ -178,6 +728,14 @@ pub struct SessionLogManager {
     /// Tells the window that a session goes on without a log: see
     /// [`Self::notify_when_given_up`].
     on_given_up: Option<GivenUpNotifier>,
+    /// Counts the writers of this manager's logs that are still running.
+    writers: Arc<LogWriters>,
+    /// How long a session waits for a log that is behind and gets no
+    /// further: [`STALL_TIMEOUT`], and less in tests.
+    stall_timeout: Duration,
+    /// Held by a test for as long as writing a log is to take.
+    #[cfg(test)]
+    write_gate: Arc<Mutex<()>>,
 }
 
 impl SessionLogManager {
@@ -188,37 +746,51 @@ impl SessionLogManager {
             log_dir,
             filename_format,
             on_given_up: None,
+            writers: Arc::default(),
+            stall_timeout: STALL_TIMEOUT,
+            #[cfg(test)]
+            write_gate: Arc::default(),
         }
     }
 
     /// Have `notify` called with the connection ID of each session whose log
     /// is given up, so that the window can say that the session is not
     /// logged; the application log alone is not where a user looks. It is
-    /// called once per session, on the session's first output, which is when
-    /// the log would have been created. That goes for a log that could not
-    /// be prepared at connect as well. By then the tab is listening, as the
-    /// readers hold output back until it says so. They give up waiting after
-    /// a few seconds, though: a tab that is later than that can miss the
-    /// notice, as it misses the output.
+    /// called once per session. For a log that could not be prepared at
+    /// connect, or whose file cannot be created, that is on the session's
+    /// first output, which is when the log would have been created. By then
+    /// the tab is listening, as the readers hold output back until it says
+    /// so. They give up waiting after a few seconds, though: a tab that is
+    /// later than that can miss the notice, as it misses the output. For a
+    /// log that is behind its session and gets no further, it is when the
+    /// session has waited for it in vain: see [`LogBehind`].
     ///
-    /// `notify` runs inside [`write_log`], and so under the lock all sessions
-    /// share: it must not wait for anything, nor use the logger. Whatever
-    /// takes time, such as sending an event, it has to hand on.
+    /// `notify` runs on the log's writer thread, where a session waits for
+    /// its log, or inside [`write_log`], and so at times under the lock all
+    /// sessions share: it must not wait for anything, nor use the logger.
+    /// Whatever takes time, such as sending an event, it has to hand on. Set
+    /// it before the first log is opened: a log keeps what was set when it
+    /// was opened.
     ///
     /// [`write_log`]: Self::write_log
-    pub fn notify_when_given_up(&mut self, notify: impl Fn(&str) + Send + 'static) {
-        self.on_given_up = Some(Box::new(notify));
+    pub fn notify_when_given_up(&mut self, notify: impl Fn(&str) + Send + Sync + 'static) {
+        self.on_given_up = Some(Arc::new(notify));
     }
 
     /// Prepare a log for a new session connection.
     ///
-    /// Validates the path and stores it as [`LogEntry::Pending`].  The actual
-    /// file is created lazily on the first [`write_log`] call, so failed
-    /// connections never leave empty log files on disk.
+    /// Works out the name the log is to get and hands it to a writer thread
+    /// of its own, which makes sure the log directory is there. Nothing here
+    /// touches the file system, so a log directory that is slow holds up
+    /// neither this connect nor the output of other sessions. The file is
+    /// created by the writer on the first [`write_log`] call that has text,
+    /// so failed connections never leave empty log files on disk.
     ///
-    /// A log that cannot be prepared is an error, and the session goes on
-    /// without one. It is stored as [`LogEntry::Unavailable`], for the
-    /// first output to report: see [`Self::notify_when_given_up`].
+    /// A log that cannot be handed to a writer is an error, and the session
+    /// goes on without one. It is stored as [`LogEntry::Unavailable`], for
+    /// the first output to report: see [`Self::notify_when_given_up`]. A log
+    /// directory that cannot be created is no error here: the writer finds
+    /// out, and the first output reports that as well.
     ///
     /// [`write_log`]: Self::write_log
     pub fn open_log(&mut self, connection_id: &str, session_name: &str) -> Result<(), String> {
@@ -226,8 +798,8 @@ impl SessionLogManager {
             return Ok(());
         }
 
-        let (entry, result) = match self.prepare_log(connection_id, session_name) {
-            Ok(path) => (LogEntry::Pending(path), Ok(())),
+        let (entry, result) = match self.start_writer(connection_id, session_name) {
+            Ok(queue) => (LogEntry::Writing(queue), Ok(())),
             Err(e) => (LogEntry::Unavailable, Err(e)),
         };
         self.entries.insert(
@@ -237,104 +809,83 @@ impl SessionLogManager {
         result
     }
 
-    /// Make sure the log directory is there and work out the name the log
-    /// of this session is to get.
-    fn prepare_log(&self, connection_id: &str, session_name: &str) -> Result<PathBuf, String> {
-        // A missing log directory is created for its owner alone (0700 on
-        // Unix, an access list of its own on Windows, as part of the create),
-        // so it is never open to others.
-        private_fs::create_private_dir(&self.log_dir)
-            .map_err(|e| format!("Failed to create log directory: {e}"))?;
-        // One that was already there is restricted as before on Unix, as
-        // far as it can be, and left as it is on Windows. A directory that
-        // is not the user's, or on a file system without Unix modes, is
-        // still used: each log file is created owner-only on its own. A
-        // directory with a link at its name is still used as well, but the
-        // link is not followed to restrict what it leads to, since the
-        // directory may be where others can put one. That goes for the
-        // default directory too, as it does for the application log. Said
-        // in the application log for each session, as the line for a
-        // network share is, since nothing else tells the user.
-        if let Err(e) = private_fs::restrict_dir_to_owner_nofollow(&self.log_dir) {
-            info!(
-                connection_id = %connection_id,
-                error = %e,
-                "The session log directory could not be restricted to its owner: \
-                 others may see the names of the logs in it, but cannot open them"
-            );
-        }
-
-        // The log stays in the log directory because its name holds no path
-        // separator (see `log_path`), and it is never written through a link
-        // because it is created rather than opened (see `create_log_file`).
-        // Neither covers the log directory itself: someone able to replace
-        // it, or a directory above it, with a link decides where it leads.
+    /// Work out the name the log of this session is to get and start the
+    /// thread that writes it.
+    fn start_writer(&self, connection_id: &str, session_name: &str) -> Result<LogQueue, String> {
         let path = self.log_path(session_name)?;
-
-        // Said in the application log, as nothing else tells the user.
-        if private_fs::on_network_share(&path) {
-            info!(
-                connection_id = %connection_id,
-                "The session log directory is on a network share: the log gets \
-                 the access list of the directory there, not one of its own"
-            );
-        }
-
-        info!(
-            connection_id = %connection_id,
-            path = %path.display(),
-            "Session log prepared (file created on first write)"
-        );
-        Ok(path)
+        let running = self.writers.count().ok_or_else(|| {
+            format!("{MAX_WRITERS} session logs are still being written, which is the limit")
+        })?;
+        let log_dir = self.log_dir.clone();
+        let shared = Arc::new(LogShared::default());
+        let writer = LogWriter {
+            connection_id: connection_id.to_string(),
+            shared: Arc::clone(&shared),
+            on_given_up: self.on_given_up.clone(),
+            _running: running,
+            #[cfg(test)]
+            write_gate: Arc::clone(&self.write_gate),
+        };
+        thread::Builder::new()
+            .name("session-log".to_string())
+            .spawn(move || writer.run(&log_dir, path))
+            .map_err(|e| format!("Failed to start the thread that writes the log: {e}"))?;
+        Ok(LogQueue(shared))
     }
 
-    /// Write terminal output to the log file, stripping `ANSI` escape sequences
-    /// and control characters so the log contains only readable text: see
-    /// [`strip_ansi_stateful`] for what is left.
+    /// Hand terminal output to the log's writer, stripped of `ANSI` escape
+    /// sequences and control characters so the log contains only readable
+    /// text: see [`strip_ansi_stateful`] for what is left.
     ///
-    /// Creates the log file on the first call (lazy open).  The `ANSI` stripper
-    /// state is preserved across calls so that escape sequences split across
-    /// read boundaries (common with Windows `ConPTY`) are handled correctly.
+    /// The `ANSI` stripper state is preserved across calls so that escape
+    /// sequences split across read boundaries (common with Windows `ConPTY`)
+    /// are handled correctly.
     ///
-    /// A log whose file cannot be created is given up: the session goes on
-    /// without one, and the reason is logged once rather than on every
-    /// output. Trying again each time would also mean up to a thousand
-    /// failed creates per output where every name is taken, under the lock
-    /// all sessions share. The window is told as well, once: see
-    /// [`Self::notify_when_given_up`].
-    pub fn write_log(&mut self, connection_id: &str, data: &[u8]) {
-        let Some((entry, stripper)) = self.entries.get_mut(connection_id) else {
-            return;
-        };
+    /// Nothing here touches the file system, so this does not wait for a
+    /// log directory that is slow: every session's reader calls it under one
+    /// lock, through [`log_output`] or [`log_output_async`]. The writer
+    /// creates the file on the first text and writes what it is handed: see
+    /// [`LogWriter`].
+    ///
+    /// What is returned is for the caller to wait on once it has let go of
+    /// that lock: the log is more than [`MAX_WAITING_BYTES`] behind, because
+    /// its file takes writes more slowly than the session puts text out, or
+    /// not at all. See [`LogBehind`].
+    ///
+    /// A log whose file cannot be created is given up by its writer: the
+    /// session goes on without one, and the reason is logged once rather
+    /// than on every output. One that gets no further while its session
+    /// waits for it is given up there. And one is given up here, should a
+    /// caller hand on more without having waited: what waits to be written
+    /// has a limit whatever a caller does. Each time the window is told,
+    /// once: see [`Self::notify_when_given_up`].
+    fn write_log(&mut self, connection_id: &str, data: &[u8]) -> Option<LogBehind> {
+        let (entry, stripper) = self.entries.get_mut(connection_id)?;
 
         // Run the stripper with per-connection persistent state.
         let clean = strip_ansi_stateful(stripper, data);
         if clean.is_empty() {
-            return;
+            return None;
         }
 
-        // Promote Pending → Active on first real data.
-        let given_up = match entry {
-            LogEntry::Active { .. } => false,
-            LogEntry::Pending(base) => match create_log_file(base) {
-                Ok((file, path)) => {
-                    info!(
-                        connection_id = %connection_id,
-                        path = %path.display(),
-                        "Session log file created"
-                    );
-                    *entry = LogEntry::Active {
-                        file,
-                        after_failed_write: false,
-                    };
-                    false
+        let still_to_say = match entry {
+            LogEntry::Writing(queue) => match queue.hand_on(clean) {
+                Handed::Queued => return None,
+                Handed::Behind => {
+                    return Some(LogBehind {
+                        shared: Arc::clone(&queue.0),
+                        connection_id: connection_id.to_string(),
+                        on_given_up: self.on_given_up.clone(),
+                        stall_timeout: self.stall_timeout,
+                    });
                 }
-                Err(e) => {
+                Handed::GivenUp => false,
+                Handed::TooMuchWaiting => {
                     warn!(
                         connection_id = %connection_id,
-                        path = %base.display(),
-                        error = %e,
-                        "Failed to create session log file; this session is not logged"
+                        limit = MAX_WAITING_BYTES,
+                        "Too much text is waiting to be written to the session log; \
+                         this session is no longer logged"
                     );
                     true
                 }
@@ -342,63 +893,70 @@ impl SessionLogManager {
             // The reason was logged when the session connected.
             LogEntry::Unavailable => true,
         };
-        if given_up {
-            self.entries.remove(connection_id);
+        // Dropping what was kept for the log closes it: a writer that still
+        // has text writes it and ends.
+        self.entries.remove(connection_id);
+        if still_to_say {
             if let Some(notify) = &self.on_given_up {
                 notify(connection_id);
             }
-            return;
         }
-        let LogEntry::Active {
-            file,
-            after_failed_write,
-        } = entry
-        else {
-            return;
-        };
-
-        if let Err(e) = write_text(file, after_failed_write, &clean) {
-            warn!(
-                connection_id = %connection_id,
-                error = %e,
-                "Failed to write session log"
-            );
-        }
+        None
     }
 
     /// Whether a log is open, or prepared, for this connection.
     #[cfg(test)]
     pub fn has_log(&self, connection_id: &str) -> bool {
-        matches!(
-            self.entries.get(connection_id),
-            Some((LogEntry::Pending(_) | LogEntry::Active { .. }, _))
-        )
+        match self.entries.get(connection_id) {
+            Some((LogEntry::Writing(queue), _)) => !lock(&queue.0.state).given_up,
+            Some((LogEntry::Unavailable, _)) | None => false,
+        }
     }
 
-    /// Close and flush the log file for a disconnected session.
+    /// Close the log for a disconnected session. Its writer writes what it
+    /// still has and closes the file; this does not wait for that.
     ///
-    /// If the entry was still [`LogEntry::Pending`] (no data ever written),
-    /// no file exists on disk and nothing needs to be cleaned up.
+    /// If nothing was ever written, no file exists on disk and nothing needs
+    /// to be cleaned up.
     pub fn close_log(&mut self, connection_id: &str) {
-        match self.entries.remove(connection_id) {
-            Some((LogEntry::Active { mut file, .. }, _)) => {
-                if let Err(e) = file.flush() {
-                    warn!(
-                        connection_id = %connection_id,
-                        error = %e,
-                        "Failed to flush session log"
-                    );
-                }
-                info!(connection_id = %connection_id, "Session log closed");
-            }
-            Some((LogEntry::Pending(_), _)) => {
-                info!(
-                    connection_id = %connection_id,
-                    "Session log closed (no data written, no file created)"
-                );
-            }
-            Some((LogEntry::Unavailable, _)) | None => {}
-        }
+        self.entries.remove(connection_id);
+    }
+
+    /// Close every log, as [`Self::close_log`] closes one, and return what
+    /// tells when their writers have written what they had. For quitting:
+    /// the writers are threads that the exit stops wherever they are, so
+    /// the app waits for them first, without this lock.
+    pub fn close_all(&mut self) -> Arc<LogWriters> {
+        self.entries.clear();
+        Arc::clone(&self.writers)
+    }
+
+    /// Wait until the writer of this connection's log has done all it was
+    /// handed so far: prepared the log directory, written the text, or given
+    /// the log up and said so.
+    #[cfg(test)]
+    fn settle(&self, connection_id: &str) {
+        let Some((LogEntry::Writing(queue), _)) = self.entries.get(connection_id) else {
+            return;
+        };
+        let (_state, timed_out) = queue
+            .0
+            .changed
+            .wait_timeout_while(lock(&queue.0.state), TEST_WAIT, |state| {
+                !(state.idle && state.queue.is_empty())
+            })
+            .unwrap();
+        assert!(!timed_out.timed_out(), "the log's writer is still busy");
+    }
+
+    /// Wait until the writers of all logs that were closed have ended, and
+    /// so have written what they had. Every log has to be closed.
+    #[cfg(test)]
+    fn wait_until_written(&self) {
+        assert!(
+            self.writers.wait_until_done(TEST_WAIT),
+            "a log's writer is still running"
+        );
     }
 
     /// The path a log for `session_name` is to get, from the filename format
@@ -857,7 +1415,7 @@ mod tests {
 
     /// A manager whose filename format `log_path` refuses, as a hand-edited
     /// config could hold before startup replaces it, so that no log can be
-    /// prepared.
+    /// handed to a writer. Its log directory is never created.
     fn manager_that_cannot_prepare() -> (SessionLogManager, PathBuf) {
         let dir = std::env::temp_dir().join(format!("ss-sessionlog-{}", uuid::Uuid::new_v4()));
         let mgr = SessionLogManager::new(true, dir.clone(), "{name}.log:x".to_string());
@@ -877,6 +1435,7 @@ mod tests {
         mgr.open_log("b", "router").unwrap();
         mgr.write_log("b", b"hello\n");
         mgr.close_log("b");
+        mgr.wait_until_written();
         assert!(reported.lock().unwrap().is_empty());
         std::fs::remove_dir_all(&dir).unwrap();
     }
@@ -896,8 +1455,7 @@ mod tests {
         mgr.write_log("a", b"more\n");
         mgr.close_log("a");
         assert_eq!(*reported.lock().unwrap(), ["a"]);
-        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0);
-        std::fs::remove_dir_all(&dir).unwrap();
+        assert!(!dir.exists());
     }
 
     #[test]
@@ -909,7 +1467,7 @@ mod tests {
         // Output that arrives after the close finds nothing to report.
         mgr.write_log("a", b"output\n");
         assert!(reported.lock().unwrap().is_empty());
-        std::fs::remove_dir_all(&dir).unwrap();
+        assert!(!dir.exists());
     }
 
     /// A manager that was given no notifier gives a log up all the same,
@@ -923,8 +1481,7 @@ mod tests {
         assert!(!mgr.entries.contains_key("a"));
         mgr.write_log("a", b"more\n");
         mgr.close_log("a");
-        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0);
-        std::fs::remove_dir_all(&dir).unwrap();
+        assert!(!dir.exists());
     }
 
     /// What is kept for a log that could not be prepared goes with the
@@ -938,7 +1495,7 @@ mod tests {
         mgr.write_log("a", b"output\n");
         assert_eq!(*reported.lock().unwrap(), ["a"]);
         assert!(!mgr.entries.contains_key("a"));
-        std::fs::remove_dir_all(&dir).unwrap();
+        assert!(!dir.exists());
     }
 
     #[test]
@@ -950,14 +1507,17 @@ mod tests {
     fn no_file_is_created_before_the_first_output() {
         let (mut mgr, dir) = manager();
         mgr.open_log("a", "router").unwrap();
+        mgr.settle("a");
         assert!(dir.is_dir());
         assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0);
         // Escape sequences alone are no output.
         mgr.write_log("a", b"\x1b[0m");
+        mgr.settle("a");
         assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0);
         mgr.write_log("a", b"hello\n");
         mgr.write_log("a", b"again\n");
         mgr.close_log("a");
+        mgr.wait_until_written();
         assert_eq!(
             std::fs::read(dir.join("router.log")).unwrap(),
             b"hello\nagain\n"
@@ -973,10 +1533,14 @@ mod tests {
         mgr.open_log("a", "router").unwrap();
         mgr.open_log("b", "router").unwrap();
         mgr.write_log("b", b"second session\n");
+        // Each log has a writer of its own: this one has its file before
+        // the other asks for the name.
+        mgr.settle("b");
         mgr.write_log("a", b"first session\n");
         mgr.write_log("b", b"more\n");
         mgr.close_log("a");
         mgr.close_log("b");
+        mgr.wait_until_written();
         assert_eq!(
             std::fs::read(dir.join("router.log")).unwrap(),
             b"second session\nmore\n"
@@ -992,12 +1556,14 @@ mod tests {
     fn a_file_already_there_is_left_alone() {
         let (mut mgr, dir) = manager();
         mgr.open_log("a", "router").unwrap();
+        mgr.settle("a");
         // Put there after the log was prepared, as someone else who can
         // write to the directory might; a directory holds a name as well.
         std::fs::write(dir.join("router.log"), b"not ours").unwrap();
         std::fs::create_dir(dir.join("router_1.log")).unwrap();
         mgr.write_log("a", b"output\n");
         mgr.close_log("a");
+        mgr.wait_until_written();
         assert_eq!(std::fs::read(dir.join("router.log")).unwrap(), b"not ours");
         assert_eq!(
             std::fs::read(dir.join("router_2.log")).unwrap(),
@@ -1010,6 +1576,7 @@ mod tests {
     fn a_symlink_at_the_log_path_is_not_written_through() {
         let (mut mgr, dir) = manager();
         mgr.open_log("a", "router").unwrap();
+        mgr.settle("a");
         let elsewhere = std::env::temp_dir().join(format!("ss-elsewhere-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir(&elsewhere).unwrap();
         let existing = elsewhere.join("existing");
@@ -1033,6 +1600,7 @@ mod tests {
 
         mgr.write_log("a", b"output\n");
         mgr.close_log("a");
+        mgr.wait_until_written();
 
         assert_eq!(std::fs::read(&existing).unwrap(), b"untouched");
         assert!(!missing.exists());
@@ -1049,12 +1617,14 @@ mod tests {
         let (mut mgr, dir) = manager();
         let reported = record_given_up(&mut mgr);
         mgr.open_log("a", "router").unwrap();
+        mgr.settle("a");
         std::fs::write(dir.join("router.log"), b"").unwrap();
         for number in 1..=MAX_SAME_NAME {
             std::fs::write(dir.join(format!("router_{number}.log")), b"").unwrap();
         }
         let taken = usize::from(MAX_SAME_NAME) + 1;
         mgr.write_log("a", b"output\n");
+        mgr.settle("a");
         assert!(!mgr.has_log("a"));
         // The names are not gone through again on the next output: freeing
         // one now changes nothing.
@@ -1109,8 +1679,11 @@ mod tests {
         let reported = record_given_up(&mut mgr);
         mgr.open_log("a", "router").unwrap();
         mgr.open_log("b", "switch").unwrap();
+        mgr.settle("a");
+        mgr.settle("b");
         std::fs::remove_dir(&dir).unwrap();
         mgr.write_log("a", b"output\n");
+        mgr.settle("a");
         assert!(!mgr.has_log("a"));
         assert_eq!(*reported.lock().unwrap(), ["a"]);
         // Not tried again, even once the directory is back.
@@ -1122,8 +1695,582 @@ mod tests {
         // session without a log was reported.
         mgr.write_log("b", b"output\n");
         mgr.close_log("b");
+        mgr.wait_until_written();
         assert_eq!(*reported.lock().unwrap(), ["a"]);
         assert_eq!(std::fs::read(dir.join("switch.log")).unwrap(), b"output\n");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A log directory that cannot be created is found out by the writer,
+    /// not at connect, and said with the first output all the same.
+    #[test]
+    fn a_log_directory_that_cannot_be_created_is_reported_on_the_first_output() {
+        let file = std::env::temp_dir().join(format!("ss-notadir-{}", uuid::Uuid::new_v4()));
+        std::fs::write(&file, b"").unwrap();
+        let mut mgr = SessionLogManager::new(true, file.join("logs"), "{name}.log".to_string());
+        let reported = record_given_up(&mut mgr);
+        mgr.open_log("a", "router").unwrap();
+        mgr.settle("a");
+        assert!(reported.lock().unwrap().is_empty());
+        mgr.write_log("a", b"\x1b[0m");
+        mgr.settle("a");
+        assert!(reported.lock().unwrap().is_empty());
+        mgr.write_log("a", b"output\n");
+        mgr.settle("a");
+        assert!(!mgr.has_log("a"));
+        assert_eq!(*reported.lock().unwrap(), ["a"]);
+        mgr.write_log("a", b"more\n");
+        mgr.close_log("a");
+        mgr.wait_until_written();
+        assert_eq!(*reported.lock().unwrap(), ["a"]);
+        std::fs::remove_file(&file).unwrap();
+    }
+
+    /// Wait until the log at `path` has been created, which is when its
+    /// writer has taken the session's first text.
+    fn wait_for_file(path: &Path) {
+        let started = std::time::Instant::now();
+        while !path.exists() {
+            assert!(
+                started.elapsed() < TEST_WAIT,
+                "{} is not there",
+                path.display()
+            );
+            thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    /// The known issue this replaces: a log was written under the lock all
+    /// sessions share, so a write that took its time held up the output of
+    /// every session. Here a write takes for as long as the test holds the
+    /// gate, and output goes on being taken meanwhile, for the session with
+    /// the slow log and for others.
+    #[test]
+    fn output_does_not_wait_for_a_log_that_is_slow() {
+        let (mut mgr, dir) = manager();
+        let reported = record_given_up(&mut mgr);
+        let gate = Arc::clone(&mgr.write_gate);
+        let writing = gate.lock().unwrap();
+
+        mgr.open_log("a", "router").unwrap();
+        mgr.write_log("a", b"one\n");
+        // The writer has the text and is at the write.
+        wait_for_file(&dir.join("router.log"));
+
+        mgr.write_log("a", b"two\n");
+        mgr.write_log("a", b"three\n");
+        // A session that connects meanwhile, and its output.
+        mgr.open_log("b", "switch").unwrap();
+        mgr.write_log("b", b"other\n");
+        wait_for_file(&dir.join("switch.log"));
+        // Closing does not wait either.
+        mgr.close_log("b");
+        assert_eq!(std::fs::read(dir.join("router.log")).unwrap(), b"");
+        assert_eq!(std::fs::read(dir.join("switch.log")).unwrap(), b"");
+
+        // Once the writes go through, nothing is missing.
+        drop(writing);
+        mgr.close_log("a");
+        mgr.wait_until_written();
+        assert_eq!(
+            std::fs::read(dir.join("router.log")).unwrap(),
+            b"one\ntwo\nthree\n"
+        );
+        assert_eq!(std::fs::read(dir.join("switch.log")).unwrap(), b"other\n");
+        assert!(reported.lock().unwrap().is_empty());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Half of what may wait for a log's writer, as a line of output.
+    fn half_the_limit() -> Vec<u8> {
+        let mut chunk = vec![b'x'; MAX_WAITING_BYTES / 2 - 1];
+        chunk.push(b'\n');
+        chunk
+    }
+
+    /// Open the log `router.log` for session `a` and put it behind: its
+    /// writer is at the write of `first`, which takes for as long as the
+    /// caller holds the gate, and two more outputs wait, which is more than
+    /// may. Returns what the session is to wait on.
+    fn log_that_is_behind(mgr: &mut SessionLogManager, dir: &Path) -> LogBehind {
+        mgr.open_log("a", "router").unwrap();
+        assert!(mgr.write_log("a", b"first\n").is_none());
+        wait_for_file(&dir.join("router.log"));
+        let chunk = half_the_limit();
+        assert!(mgr.write_log("a", &chunk).is_none());
+        mgr.write_log("a", &chunk).expect("the log is behind")
+    }
+
+    /// What `router.log` holds once [`log_that_is_behind`] is written.
+    fn assert_all_that_waited_is_written(dir: &Path) {
+        let log = std::fs::read(dir.join("router.log")).unwrap();
+        assert_eq!(log.len(), b"first\n".len() + MAX_WAITING_BYTES);
+        assert!(log.starts_with(b"first\nxxx"));
+        assert!(log.ends_with(b"xxx\n"));
+    }
+
+    /// Wait on `behind` on a thread of its own, as a reader does. The
+    /// receiver hears when the wait is over.
+    fn wait_on_a_thread(behind: LogBehind) -> std::sync::mpsc::Receiver<()> {
+        let (done, is_done) = std::sync::mpsc::channel();
+        thread::spawn(move || {
+            behind.wait();
+            let _ = done.send(());
+        });
+        is_done
+    }
+
+    /// A log that is slow slows its own session once it is far behind, and
+    /// loses nothing: the session waits until the writer has caught up.
+    #[test]
+    fn a_session_waits_for_a_log_that_is_behind() {
+        let (mut mgr, dir) = manager();
+        let reported = record_given_up(&mut mgr);
+        mgr.stall_timeout = TEST_WAIT;
+        let gate = Arc::clone(&mgr.write_gate);
+        let writing = gate.lock().unwrap();
+
+        let waited = wait_on_a_thread(log_that_is_behind(&mut mgr, &dir));
+        assert_eq!(
+            waited.recv_timeout(Duration::from_millis(100)),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+        );
+        // Another session does not wait, whatever it puts out meanwhile.
+        mgr.open_log("b", "switch").unwrap();
+        assert!(mgr.write_log("b", b"other\n").is_none());
+
+        // The writes go through: the wait is over, and the log goes on.
+        drop(writing);
+        waited.recv_timeout(TEST_WAIT).unwrap();
+        assert!(mgr.has_log("a"));
+        // The writer may still be at what waited, and the log behind again
+        // with this.
+        if let Some(behind) = mgr.write_log("a", b"last\n") {
+            behind.wait();
+        }
+        mgr.close_log("a");
+        mgr.close_log("b");
+        mgr.wait_until_written();
+        let log = std::fs::read(dir.join("router.log")).unwrap();
+        assert_eq!(
+            log.len(),
+            b"first\n".len() + MAX_WAITING_BYTES + b"last\n".len()
+        );
+        assert!(log.ends_with(b"xxx\nlast\n"));
+        assert_eq!(std::fs::read(dir.join("switch.log")).unwrap(), b"other\n");
+        assert!(reported.lock().unwrap().is_empty());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A log directory that takes nothing holds its session up once, for the
+    /// stall timeout, and then the log is given up.
+    #[test]
+    fn a_log_that_gets_no_further_is_given_up() {
+        let (mut mgr, dir) = manager();
+        let reported = record_given_up(&mut mgr);
+        mgr.stall_timeout = Duration::from_millis(100);
+        let gate = Arc::clone(&mgr.write_gate);
+        let writing = gate.lock().unwrap();
+
+        mgr.open_log("b", "switch").unwrap();
+        let behind = log_that_is_behind(&mut mgr, &dir);
+        assert!(reported.lock().unwrap().is_empty());
+        let started = std::time::Instant::now();
+        behind.wait();
+        assert!(started.elapsed() >= Duration::from_millis(100));
+        assert!(!mgr.has_log("a"));
+        assert_eq!(*reported.lock().unwrap(), ["a"]);
+        // Said once, and the session's output is no longer kept or waited
+        // for.
+        assert!(mgr.write_log("a", &half_the_limit()).is_none());
+        assert!(mgr.write_log("a", &half_the_limit()).is_none());
+        assert!(!mgr.entries.contains_key("a"));
+        assert_eq!(*reported.lock().unwrap(), ["a"]);
+        // The log of another session is not given up with it.
+        assert!(mgr.write_log("b", b"other\n").is_none());
+        assert!(mgr.has_log("b"));
+
+        // What was waiting is still written, should the directory answer
+        // again, and the log ends there.
+        drop(writing);
+        mgr.close_log("b");
+        mgr.wait_until_written();
+        assert_all_that_waited_is_written(&dir);
+        assert_eq!(std::fs::read(dir.join("switch.log")).unwrap(), b"other\n");
+        assert_eq!(*reported.lock().unwrap(), ["a"]);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A write that is slow but gets somewhere is not taken for one that
+    /// does not: whatever is written starts the stall timeout anew. The test
+    /// is the writer here, and writes a little at a time for longer than
+    /// the timeout in all.
+    #[test]
+    fn a_log_that_is_slow_but_gets_on_is_not_given_up() {
+        const STEP: Duration = Duration::from_millis(250);
+        let reported = Arc::new(Mutex::new(Vec::new()));
+        let sink = Arc::clone(&reported);
+        let shared = Arc::new(LogShared::default());
+        lock(&shared.state).writing = MAX_WAITING_BYTES + 100;
+        let waited = wait_on_a_thread(LogBehind {
+            shared: Arc::clone(&shared),
+            connection_id: "a".to_string(),
+            on_given_up: Some(Arc::new(move |id: &str| {
+                sink.lock().unwrap().push(id.to_string());
+            })),
+            stall_timeout: 6 * STEP,
+        });
+        for _ in 0..8 {
+            thread::sleep(STEP);
+            assert_eq!(waited.try_recv(), Err(std::sync::mpsc::TryRecvError::Empty));
+            lock(&shared.state).writing -= 1;
+            shared.changed.notify_all();
+        }
+        assert_eq!(
+            waited.recv_timeout(STEP),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+        );
+        assert!(!lock(&shared.state).given_up);
+        assert!(reported.lock().unwrap().is_empty());
+
+        // And then nothing for as long as the timeout.
+        waited.recv_timeout(TEST_WAIT).unwrap();
+        assert!(lock(&shared.state).given_up);
+        assert_eq!(*reported.lock().unwrap(), ["a"]);
+    }
+
+    /// Closing a tab ends its session's wait for the log at once.
+    #[test]
+    fn a_wait_for_a_log_ends_when_the_log_is_closed() {
+        let (mut mgr, dir) = manager();
+        let reported = record_given_up(&mut mgr);
+        mgr.stall_timeout = TEST_WAIT;
+        let gate = Arc::clone(&mgr.write_gate);
+        let writing = gate.lock().unwrap();
+
+        let waited = wait_on_a_thread(log_that_is_behind(&mut mgr, &dir));
+        assert_eq!(
+            waited.recv_timeout(Duration::from_millis(100)),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+        );
+        mgr.close_log("a");
+        waited.recv_timeout(TEST_WAIT).unwrap();
+        assert!(reported.lock().unwrap().is_empty());
+
+        drop(writing);
+        mgr.wait_until_written();
+        assert_all_that_waited_is_written(&dir);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// What waits to be written has a limit whatever a reader does: one that
+    /// hands on more without having waited has its log given up.
+    #[test]
+    fn a_log_handed_more_without_waiting_is_given_up() {
+        let (mut mgr, dir) = manager();
+        let reported = record_given_up(&mut mgr);
+        let gate = Arc::clone(&mgr.write_gate);
+        let writing = gate.lock().unwrap();
+
+        drop(log_that_is_behind(&mut mgr, &dir));
+        assert!(mgr.has_log("a"));
+        assert!(reported.lock().unwrap().is_empty());
+        assert!(mgr.write_log("a", b"one too many\n").is_none());
+        assert!(!mgr.has_log("a"));
+        assert_eq!(*reported.lock().unwrap(), ["a"]);
+        assert!(mgr.write_log("a", b"more\n").is_none());
+        assert_eq!(*reported.lock().unwrap(), ["a"]);
+
+        drop(writing);
+        mgr.wait_until_written();
+        assert_all_that_waited_is_written(&dir);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// The readers' way in: a reader waits for its log without the lock all
+    /// sessions share, so the output of another session is taken meanwhile.
+    #[test]
+    fn a_reader_waits_for_its_log_without_the_shared_lock() {
+        let (mut mgr, dir) = manager();
+        let reported = record_given_up(&mut mgr);
+        mgr.stall_timeout = TEST_WAIT;
+        let gate = Arc::clone(&mgr.write_gate);
+        let writing = gate.lock().unwrap();
+        mgr.open_log("a", "router").unwrap();
+        mgr.open_log("b", "switch").unwrap();
+        let logger = Arc::new(Mutex::new(mgr));
+
+        log_output(&logger, "a", b"first\n");
+        wait_for_file(&dir.join("router.log"));
+        log_output(&logger, "a", &half_the_limit());
+        let (done, is_done) = std::sync::mpsc::channel();
+        let reader = Arc::clone(&logger);
+        thread::spawn(move || {
+            log_output(&reader, "a", &half_the_limit());
+            let _ = done.send(());
+        });
+        assert_eq!(
+            is_done.recv_timeout(Duration::from_millis(100)),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+        );
+        // On a thread, so that a reader that held the shared lock while it
+        // waited would fail the test and not hang it.
+        let (taken, is_taken) = std::sync::mpsc::channel();
+        let other = Arc::clone(&logger);
+        thread::spawn(move || {
+            log_output(&other, "b", b"other\n");
+            let _ = taken.send(());
+        });
+        is_taken.recv_timeout(TEST_WAIT).unwrap();
+        assert_eq!(
+            is_done.try_recv(),
+            Err(std::sync::mpsc::TryRecvError::Empty)
+        );
+
+        drop(writing);
+        is_done.recv_timeout(TEST_WAIT).unwrap();
+        let mut mgr = logger.lock().unwrap();
+        mgr.close_all();
+        mgr.wait_until_written();
+        assert_all_that_waited_is_written(&dir);
+        assert_eq!(std::fs::read(dir.join("switch.log")).unwrap(), b"other\n");
+        assert!(reported.lock().unwrap().is_empty());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A reader that is a task waits on a blocking thread, so that a
+    /// runtime with a single thread, as this test's is, goes on meanwhile.
+    #[tokio::test]
+    async fn a_task_waits_for_its_log_off_the_runtime() {
+        let (mut mgr, dir) = manager();
+        let reported = record_given_up(&mut mgr);
+        mgr.stall_timeout = Duration::from_millis(300);
+        // The gate is held on a thread, until `release` is dropped: a lock
+        // is not for holding across an await.
+        let gate = Arc::clone(&mgr.write_gate);
+        let (release, released) = std::sync::mpsc::channel::<()>();
+        let (held, is_held) = std::sync::mpsc::channel::<()>();
+        thread::spawn(move || {
+            let _writing = gate.lock().unwrap();
+            held.send(()).unwrap();
+            let _ = released.recv();
+        });
+        is_held.recv().unwrap();
+        mgr.open_log("a", "router").unwrap();
+        let logger = Arc::new(Mutex::new(mgr));
+
+        log_output_async(&logger, "a", b"first\n").await;
+        wait_for_file(&dir.join("router.log"));
+        log_output_async(&logger, "a", &half_the_limit()).await;
+        let chunk = half_the_limit();
+        let log_wait = log_output_async(&logger, "a", &chunk);
+        tokio::pin!(log_wait);
+        // Other tasks get their turn while this one waits for its log.
+        let mut turns = 0;
+        loop {
+            tokio::select! {
+                () = &mut log_wait => break,
+                () = tokio::time::sleep(Duration::from_millis(10)) => turns += 1,
+            }
+        }
+        assert!(turns > 0);
+        assert_eq!(*reported.lock().unwrap(), ["a"]);
+
+        drop(release);
+        let writers = logger.lock().unwrap().close_all();
+        assert!(writers.wait_until_done(TEST_WAIT));
+        assert_all_that_waited_is_written(&dir);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// What goes into one write: the outputs that wait, in their order, as
+    /// far as they fit in a piece together, and a single output whole.
+    #[test]
+    fn outputs_that_wait_are_written_a_piece_at_a_time() {
+        let mut state = LogState::default();
+        let outputs = [
+            "a".repeat(WRITE_PIECE_BYTES / 2),
+            "b".repeat(WRITE_PIECE_BYTES / 2),
+            "c".to_string(),
+            "d".repeat(2 * WRITE_PIECE_BYTES),
+            "e".to_string(),
+        ];
+        let all: usize = outputs.iter().map(String::len).sum();
+        for output in &outputs {
+            state.queued += output.len();
+            state.queue.push_back(output.clone());
+        }
+        assert_eq!(state.waiting(), all);
+
+        let mut pieces: Vec<String> = Vec::new();
+        let mut written = 0;
+        while let Some(piece) = state.take_piece() {
+            // What the writer is at still counts as waiting.
+            assert_eq!(state.writing, piece.len());
+            assert_eq!(state.waiting(), all - written);
+            written += piece.len();
+            pieces.push(piece);
+            state.writing = 0;
+        }
+        assert_eq!(
+            pieces,
+            [
+                [outputs[0].as_str(), outputs[1].as_str()].concat(),
+                outputs[2].clone(),
+                outputs[3].clone(),
+                outputs[4].clone(),
+            ]
+        );
+        assert_eq!(state.waiting(), 0);
+        assert!(state.queue.is_empty());
+    }
+
+    /// Outputs of many writes' worth, with characters of several bytes, are
+    /// in the file whole and in their order, and nothing is left waiting.
+    /// While they wait they are joined, so that small outputs do not take a
+    /// buffer each.
+    #[test]
+    fn text_of_many_writes_is_written_whole() {
+        let (mut mgr, dir) = manager();
+        let gate = Arc::clone(&mgr.write_gate);
+        let writing = gate.lock().unwrap();
+        mgr.open_log("a", "router").unwrap();
+        let shared = match mgr.entries.get("a") {
+            Some((LogEntry::Writing(queue), _)) => Arc::clone(&queue.0),
+            _ => panic!("the log has no writer"),
+        };
+
+        // The writer is at the first output for as long as the gate is
+        // held, and the others wait.
+        assert!(mgr.write_log("a", b"first\n").is_none());
+        wait_for_file(&dir.join("router.log"));
+        let mut text = "first\n".to_string();
+        for line in 0..400 {
+            let output = format!("{line} {}\n", "é".repeat(500));
+            assert!(mgr.write_log("a", output.as_bytes()).is_none());
+            text.push_str(&output);
+        }
+        assert!(text.len() > 6 * WRITE_PIECE_BYTES);
+        {
+            let state = lock(&shared.state);
+            assert_eq!(state.waiting(), text.len());
+            assert_eq!(state.writing, b"first\n".len());
+            let lengths: Vec<usize> = state.queue.iter().map(String::len).collect();
+            assert_eq!(lengths.iter().sum::<usize>(), state.queued);
+            assert_eq!(lengths.len(), 7, "{lengths:?}");
+            assert!(lengths.iter().all(|len| *len <= WRITE_PIECE_BYTES));
+        }
+        // An output without text takes no place. This end of the log is
+        // not dropped, which would close the log.
+        let session = std::mem::ManuallyDrop::new(LogQueue(Arc::clone(&shared)));
+        assert!(matches!(session.hand_on(String::new()), Handed::Queued));
+        assert_eq!(lock(&shared.state).queue.len(), 7);
+
+        drop(writing);
+        mgr.close_log("a");
+        mgr.wait_until_written();
+        assert_eq!(
+            std::fs::read(dir.join("router.log")).unwrap(),
+            text.as_bytes()
+        );
+        assert_eq!(lock(&shared.state).waiting(), 0);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A writer that ends in a panic gives its log up on the way out, so
+    /// that the session is told and hands on no more.
+    #[test]
+    fn a_writer_that_panics_gives_its_log_up() {
+        let reported = Arc::new(Mutex::new(Vec::new()));
+        let sink = Arc::clone(&reported);
+        let shared = Arc::new(LogShared::default());
+        let writers = Arc::new(LogWriters::default());
+        let writer = LogWriter {
+            connection_id: "a".to_string(),
+            shared: Arc::clone(&shared),
+            on_given_up: Some(Arc::new(move |id: &str| {
+                sink.lock().unwrap().push(id.to_string());
+            })),
+            _running: writers.count().unwrap(),
+            write_gate: Arc::default(),
+        };
+        let queue = LogQueue(Arc::clone(&shared));
+        assert!(matches!(
+            queue.hand_on("output\n".to_string()),
+            Handed::Queued
+        ));
+        // As when the panic comes while the writer is at a write.
+        lock(&shared.state).writing = 100;
+
+        let panicked = thread::spawn(move || {
+            let _writer = writer;
+            panic!("a panic in the writer, for the test");
+        })
+        .join();
+        assert!(panicked.is_err());
+        assert_eq!(*reported.lock().unwrap(), ["a"]);
+        assert_eq!(lock(&shared.state).waiting(), 0);
+        assert!(matches!(
+            queue.hand_on("more\n".to_string()),
+            Handed::GivenUp
+        ));
+        // It no longer counts as running either.
+        assert!(writers.wait_until_done(Duration::ZERO));
+        assert_eq!(*reported.lock().unwrap(), ["a"]);
+    }
+
+    /// Writers that are stuck outlive their sessions, so their number has a
+    /// limit of its own: at the limit, a session gets no log and says so.
+    #[test]
+    fn a_session_gets_no_log_while_too_many_are_still_being_written() {
+        let (mut mgr, dir) = manager();
+        let reported = record_given_up(&mut mgr);
+        *mgr.writers.running.lock().unwrap() = MAX_WRITERS;
+        assert!(mgr.open_log("a", "router").is_err());
+        assert!(!mgr.has_log("a"));
+        mgr.write_log("a", b"output\n");
+        assert_eq!(*reported.lock().unwrap(), ["a"]);
+        assert!(!dir.exists());
+
+        // Once one of them has ended, the next session has a log again.
+        *mgr.writers.running.lock().unwrap() = MAX_WRITERS - 1;
+        mgr.open_log("b", "router").unwrap();
+        mgr.write_log("b", b"output\n");
+        mgr.close_log("b");
+        assert!(!mgr.writers.wait_until_done(Duration::ZERO));
+        *mgr.writers.running.lock().unwrap() -= MAX_WRITERS - 1;
+        mgr.wait_until_written();
+        assert_eq!(std::fs::read(dir.join("router.log")).unwrap(), b"output\n");
+        assert_eq!(*reported.lock().unwrap(), ["a"]);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Quitting closes every log and waits for the writers, which the exit
+    /// would stop wherever they are.
+    #[test]
+    fn closing_every_log_tells_when_they_are_written() {
+        let (mut mgr, dir) = manager();
+        let gate = Arc::clone(&mgr.write_gate);
+        let writing = gate.lock().unwrap();
+
+        mgr.open_log("a", "router").unwrap();
+        mgr.open_log("b", "switch").unwrap();
+        // A session that never put anything out.
+        mgr.open_log("c", "idle").unwrap();
+        mgr.write_log("a", b"output\n");
+        mgr.write_log("b", b"other\n");
+        let writers = mgr.close_all();
+        assert!(!mgr.has_log("a"));
+        // Not while a write is under way, however long that is waited for.
+        assert!(!writers.wait_until_done(Duration::from_millis(100)));
+
+        drop(writing);
+        assert!(writers.wait_until_done(TEST_WAIT));
+        assert_eq!(std::fs::read(dir.join("router.log")).unwrap(), b"output\n");
+        assert_eq!(std::fs::read(dir.join("switch.log")).unwrap(), b"other\n");
+        assert!(!dir.join("idle.log").exists());
+        // With no log open, there is nothing to wait for.
+        assert!(mgr.close_all().wait_until_done(Duration::ZERO));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -1133,6 +2280,7 @@ mod tests {
         mgr.open_log("a", "router").unwrap();
         mgr.write_log("a", b"output\n");
         mgr.close_log("a");
+        mgr.wait_until_written();
         for path in [dir.clone(), dir.join("router.log")] {
             private_fs::assert_private(&path);
         }
@@ -1151,6 +2299,7 @@ mod tests {
         mgr.open_log("a", "router").unwrap();
         mgr.write_log("a", b"output\n");
         mgr.close_log("a");
+        mgr.wait_until_written();
         let log = dir.join("router.log");
         private_fs::assert_private(&log);
         assert_eq!(std::fs::read(&log).unwrap(), b"output\n");
@@ -1883,6 +3032,7 @@ mod tests {
         mgr.write_log("a", b"fake\xc2");
         mgr.write_log("a", b"\x8d gr\xc3\xb6\xc3\x9fe\r\n");
         mgr.close_log("a");
+        mgr.wait_until_written();
         assert_eq!(
             std::fs::read(dir.join("router.log")).unwrap(),
             "shownfake größe\r\n".as_bytes()

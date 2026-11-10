@@ -230,7 +230,7 @@
     "sshConnectionFailed": "Falha na conexão SSH: {{message}}",
     "tabContextReconnect": "Reconectar",
     "reconnectHint": "[Pressione Enter para reconectar]",
-    "notLogged": "A sessão \"{{name}}\" não está sendo registrada: não foi possível criar o arquivo de log dela. O log do aplicativo tem os detalhes."
+    "notLogged": "A sessão \"{{name}}\" não está sendo registrada: não foi possível criar o arquivo de log dela ou gravar nele. O log do aplicativo tem os detalhes."
   },
   "hostVerify": {
     "title": "Verificar chave do host",

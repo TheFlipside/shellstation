@@ -230,7 +230,7 @@
     "sshConnectionFailed": "SSH-anslutningen misslyckades: {{message}}",
     "tabContextReconnect": "Återanslut",
     "reconnectHint": "[Tryck Enter för att återansluta]",
-    "notLogged": "Sessionen \"{{name}}\" loggas inte: loggfilen kunde inte skapas. Programloggen innehåller detaljerna."
+    "notLogged": "Sessionen \"{{name}}\" loggas inte: loggfilen kunde inte skapas eller skrivas till. Programloggen innehåller detaljerna."
   },
   "hostVerify": {
     "title": "Verifiera värdnyckel",

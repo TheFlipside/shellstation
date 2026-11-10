@@ -584,10 +584,11 @@ async fn shut_down_shells(
 /// sessions before it quits, so that it can say so while that takes.
 const QUITTING_EVENT: &str = "app:quitting";
 
-/// How long quitting waits, in all, for the sessions to close before it
-/// exits anyway. The SSH chains close side by side, each giving up after
-/// [`DISCONNECT_TIMEOUT`]; the extra second is for a local shell slow to
-/// exit, or a manager lock held by a stuck write.
+/// How long quitting waits, in all, for the sessions to close and their
+/// logs to be written before it exits anyway. The SSH chains close side by
+/// side, each giving up after [`DISCONNECT_TIMEOUT`]; the extra second is
+/// for a local shell slow to exit, a manager lock held by a stuck write, or
+/// a session log that is still being written.
 const QUIT_TIMEOUT: std::time::Duration =
     std::time::Duration::from_secs(DISCONNECT_TIMEOUT.as_secs() + 1);
 
@@ -603,8 +604,9 @@ pub fn app_quit(app: tauri::AppHandle) {
 /// hosts included, is sent `SSH_MSG_DISCONNECT` and waited for, as when its
 /// tab is closed, so a device sees the session end and does not go on
 /// counting it; each Telnet socket is closed, each local shell killed, and
-/// each session log flushed. Called by [`app_quit`], and by the menu's quit
-/// item directly, so that the item works even when the webview does not.
+/// each session log closed and waited for until it is written. Called by
+/// [`app_quit`], and by the menu's quit item directly, so that the item
+/// works even when the webview does not.
 ///
 /// Returns at once; the closing runs on a task of its own, and the app exits
 /// within [`QUIT_TIMEOUT`], whatever is still closing then. A session still
@@ -703,7 +705,27 @@ async fn close_sessions_for_quit(app: &tauri::AppHandle) -> usize {
         shut_down_shells(&ready, &logger, shells).await
     };
     let ((), shells) = tokio::join!(close_remote, close_local);
+    wait_for_session_logs(&logger).await;
     remote + shells
+}
+
+/// Close every session log and wait until what the sessions put out is
+/// written. Each log is written by a thread of its own, which the exit would
+/// stop wherever it is. Closing them all takes in the log of a connection
+/// still being set up, whose writer would otherwise never end. The wait is on
+/// a blocking thread, and ends with [`QUIT_TIMEOUT`] at the latest: a log
+/// directory that does not answer must not keep the app from quitting. It
+/// comes after the sessions have closed, and [`quit_app`] gives the two
+/// [`QUIT_TIMEOUT`] between them: after an SSH close that took its three
+/// seconds, the logs have what is left. Most are written by then, as a log
+/// is closed as soon as its session is.
+async fn wait_for_session_logs(logger: &SessionLogState) {
+    let writers = lock_or_recover(&logger.0).close_all();
+    let written =
+        tauri::async_runtime::spawn_blocking(move || writers.wait_until_done(QUIT_TIMEOUT)).await;
+    if !matches!(written, Ok(true)) {
+        tracing::warn!("Session logs still being written at quit; quitting anyway");
+    }
 }
 
 /// Maximum terminal dimensions to prevent resource exhaustion.
@@ -769,8 +791,9 @@ mod tests {
     use crate::session_logger::SessionLogManager;
     use std::sync::{Arc, Mutex};
 
-    /// Ready and logger state for one test. Pending logs are kept in memory;
-    /// only the log directory is created, and removed again on drop.
+    /// Ready and logger state for one test. No log gets a file, as no
+    /// session has any output; only the log directory is created, by the
+    /// logs' writers, and removed again on drop.
     struct Fixture {
         ready: TerminalReadyState,
         logger: SessionLogState,
@@ -828,6 +851,10 @@ mod tests {
 
     impl Drop for Fixture {
         fn drop(&mut self) {
+            // Each log's writer creates the log directory when it starts:
+            // wait until they have ended, or one could create it again.
+            let writers = lock_or_recover(&self.logger.0).close_all();
+            writers.wait_until_done(std::time::Duration::from_secs(30));
             let _ = std::fs::remove_dir_all(&self.dir);
         }
     }

@@ -39,7 +39,7 @@ describe("showSessionNotLoggedNotice", () => {
     expect(toasts[0]).toMatchObject({ level: "warning", sticky: true });
     // The real English text, so the placeholder is checked as well.
     expect(toasts[0].message).toBe(
-      'Session "core-router" is not being logged: its log file could not be created. The application log has the details.',
+      'Session "core-router" is not being logged: its log file could not be created or written to. The application log has the details.',
     );
   });
 
@@ -57,7 +57,7 @@ describe("showSessionNotLoggedNotice", () => {
     useTerminalStore.getState().addTab("s1", title, "ssh");
     showSessionNotLoggedNotice("s1");
     expect(useToastStore.getState().toasts[0].message).toBe(
-      'Session "edge-sw 👩‍💻\u200e" is not being logged: its log file could not be created. The application log has the details.',
+      'Session "edge-sw 👩‍💻\u200e" is not being logged: its log file could not be created or written to. The application log has the details.',
     );
   });
 

@@ -117,11 +117,9 @@ mod run {
     }
 
     // Emits data received FROM the server (prompts, banners) — never the credentials we send.
-    fn emit_output(io: &LoginSequenceIO<'_>, data: &[u8]) {
+    async fn emit_output(io: &LoginSequenceIO<'_>, data: &[u8]) {
         if let Some(lg) = io.logger {
-            if let Ok(mut mgr) = lg.lock() {
-                mgr.write_log(io.session_id, data);
-            }
+            crate::session_logger::log_output_async(lg, io.session_id, data).await;
         }
         let payload = base64::prelude::BASE64_STANDARD.encode(data);
         if let Err(e) = io.app.emit(io.event_name, &payload) {
@@ -201,7 +199,7 @@ mod run {
 
                 match tokio::time::timeout(remaining, transport.read()).await {
                     Ok(Some(data)) => {
-                        emit_output(&io, &data);
+                        emit_output(&io, &data).await;
 
                         let space = MATCH_BUFFER_MAX.saturating_sub(match_buffer.len());
                         if data.len() <= space {
