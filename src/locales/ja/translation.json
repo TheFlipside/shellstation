@@ -229,7 +229,8 @@
     "connectionFailed": "接続失敗: {{message}}",
     "sshConnectionFailed": "SSH接続失敗: {{message}}",
     "tabContextReconnect": "再接続",
-    "reconnectHint": "[Enterキーで再接続]"
+    "reconnectHint": "[Enterキーで再接続]",
+    "notLogged": "セッション「{{name}}」はセッションログに記録されていません。ログファイルを作成できませんでした。詳細はアプリケーションログにあります。"
   },
   "hostVerify": {
     "title": "ホスト鍵の検証",

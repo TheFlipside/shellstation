@@ -1316,8 +1316,13 @@ body,
   color: var(--color-blue);
 }
 
+/* A message may hold a long word, such as a session name without spaces.
+   It wraps anywhere rather than push the close button out of the window,
+   which matters most for a toast that only goes when it is closed. */
 .toast-message {
   flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .toast-close {

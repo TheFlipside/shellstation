@@ -1017,11 +1017,31 @@ pub fn run() {
                     }),
                 _ => config_dir.join("logs"),
             };
-            let log_manager = session_logger::SessionLogManager::new(
+            let mut log_manager = session_logger::SessionLogManager::new(
                 app_config.logging.enabled,
                 log_dir,
                 app_config.logging.filename_format.clone(),
             );
+            // A session that goes on without a log says so in its tab, which
+            // shows a toast (`Terminal.tsx`). The logger calls this under
+            // its lock, which the output of every session waits for, so the
+            // event is sent from a task of its own: sending takes locks of
+            // Tauri's and hands work to the webview.
+            let notify_handle = app.handle().clone();
+            log_manager.notify_when_given_up(move |id| {
+                let handle = notify_handle.clone();
+                let id = id.to_string();
+                tauri::async_runtime::spawn(async move {
+                    let event = session_logger::not_logged_event(&id);
+                    if let Err(e) = handle.emit(&event, ()) {
+                        tracing::warn!(
+                            connection_id = %id,
+                            error = %e,
+                            "Could not tell the window that a session is not logged"
+                        );
+                    }
+                });
+            });
             app.manage(session_logger::SessionLogState(Arc::new(
                 std::sync::Mutex::new(log_manager),
             )));

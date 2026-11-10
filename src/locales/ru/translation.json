@@ -229,7 +229,8 @@
     "connectionFailed": "Ошибка подключения: {{message}}",
     "sshConnectionFailed": "Ошибка SSH-подключения: {{message}}",
     "tabContextReconnect": "Переподключиться",
-    "reconnectHint": "[Нажмите Enter для переподключения]"
+    "reconnectHint": "[Нажмите Enter для переподключения]",
+    "notLogged": "Сессия «{{name}}» не записывается в журнал: не удалось создать файл журнала. Подробности — в журнале приложения."
   },
   "hostVerify": {
     "title": "Проверка ключа хоста",

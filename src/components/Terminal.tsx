@@ -16,6 +16,7 @@ import { useTheme } from "../hooks/useTheme";
 import { PasteConfirmDialog } from "./PasteConfirmDialog";
 import { isSessionClosedError, registerTerminal, unregisterTerminal } from "../terminalRegistry";
 import { resolveTerminalTheme } from "../terminalTheme";
+import { sessionNotLoggedEvent, showSessionNotLoggedNotice } from "../sessionLogNotice";
 
 interface TerminalProps {
   sessionId: string;
@@ -387,6 +388,14 @@ export function Terminal({
       }),
       // handleExit needs no such check: cleanup sets sessionEnded.
       listen(`terminal-exit-${sessionId}`, handleExit),
+      // Session logging is on, but this session's log could not be created.
+      // The backend says so with the first output, which it holds back for
+      // the ready signal below, so this listener is there in time, unless
+      // the signal comes later than the few seconds the backend waits.
+      listen(sessionNotLoggedEvent(sessionId), () => {
+        if (disposed) return;
+        showSessionNotLoggedNotice(sessionId);
+      }),
     ];
 
     Promise.all(listeners)

@@ -229,7 +229,8 @@
     "connectionFailed": "连接失败：{{message}}",
     "sshConnectionFailed": "SSH 连接失败：{{message}}",
     "tabContextReconnect": "重新连接",
-    "reconnectHint": "[按 Enter 键重新连接]"
+    "reconnectHint": "[按 Enter 键重新连接]",
+    "notLogged": "会话“{{name}}”未被记录：无法创建其日志文件。详细信息见应用程序日志。"
   },
   "hostVerify": {
     "title": "验证主机密钥",

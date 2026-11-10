@@ -18,6 +18,21 @@ enum LogEntry {
     Pending(PathBuf),
     /// File created on first write.
     Active(File),
+    /// The log could not even be prepared when the session connected. Kept
+    /// so that the session's first output says so in its tab, as it does
+    /// for a file that cannot be created: the readers hold output back
+    /// until the tab has said that it is listening.
+    Unavailable,
+}
+
+/// Called with the connection ID of a session whose log is given up.
+type GivenUpNotifier = Box<dyn Fn(&str) + Send>;
+
+/// The event that tells a session's tab that the session is not logged,
+/// although session logging is on. It carries nothing: the reason may name
+/// paths and stays in the application log.
+pub fn not_logged_event(connection_id: &str) -> String {
+    format!("terminal-log-failed-{connection_id}")
 }
 
 /// How many more logs may share a name, as `_1` to `_999` after it.
@@ -126,6 +141,9 @@ pub struct SessionLogManager {
     pub enabled: bool,
     pub log_dir: PathBuf,
     pub filename_format: String,
+    /// Tells the window that a session goes on without a log: see
+    /// [`Self::notify_when_given_up`].
+    on_given_up: Option<GivenUpNotifier>,
 }
 
 impl SessionLogManager {
@@ -135,7 +153,27 @@ impl SessionLogManager {
             enabled,
             log_dir,
             filename_format,
+            on_given_up: None,
         }
+    }
+
+    /// Have `notify` called with the connection ID of each session whose log
+    /// is given up, so that the window can say that the session is not
+    /// logged; the application log alone is not where a user looks. It is
+    /// called once per session, on the session's first output, which is when
+    /// the log would have been created. That goes for a log that could not
+    /// be prepared at connect as well. By then the tab is listening, as the
+    /// readers hold output back until it says so. They give up waiting after
+    /// a few seconds, though: a tab that is later than that can miss the
+    /// notice, as it misses the output.
+    ///
+    /// `notify` runs inside [`write_log`], and so under the lock all sessions
+    /// share: it must not wait for anything, nor use the logger. Whatever
+    /// takes time, such as sending an event, it has to hand on.
+    ///
+    /// [`write_log`]: Self::write_log
+    pub fn notify_when_given_up(&mut self, notify: impl Fn(&str) + Send + 'static) {
+        self.on_given_up = Some(Box::new(notify));
     }
 
     /// Prepare a log for a new session connection.
@@ -144,12 +182,30 @@ impl SessionLogManager {
     /// file is created lazily on the first [`write_log`] call, so failed
     /// connections never leave empty log files on disk.
     ///
+    /// A log that cannot be prepared is an error, and the session goes on
+    /// without one. It is stored as [`LogEntry::Unavailable`], for the
+    /// first output to report: see [`Self::notify_when_given_up`].
+    ///
     /// [`write_log`]: Self::write_log
     pub fn open_log(&mut self, connection_id: &str, session_name: &str) -> Result<(), String> {
         if !self.enabled {
             return Ok(());
         }
 
+        let (entry, result) = match self.prepare_log(connection_id, session_name) {
+            Ok(path) => (LogEntry::Pending(path), Ok(())),
+            Err(e) => (LogEntry::Unavailable, Err(e)),
+        };
+        self.entries.insert(
+            connection_id.to_string(),
+            (entry, AnsiStripperState::default()),
+        );
+        result
+    }
+
+    /// Make sure the log directory is there and work out the name the log
+    /// of this session is to get.
+    fn prepare_log(&self, connection_id: &str, session_name: &str) -> Result<PathBuf, String> {
         // A missing log directory is created for its owner alone (0700 on
         // Unix, an access list of its own on Windows, as part of the create),
         // so it is never open to others.
@@ -182,11 +238,7 @@ impl SessionLogManager {
             path = %path.display(),
             "Session log prepared (file created on first write)"
         );
-        self.entries.insert(
-            connection_id.to_string(),
-            (LogEntry::Pending(path), AnsiStripperState::default()),
-        );
-        Ok(())
+        Ok(path)
     }
 
     /// Write terminal output to the log file, stripping `ANSI` escape sequences
@@ -200,7 +252,8 @@ impl SessionLogManager {
     /// without one, and the reason is logged once rather than on every
     /// output. Trying again each time would also mean up to a thousand
     /// failed creates per output where every name is taken, under the lock
-    /// all sessions share.
+    /// all sessions share. The window is told as well, once: see
+    /// [`Self::notify_when_given_up`].
     pub fn write_log(&mut self, connection_id: &str, data: &[u8]) {
         let Some((entry, stripper)) = self.entries.get_mut(connection_id) else {
             return;
@@ -213,8 +266,9 @@ impl SessionLogManager {
         }
 
         // Promote Pending → Active on first real data.
-        if let LogEntry::Pending(base) = entry {
-            match create_log_file(base) {
+        let given_up = match entry {
+            LogEntry::Active(_) => false,
+            LogEntry::Pending(base) => match create_log_file(base) {
                 Ok((file, path)) => {
                     info!(
                         connection_id = %connection_id,
@@ -222,6 +276,7 @@ impl SessionLogManager {
                         "Session log file created"
                     );
                     *entry = LogEntry::Active(file);
+                    false
                 }
                 Err(e) => {
                     warn!(
@@ -230,10 +285,18 @@ impl SessionLogManager {
                         error = %e,
                         "Failed to create session log file; this session is not logged"
                     );
-                    self.entries.remove(connection_id);
-                    return;
+                    true
                 }
+            },
+            // The reason was logged when the session connected.
+            LogEntry::Unavailable => true,
+        };
+        if given_up {
+            self.entries.remove(connection_id);
+            if let Some(notify) = &self.on_given_up {
+                notify(connection_id);
             }
+            return;
         }
         let LogEntry::Active(file) = entry else {
             return;
@@ -256,10 +319,13 @@ impl SessionLogManager {
         }
     }
 
-    /// Whether a log is open for this connection.
+    /// Whether a log is open, or prepared, for this connection.
     #[cfg(test)]
     pub fn has_log(&self, connection_id: &str) -> bool {
-        self.entries.contains_key(connection_id)
+        matches!(
+            self.entries.get(connection_id),
+            Some((LogEntry::Pending(_) | LogEntry::Active(_), _))
+        )
     }
 
     /// Close and flush the log file for a disconnected session.
@@ -284,7 +350,7 @@ impl SessionLogManager {
                     "Session log closed (no data written, no file created)"
                 );
             }
-            None => {}
+            Some((LogEntry::Unavailable, _)) | None => {}
         }
     }
 
@@ -530,6 +596,105 @@ mod tests {
         (mgr, dir)
     }
 
+    /// Have `mgr` record the sessions it reports as not logged.
+    fn record_given_up(mgr: &mut SessionLogManager) -> Arc<Mutex<Vec<String>>> {
+        let reported = Arc::new(Mutex::new(Vec::new()));
+        let sink = Arc::clone(&reported);
+        mgr.notify_when_given_up(move |id| sink.lock().unwrap().push(id.to_string()));
+        reported
+    }
+
+    /// A manager whose filename format `log_path` refuses, as a hand-edited
+    /// config could hold before startup replaces it, so that no log can be
+    /// prepared.
+    fn manager_that_cannot_prepare() -> (SessionLogManager, PathBuf) {
+        let dir = std::env::temp_dir().join(format!("ss-sessionlog-{}", uuid::Uuid::new_v4()));
+        let mgr = SessionLogManager::new(true, dir.clone(), "{name}.log:x".to_string());
+        (mgr, dir)
+    }
+
+    #[test]
+    fn a_session_that_is_logged_is_not_reported() {
+        let (mut mgr, dir) = manager();
+        let reported = record_given_up(&mut mgr);
+        mgr.open_log("a", "router").unwrap();
+        mgr.write_log("a", b"hello\n");
+        mgr.write_log("a", b"again\n");
+        mgr.close_log("a");
+        // Nor is one that has no log because logging is off.
+        mgr.enabled = false;
+        mgr.open_log("b", "router").unwrap();
+        mgr.write_log("b", b"hello\n");
+        mgr.close_log("b");
+        assert!(reported.lock().unwrap().is_empty());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_log_that_cannot_be_prepared_is_reported_on_the_first_output() {
+        let (mut mgr, dir) = manager_that_cannot_prepare();
+        let reported = record_given_up(&mut mgr);
+        assert!(mgr.open_log("a", "router").is_err());
+        assert!(!mgr.has_log("a"));
+        // Not before the tab can be listening, and not for escape sequences
+        // alone, which are no output.
+        assert!(reported.lock().unwrap().is_empty());
+        mgr.write_log("a", b"\x1b[0m");
+        assert!(reported.lock().unwrap().is_empty());
+        mgr.write_log("a", b"output\n");
+        mgr.write_log("a", b"more\n");
+        mgr.close_log("a");
+        assert_eq!(*reported.lock().unwrap(), ["a"]);
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_session_closed_before_any_output_is_not_reported() {
+        let (mut mgr, dir) = manager_that_cannot_prepare();
+        let reported = record_given_up(&mut mgr);
+        assert!(mgr.open_log("a", "router").is_err());
+        mgr.close_log("a");
+        // Output that arrives after the close finds nothing to report.
+        mgr.write_log("a", b"output\n");
+        assert!(reported.lock().unwrap().is_empty());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A manager that was given no notifier gives a log up all the same,
+    /// without a panic: tests elsewhere build one that way.
+    #[test]
+    fn a_log_is_given_up_without_a_notifier() {
+        let (mut mgr, dir) = manager_that_cannot_prepare();
+        assert!(mgr.open_log("a", "router").is_err());
+        assert!(mgr.entries.contains_key("a"));
+        mgr.write_log("a", b"output\n");
+        assert!(!mgr.entries.contains_key("a"));
+        mgr.write_log("a", b"more\n");
+        mgr.close_log("a");
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// What is kept for a log that could not be prepared goes with the
+    /// report, so that nothing is left to report a second time.
+    #[test]
+    fn a_log_that_is_reported_is_forgotten() {
+        let (mut mgr, dir) = manager_that_cannot_prepare();
+        let reported = record_given_up(&mut mgr);
+        assert!(mgr.open_log("a", "router").is_err());
+        assert!(mgr.entries.contains_key("a"));
+        mgr.write_log("a", b"output\n");
+        assert_eq!(*reported.lock().unwrap(), ["a"]);
+        assert!(!mgr.entries.contains_key("a"));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn the_event_is_named_after_the_session() {
+        assert_eq!(not_logged_event("abc-1"), "terminal-log-failed-abc-1");
+    }
+
     #[test]
     fn no_file_is_created_before_the_first_output() {
         let (mut mgr, dir) = manager();
@@ -631,6 +796,7 @@ mod tests {
     #[test]
     fn a_log_is_given_up_when_every_name_is_taken() {
         let (mut mgr, dir) = manager();
+        let reported = record_given_up(&mut mgr);
         mgr.open_log("a", "router").unwrap();
         std::fs::write(dir.join("router.log"), b"").unwrap();
         for number in 1..=MAX_SAME_NAME {
@@ -643,6 +809,8 @@ mod tests {
         // one now changes nothing.
         std::fs::remove_file(dir.join("router_7.log")).unwrap();
         mgr.write_log("a", b"more\n");
+        // Said once, however much output follows.
+        assert_eq!(*reported.lock().unwrap(), ["a"]);
         let entries: Vec<_> = std::fs::read_dir(&dir).unwrap().collect();
         assert_eq!(entries.len(), taken - 1);
         for entry in entries {
@@ -687,15 +855,24 @@ mod tests {
     #[test]
     fn a_log_that_cannot_be_created_is_given_up() {
         let (mut mgr, dir) = manager();
+        let reported = record_given_up(&mut mgr);
         mgr.open_log("a", "router").unwrap();
+        mgr.open_log("b", "switch").unwrap();
         std::fs::remove_dir(&dir).unwrap();
         mgr.write_log("a", b"output\n");
         assert!(!mgr.has_log("a"));
+        assert_eq!(*reported.lock().unwrap(), ["a"]);
         // Not tried again, even once the directory is back.
         std::fs::create_dir(&dir).unwrap();
         mgr.write_log("a", b"more\n");
         assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0);
         mgr.close_log("a");
+        // The other session's log can be created by now, and is: only the
+        // session without a log was reported.
+        mgr.write_log("b", b"output\n");
+        mgr.close_log("b");
+        assert_eq!(*reported.lock().unwrap(), ["a"]);
+        assert_eq!(std::fs::read(dir.join("switch.log")).unwrap(), b"output\n");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

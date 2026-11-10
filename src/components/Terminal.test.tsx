@@ -12,6 +12,8 @@ import { act, fireEvent, render, screen } from "@testing-library/react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { useSettingsStore } from "../stores/settingsStore";
+import { useTerminalStore } from "../stores/terminalStore";
+import { useToastStore } from "../stores/toastStore";
 import {
   SESSION_CLOSED_ERROR,
   reportSessionClosed,
@@ -390,7 +392,8 @@ describe("Terminal listener registration", () => {
       unlisteners.push(unlisten);
       await settle();
     }
-    expect(unlisteners).toHaveLength(2);
+    // Output, exit and the notice that the session is not logged.
+    expect(unlisteners).toHaveLength(3);
     return unlisteners;
   }
 
@@ -398,7 +401,7 @@ describe("Terminal listener registration", () => {
     return vi.mocked(invoke).mock.calls.filter(([cmd]) => cmd === "terminal_ready").length;
   }
 
-  it("signals ready only once both listeners are registered", async () => {
+  it("signals ready only once all its listeners are registered", async () => {
     renderTerminal();
     await settle();
     expect(readyCalls()).toBe(0);
@@ -409,7 +412,7 @@ describe("Terminal listener registration", () => {
     expect(invoke).toHaveBeenCalledWith("terminal_ready", { id: "session-1" });
   });
 
-  it("removes both listeners on unmount", async () => {
+  it("removes its listeners on unmount", async () => {
     const { unmount } = renderTerminal();
     const unlisteners = await completeRegistrations();
 
@@ -450,6 +453,45 @@ describe("Terminal listener registration", () => {
     (call[1] as unknown as (event: { payload: string }) => void)({ payload: btoa("late") });
 
     expect(term.write).not.toHaveBeenCalled();
+  });
+});
+
+describe("Terminal session log notice", () => {
+  beforeEach(() => {
+    useToastStore.setState(useToastStore.getInitialState(), true);
+    useTerminalStore.setState(useTerminalStore.getInitialState(), true);
+    useTerminalStore.getState().addTab("session-1", "core-router", "local");
+  });
+
+  /** Deliver the backend's event that the session has no log. */
+  function emitNotLogged(): void {
+    const call = vi
+      .mocked(listen)
+      .mock.calls.find(([name]) => name === "terminal-log-failed-session-1");
+    if (!call) {
+      throw new Error("Terminal did not listen for the session log notice");
+    }
+    (call[1] as unknown as (event: { payload: null }) => void)({ payload: null });
+  }
+
+  it("shows a toast that stays when the backend reports the session is not logged", () => {
+    renderTerminal();
+    expect(useToastStore.getState().toasts).toEqual([]);
+
+    emitNotLogged();
+
+    expect(useToastStore.getState().toasts).toMatchObject([
+      { message: "terminal.notLogged", level: "warning", sticky: true },
+    ]);
+  });
+
+  it("shows nothing for a report delivered after unmount", () => {
+    const { unmount } = renderTerminal();
+    unmount();
+
+    emitNotLogged();
+
+    expect(useToastStore.getState().toasts).toEqual([]);
   });
 });
 

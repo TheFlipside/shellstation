@@ -229,7 +229,8 @@
     "connectionFailed": "Falha na conexão: {{message}}",
     "sshConnectionFailed": "Falha na conexão SSH: {{message}}",
     "tabContextReconnect": "Reconectar",
-    "reconnectHint": "[Pressione Enter para reconectar]"
+    "reconnectHint": "[Pressione Enter para reconectar]",
+    "notLogged": "A sessão \"{{name}}\" não está sendo registrada: não foi possível criar o arquivo de log dela. O log do aplicativo tem os detalhes."
   },
   "hostVerify": {
     "title": "Verificar chave do host",

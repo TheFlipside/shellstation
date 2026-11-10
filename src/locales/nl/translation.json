@@ -229,7 +229,8 @@
     "connectionFailed": "Verbinding mislukt: {{message}}",
     "sshConnectionFailed": "SSH-verbinding mislukt: {{message}}",
     "tabContextReconnect": "Opnieuw verbinden",
-    "reconnectHint": "[Druk op Enter om opnieuw te verbinden]"
+    "reconnectHint": "[Druk op Enter om opnieuw te verbinden]",
+    "notLogged": "Sessie \"{{name}}\" wordt niet gelogd: het logbestand kon niet worden aangemaakt. Het applicatielogboek bevat de details."
   },
   "hostVerify": {
     "title": "Hostsleutel verifiëren",

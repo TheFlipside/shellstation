@@ -230,7 +230,8 @@
     "connectionFailed": "Connection failed: {{message}}",
     "sshConnectionFailed": "SSH connection failed: {{message}}",
     "tabContextReconnect": "Reconnect",
-    "reconnectHint": "[Press Enter to reconnect]"
+    "reconnectHint": "[Press Enter to reconnect]",
+    "notLogged": "Session \"{{name}}\" is not being logged: its log file could not be created. The application log has the details."
   },
   "hostVerify": {
     "title": "Verify Host Key",

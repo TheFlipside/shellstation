@@ -229,7 +229,8 @@
     "connectionFailed": "Verbindung fehlgeschlagen: {{message}}",
     "sshConnectionFailed": "SSH-Verbindung fehlgeschlagen: {{message}}",
     "tabContextReconnect": "Neu verbinden",
-    "reconnectHint": "[Enter drücken zum Neuverbinden]"
+    "reconnectHint": "[Enter drücken zum Neuverbinden]",
+    "notLogged": "Die Sitzung „{{name}}“ wird nicht protokolliert: Die Protokolldatei konnte nicht angelegt werden. Details stehen im Anwendungsprotokoll."
   },
   "hostVerify": {
     "title": "Hostschlüssel überprüfen",

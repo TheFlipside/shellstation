@@ -229,7 +229,8 @@
     "connectionFailed": "Bağlantı hatası: {{message}}",
     "sshConnectionFailed": "SSH bağlantı hatası: {{message}}",
     "tabContextReconnect": "Yeniden Bağlan",
-    "reconnectHint": "[Yeniden bağlanmak için Enter tuşuna basın]"
+    "reconnectHint": "[Yeniden bağlanmak için Enter tuşuna basın]",
+    "notLogged": "\"{{name}}\" oturumu günlüğe kaydedilmiyor: günlük dosyası oluşturulamadı. Ayrıntılar uygulama günlüğünde."
   },
   "hostVerify": {
     "title": "Sunucu Anahtarını Doğrula",
