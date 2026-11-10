@@ -765,8 +765,9 @@ fn open_app_log_file(
     std::path::PathBuf,
 )> {
     // The default directory belongs to the app and is made owner-only on
-    // Unix; the session logger keeps its logs there too. A directory the
-    // user chose is created if it is missing but otherwise left as it is.
+    // Unix, and on Windows when it is created here; the session logger keeps
+    // its logs there too. A directory the user chose is created if it is
+    // missing but otherwise left as it is.
     let (log_dir, created) = match &cfg.log_directory {
         Some(p) if !p.is_empty() => match validate_config_path(p, "Application log directory") {
             Ok(path) => {
@@ -833,9 +834,10 @@ fn open_app_log_file(
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let config_dir = config::app_config_dir();
-    // Owner-only on Unix: it holds the config, the local database and the
-    // logs. The subscriber is not installed yet, so a problem goes to stderr
-    // now and to the log once there is one.
+    // Owner-only on Unix, and on Windows when it is created here: it holds
+    // the config, the local database and the logs. The subscriber is not
+    // installed yet, so a problem goes to stderr now and to the log once
+    // there is one.
     let config_dir_problem = private_fs::create_private_dir(&config_dir)
         .map_err(|e| format!("Failed to create the config directory: {e}"))
         .and_then(|()| {

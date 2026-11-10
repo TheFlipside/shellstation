@@ -1,30 +1,47 @@
 //! Creating files and directories that only their owner can open.
 //!
-//! On Unix the mode is part of the create call, so a new file or directory
-//! is never open to others, not even between creating it and setting its
-//! permissions. On Windows these are plain creates that inherit the parent's
-//! ACL, which under the user's profile also lets SYSTEM and administrators
-//! in; a caller that needs owner-only access there restricts it afterwards.
+//! The restriction is part of the create call, so a new file or directory is
+//! never open to others, not even between creating it and setting its
+//! permissions. On Unix it is the mode. On Windows it is an access list of
+//! the file's or directory's own, which allows the current user everything
+//! and takes nothing from the directory above: see [`windows`]. A network
+//! share is the exception there: what is created on one gets its access list
+//! from the directory above. An existing directory is restricted on Unix
+//! only.
 
 use std::io;
 use std::path::Path;
 
+#[cfg(windows)]
+mod windows;
+
 /// Create a directory, and any missing parents, as 0700 on Unix; the umask
-/// can only take bits away. An existing directory is left as it is, so a
-/// caller that needs it owner-only still restricts it.
+/// can only take bits away. On Windows each directory created gets an access
+/// list for the current user alone, which what is later created inside it
+/// inherits; one created on a network share gets the list of the directory
+/// above instead. An existing directory is left as it is, so a caller that
+/// needs it owner-only still restricts it.
 pub(crate) fn create_private_dir(path: &Path) -> io::Result<()> {
-    let mut builder = std::fs::DirBuilder::new();
-    builder.recursive(true);
-    #[cfg(unix)]
+    #[cfg(windows)]
     {
-        use std::os::unix::fs::DirBuilderExt;
-        builder.mode(0o700);
+        windows::create_dir_all(path)
     }
-    builder.create(path)
+    #[cfg(not(windows))]
+    {
+        let mut builder = std::fs::DirBuilder::new();
+        builder.recursive(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::DirBuilderExt;
+            builder.mode(0o700);
+        }
+        builder.create(path)
+    }
 }
 
 /// Restrict an existing directory to 0700 on Unix, for one that belongs to
-/// the app alone; nothing on Windows. Separate from creating it, so that a
+/// the app alone; nothing on Windows, where a directory that is already
+/// there keeps its access list. Separate from creating it, so that a
 /// file system without Unix modes can fail this and still be used.
 // It can only fail on Unix, where it changes the mode.
 #[cfg_attr(not(unix), allow(clippy::unnecessary_wraps))]
@@ -39,11 +56,11 @@ pub(crate) fn restrict_dir_to_owner(
     Ok(())
 }
 
-/// Replace `path` with `contents` atomically: they go into a new 0600 (on
-/// Unix) temporary file next to it, which is then renamed over it. A failed
-/// or interrupted write leaves the old file whole, the new one is never open
-/// to others, and a symlink at `path` is replaced rather than written
-/// through.
+/// Replace `path` with `contents` atomically: they go into a new temporary
+/// file next to it, created as [`create_private_file`] creates one, which is
+/// then renamed over it. A failed or interrupted write leaves the old file
+/// whole, the new one is never open to others, and a symlink at `path` is
+/// replaced rather than written through.
 pub(crate) fn write_private_file(path: &Path, contents: &[u8]) -> io::Result<()> {
     use std::io::Write;
     let dir = path.parent().unwrap_or_else(|| Path::new("."));
@@ -58,7 +75,8 @@ pub(crate) fn write_private_file(path: &Path, contents: &[u8]) -> io::Result<()>
     written
 }
 
-/// Create a new, empty file as 0600 on Unix. Fails with
+/// Create a new, empty file as 0600 on Unix, and on Windows with an access
+/// list for the current user alone, unless it is on a network share. Fails with
 /// [`io::ErrorKind::AlreadyExists`] when the name is taken, so an existing
 /// file is never truncated or followed through a symlink.
 pub(crate) fn create_private_file(path: &Path) -> io::Result<std::fs::File> {
@@ -99,6 +117,12 @@ fn create_new_private(path: &Path, append: bool) -> io::Result<std::fs::File> {
 }
 
 fn open_new_private(path: &Path, append: bool) -> io::Result<std::fs::File> {
+    // On Windows the create is the module's own, with the access list. A
+    // file on a network share gets the plain create below instead.
+    #[cfg(windows)]
+    if !windows::on_share(path) {
+        return windows::open_new(path, append);
+    }
     let mut options = std::fs::OpenOptions::new();
     if append {
         options.append(true);
@@ -112,6 +136,45 @@ fn open_new_private(path: &Path, append: bool) -> io::Result<std::fs::File> {
         options.mode(0o600);
     }
     options.open(path)
+}
+
+/// Whether what these creates make at `path` is left with the access list of
+/// the directory above it, because that directory is on a network share, on
+/// Windows. For a caller to say so; never the case elsewhere.
+pub(crate) fn on_network_share(
+    #[cfg_attr(not(windows), allow(unused_variables))] path: &Path,
+) -> bool {
+    #[cfg(windows)]
+    {
+        windows::on_share(path)
+    }
+    #[cfg(not(windows))]
+    {
+        false
+    }
+}
+
+/// Assert that the file or directory at `path` is its owner's alone: no
+/// group or other bits on Unix, and on Windows the access list a create
+/// here gives. On Windows the tests therefore need a temporary directory
+/// that is not on a network share.
+#[cfg(test)]
+pub(crate) fn assert_private(
+    #[cfg_attr(not(any(unix, windows)), allow(unused_variables))] path: &Path,
+) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(path).unwrap().permissions().mode();
+        assert_eq!(
+            mode & 0o077,
+            0,
+            "{}: group/other bits set: {mode:o}",
+            path.display()
+        );
+    }
+    #[cfg(windows)]
+    windows::assert_for_user_alone(path);
 }
 
 #[cfg(test)]
@@ -130,16 +193,9 @@ mod tests {
         assert!(nested.is_dir());
         // Like `create_dir_all`, an existing directory is fine.
         create_private_dir(&nested).unwrap();
-        #[cfg(unix)]
-        for dir in [root.join("a"), nested] {
-            use std::os::unix::fs::PermissionsExt;
-            let mode = std::fs::metadata(&dir).unwrap().permissions().mode();
-            assert_eq!(
-                mode & 0o077,
-                0,
-                "{}: group/other bits set: {mode:o}",
-                dir.display()
-            );
+        // Every directory it had to create, not only the last.
+        for dir in [root.clone(), root.join("a"), nested] {
+            assert_private(&dir);
         }
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -178,12 +234,7 @@ mod tests {
         assert_eq!(std::fs::read(&file).unwrap(), b"new");
         // The temporary file was renamed into place, not left beside it.
         assert_eq!(std::fs::read_dir(&root).unwrap().count(), 1);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mode = std::fs::metadata(&file).unwrap().permissions().mode();
-            assert_eq!(mode & 0o077, 0, "group/other bits set: {mode:o}");
-        }
+        assert_private(&file);
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -195,12 +246,7 @@ mod tests {
         create_private_file(&file).unwrap();
         let again = create_private_file(&file).unwrap_err();
         assert_eq!(again.kind(), io::ErrorKind::AlreadyExists);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mode = std::fs::metadata(&file).unwrap().permissions().mode();
-            assert_eq!(mode & 0o077, 0, "group/other bits set: {mode:o}");
-        }
+        assert_private(&file);
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -221,6 +267,9 @@ mod tests {
             .unwrap();
         log.write_all(b"second\n").unwrap();
         assert_eq!(std::fs::read(&file).unwrap(), b"second\n");
+        // On Windows the handle itself cannot cut the file short.
+        #[cfg(windows)]
+        assert!(log.set_len(0).is_err());
         let again = create_private_append_file(&file).unwrap_err();
         assert_eq!(again.kind(), io::ErrorKind::AlreadyExists);
         // A directory holds a name as a file does.
@@ -228,12 +277,7 @@ mod tests {
         std::fs::create_dir(&taken).unwrap();
         let by_directory = create_private_append_file(&taken).unwrap_err();
         assert_eq!(by_directory.kind(), io::ErrorKind::AlreadyExists);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mode = std::fs::metadata(&file).unwrap().permissions().mode();
-            assert_eq!(mode & 0o077, 0, "group/other bits set: {mode:o}");
-        }
+        assert_private(&file);
         let _ = std::fs::remove_dir_all(&root);
     }
 

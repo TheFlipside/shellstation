@@ -30,13 +30,15 @@ const MAX_SAME_NAME: u16 = 999;
 /// The name is predictable (session name and minute), and the log directory
 /// may be one that others can write to. So the file is never opened if it is
 /// already there: it is created, by a call that fails when anything holds the
-/// name, a symlink included, and as 0600 on Unix from the start. Terminal
-/// output therefore never goes into a file someone else put there, or through
-/// a link to a file elsewhere, and on Unix the log is never open to others,
-/// not even between creating it and restricting it. On Windows it gets its
-/// access list from the log directory, so there it is as private as the
-/// directory is. Two sessions with the same name that connect in the same
-/// minute get a file each this way, too.
+/// name, a symlink included, and for its owner alone from the start: as 0600
+/// on Unix, and on Windows with an access list of its own, for the current
+/// user, rather than the log directory's. Terminal output therefore never
+/// goes into a file someone else put there, or through a link to a file
+/// elsewhere, and the log is never open to others, not even between creating
+/// it and restricting it. The exception is a log directory on a network
+/// share on Windows, where a log gets the directory's access list and is as
+/// private as the share makes it. Two sessions with the same name that
+/// connect in the same minute get a file each this way, too.
 fn create_log_file(base: &Path) -> io::Result<(File, PathBuf)> {
     let stem = base.file_stem().unwrap_or_default().to_string_lossy();
     let extension = base.extension().map(|ext| ext.to_string_lossy());
@@ -148,14 +150,15 @@ impl SessionLogManager {
             return Ok(());
         }
 
-        // A missing log directory is created owner-only on Unix (0700 is
-        // part of the create), so it is never open to others.
+        // A missing log directory is created for its owner alone (0700 on
+        // Unix, an access list of its own on Windows, as part of the create),
+        // so it is never open to others.
         private_fs::create_private_dir(&self.log_dir)
             .map_err(|e| format!("Failed to create log directory: {e}"))?;
-        // One that was already there is restricted as before, as far as it
-        // can be. A directory that is not the user's, or on a file system
-        // without Unix modes, is still used: each log file is created
-        // owner-only on its own.
+        // One that was already there is restricted as before on Unix, as
+        // far as it can be, and left as it is on Windows. A directory that
+        // is not the user's, or on a file system without Unix modes, is
+        // still used: each log file is created owner-only on its own.
         let _ = private_fs::restrict_dir_to_owner(&self.log_dir);
 
         // The log stays in the log directory because its name holds no path
@@ -164,6 +167,15 @@ impl SessionLogManager {
         // Neither covers the log directory itself: someone able to replace
         // it, or a directory above it, with a link decides where it leads.
         let path = self.log_path(session_name)?;
+
+        // Said in the application log, as nothing else tells the user.
+        if private_fs::on_network_share(&path) {
+            info!(
+                connection_id = %connection_id,
+                "The session log directory is on a network share: the log gets \
+                 the access list of the directory there, not one of its own"
+            );
+        }
 
         info!(
             connection_id = %connection_id,
@@ -687,23 +699,33 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
-    #[cfg(unix)]
     #[test]
     fn a_new_log_and_its_directory_are_owner_only() {
-        use std::os::unix::fs::PermissionsExt;
         let (mut mgr, dir) = manager();
         mgr.open_log("a", "router").unwrap();
         mgr.write_log("a", b"output\n");
         mgr.close_log("a");
         for path in [dir.clone(), dir.join("router.log")] {
-            let mode = std::fs::metadata(&path).unwrap().permissions().mode();
-            assert_eq!(
-                mode & 0o077,
-                0,
-                "{}: group/other bits set: {mode:o}",
-                path.display()
-            );
+            private_fs::assert_private(&path);
         }
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A log directory that is already there is left as it is on Windows,
+    /// with the access list it got from the directory above, which may let
+    /// others in. A log in it is still its owner's alone. On Unix the
+    /// directory is restricted as well, and the log's own mode is what is
+    /// checked.
+    #[test]
+    fn a_log_in_a_directory_already_there_is_owner_only() {
+        let (mut mgr, dir) = manager();
+        std::fs::create_dir(&dir).unwrap();
+        mgr.open_log("a", "router").unwrap();
+        mgr.write_log("a", b"output\n");
+        mgr.close_log("a");
+        let log = dir.join("router.log");
+        private_fs::assert_private(&log);
+        assert_eq!(std::fs::read(&log).unwrap(), b"output\n");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
