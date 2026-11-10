@@ -874,7 +874,7 @@ pub fn run() {
             // navigate it (no in-app routing by URL, no links opened in it).
             if webview.label() == "main" && payload.event() == tauri::webview::PageLoadEvent::Started
             {
-                commands::close_all_sessions(webview.app_handle());
+                commands::page_load_started(webview.app_handle());
             }
         })
         // Only the Help menu opens URLs, from Rust, so the webview is given
@@ -1192,6 +1192,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             // Terminal ready signal (all protocols)
             commands::terminal_ready,
+            // The page the sessions belong to
+            commands::page_announce,
             // Quitting, once every session is closed
             commands::app_quit,
             // PTY

@@ -4,6 +4,11 @@ import "@xterm/xterm/css/xterm.css";
 import "./i18n";
 import App from "./App";
 import type { ThemeMode } from "./stores/settingsStore";
+import { announcePageAtStartup } from "./page";
+
+// First of all, so that sessions an earlier page left behind (a reload) are
+// closed before this one opens any.
+announcePageAtStartup();
 
 // Resolve the initial theme before React renders to prevent a flash of
 // unstyled content. The Zustand persisted store writes to localStorage

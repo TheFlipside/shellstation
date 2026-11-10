@@ -16,14 +16,15 @@ pub fn pty_spawn(
     state: State<'_, PtyState>,
     ready_state: State<'_, TerminalReadyState>,
     logger_state: State<'_, SessionLogState>,
+    page: String,
     cols: u16,
     rows: u16,
 ) -> Result<String, String> {
-    let page_load = ready_state.page_load();
+    ready_state.check_page(&page)?;
     validate_dimensions(cols, rows)?;
     let id = Uuid::new_v4().to_string();
 
-    let setup = ConnectSetup::begin(&id, "local", page_load, &ready_state, &logger_state);
+    let setup = ConnectSetup::begin(&id, "local", page, &ready_state, &logger_state);
 
     // Create ready signal so the reader thread waits for the frontend listener.
     let (ready_tx, ready_rx) = std::sync::mpsc::channel::<()>();

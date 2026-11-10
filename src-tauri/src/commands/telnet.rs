@@ -19,12 +19,13 @@ pub async fn telnet_connect(
     ready_state: State<'_, TerminalReadyState>,
     logger_state: State<'_, SessionLogState>,
     config: State<'_, ConfigState>,
+    page: String,
     host: String,
     port: u16,
     cols: u16,
     rows: u16,
 ) -> Result<String, String> {
-    let page_load = ready_state.page_load();
+    ready_state.check_page(&page)?;
     validate_dimensions(cols, rows)?;
     let settings = connection::current(&config)?;
     let id = Uuid::new_v4().to_string();
@@ -39,7 +40,7 @@ pub async fn telnet_connect(
     let setup = ConnectSetup::begin(
         &id,
         &format!("{host}:{port}"),
-        page_load,
+        page,
         &ready_state,
         &logger_state,
     );

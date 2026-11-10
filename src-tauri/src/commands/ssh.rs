@@ -20,6 +20,7 @@ pub async fn ssh_connect(
     ready_state: State<'_, TerminalReadyState>,
     logger_state: State<'_, SessionLogState>,
     config: State<'_, ConfigState>,
+    page: String,
     host: String,
     port: u16,
     username: String,
@@ -29,7 +30,7 @@ pub async fn ssh_connect(
     rows: u16,
     jump_hops: Option<Vec<JumpHop>>,
 ) -> Result<String, String> {
-    let page_load = ready_state.page_load();
+    ready_state.check_page(&page)?;
     validate_dimensions(cols, rows)?;
     let settings = connection::current(&config)?;
     let hops = jump_hops.unwrap_or_default();
@@ -48,7 +49,7 @@ pub async fn ssh_connect(
     let setup = ConnectSetup::begin(
         &id,
         &format!("{username}@{host}"),
-        page_load,
+        page,
         &ready_state,
         &logger_state,
     );

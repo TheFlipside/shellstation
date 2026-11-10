@@ -588,11 +588,12 @@ pub async fn session_connect(
     logger_state: State<'_, SessionLogState>,
     pg: State<'_, crate::db::PgPoolState>,
     config: State<'_, crate::config::ConfigState>,
+    page: String,
     id: String,
     cols: u16,
     rows: u16,
 ) -> Result<String, String> {
-    let page_load = ready_state.page_load();
+    ready_state.check_page(&page)?;
     validate_dimensions(cols, rows)?;
 
     let session_id = parse_uuid(&id)?;
@@ -637,13 +638,7 @@ pub async fn session_connect(
         }
 
         let logger = Some(std::sync::Arc::clone(&logger_state.0));
-        let setup = ConnectSetup::begin(
-            &conn_id,
-            &session.name,
-            page_load,
-            &ready_state,
-            &logger_state,
-        );
+        let setup = ConnectSetup::begin(&conn_id, &session.name, page, &ready_state, &logger_state);
 
         // Create ready signal so the reader task waits for the frontend listener.
         let (ready_tx, ready_rx) = tokio::sync::oneshot::channel::<()>();
@@ -758,13 +753,7 @@ pub async fn session_connect(
     }
 
     let logger = Some(std::sync::Arc::clone(&logger_state.0));
-    let setup = ConnectSetup::begin(
-        &conn_id,
-        &session.name,
-        page_load,
-        &ready_state,
-        &logger_state,
-    );
+    let setup = ConnectSetup::begin(&conn_id, &session.name, page, &ready_state, &logger_state);
 
     // Create ready signal so the reader task waits for the frontend listener.
     let (ready_tx, ready_rx) = tokio::sync::oneshot::channel::<()>();

@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
 import { useAppStore } from "./appStore";
 import { useTerminalStore, type TabMeta } from "./terminalStore";
+import { invokeConnect } from "../page";
 
 export interface Folder {
   id: string;
@@ -426,7 +427,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     if (!session) return;
 
     // The connection settings are read by the backend itself.
-    const connId = await invoke<string>("session_connect", { id, cols: 80, rows: 24 });
+    const connId = await invokeConnect("session_connect", { id, cols: 80, rows: 24 });
 
     const { type, meta } = sessionTabKind(session);
     useTerminalStore.getState().addTab(connId, session.name, type, meta, session.id);

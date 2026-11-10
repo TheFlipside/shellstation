@@ -13,6 +13,8 @@ description = "Every command of the app itself. Meant for the main window only."
 commands.allow = [
   # Terminal ready signal (all protocols)
   "terminal_ready",
+  # The page the sessions belong to
+  "page_announce",
   # Quitting, once every session is closed
   "app_quit",
   # PTY

@@ -3,8 +3,9 @@
  *
  * Focus of this suite: reconnecting an exited tab. Each session_connect opens
  * a real backend connection, so a reconnect that no tab ends up owning is a
- * connection nobody can see or close. Also covers keeping the active tab
- * scrolled into view in the tab strip. Terminal and CommandBar are stubbed out;
+ * connection nobody can see or close. Also covers opening a session for the
+ * page that announced itself, and keeping the active tab scrolled into view
+ * in the tab strip. Terminal and CommandBar are stubbed out;
  * the real Zustand stores are used so the tests exercise the same tab state
  * the app does.
  */
@@ -229,6 +230,44 @@ describe("TerminalTabs reconnect", () => {
     expect(tabIds()).toEqual([]);
   });
 
+  it("announces its page, then passes the page's token with the connect", async () => {
+    // The backend opens a session only for the page announced last, so that
+    // a connect sent in the instant of a reload cannot outlive its tab.
+    render(<TerminalTabs uiScale={100} />);
+
+    pressReconnect();
+    await settle();
+
+    const calls = vi.mocked(invoke).mock.calls;
+    const announce = calls.findIndex(([cmd]) => cmd === "page_announce");
+    const connect = calls.findIndex(([cmd]) => cmd === "session_connect");
+    expect(announce).toBeGreaterThan(-1);
+    expect(connect).toBeGreaterThan(announce);
+    const { page } = calls[announce][1] as { page: string };
+    expect(page).toMatch(/./);
+    expect(calls[connect][1]).toEqual({ page, id: SESSION.id, cols: 80, rows: 24 });
+  });
+
+  it("does not connect when its page cannot be announced", async () => {
+    deferred.add("page_announce");
+    render(<TerminalTabs uiScale={100} />);
+
+    pressReconnect();
+    await settle();
+    await finish("page_announce", { error: "refused" });
+
+    expect(connectCalls()).toBe(0);
+    expect(useToastStore.getState().toasts.map((toast) => toast.message)).toEqual([
+      "terminal.connectionFailed",
+    ]);
+
+    // The failed attempt is over: another one goes through.
+    deferred.delete("page_announce");
+    pressReconnect();
+    await settle();
+    expect(connectCalls()).toBe(1);
+  });
+
   it("does not reconnect a tab that is already being closed", async () => {
     deferred.add("ssh_disconnect");
     render(<TerminalTabs uiScale={100} />);
@@ -335,6 +374,62 @@ describe("TerminalTabs reconnect", () => {
     expect(useTerminalStore.getState().tabs).toMatchObject([
       { id: NEW_CONN, type: "telnet", meta: { host: SESSION.hostname, port: SESSION.port } },
     ]);
+  });
+});
+
+describe("TerminalTabs opening a session", () => {
+  /** The arguments of the one call to `cmd`, and the token announced before it. */
+  function connectCall(cmd: string): { args: unknown; page: unknown } {
+    const calls = vi.mocked(invoke).mock.calls;
+    const announce = calls.findIndex(([name]) => name === "page_announce");
+    const connect = calls.findIndex(([name]) => name === cmd);
+    expect(announce).toBeGreaterThan(-1);
+    expect(connect).toBeGreaterThan(announce);
+    return {
+      args: calls[connect][1],
+      page: (calls[announce][1] as { page?: unknown } | undefined)?.page,
+    };
+  }
+
+  it("opens a local shell for its page", async () => {
+    deferred = new Set(["pty_spawn"]);
+    render(<TerminalTabs uiScale={100} />);
+
+    fireEvent.click(screen.getByTitle("terminal.newLocalTerminal"));
+    await settle();
+    await finish("pty_spawn", { value: NEW_CONN });
+
+    const { args, page } = connectCall("pty_spawn");
+    expect(page).toMatch(/./);
+    expect(args).toEqual({ page, cols: 80, rows: 24 });
+    expect(tabIds()).toEqual([OLD_CONN, NEW_CONN]);
+  });
+
+  it("says so when a local shell cannot be opened", async () => {
+    // A refused connect, e.g. one sent as the window reloads, used to do
+    // nothing at all.
+    deferred = new Set(["pty_spawn"]);
+    render(<TerminalTabs uiScale={100} />);
+
+    fireEvent.click(screen.getByTitle("terminal.newLocalTerminal"));
+    await settle();
+    await finish("pty_spawn", { error: "The window was reloaded" });
+
+    expect(useToastStore.getState().toasts.map((toast) => toast.message)).toEqual([
+      "terminal.connectionFailed",
+    ]);
+    expect(tabIds()).toEqual([OLD_CONN]);
+  });
+
+  it("connects a saved session for its page", async () => {
+    const connecting = useSessionStore.getState().connectSession(SESSION.id);
+    await settle();
+    await finish("session_connect", { value: NEW_CONN });
+    await connecting;
+
+    const { args, page } = connectCall("session_connect");
+    expect(args).toEqual({ page, id: SESSION.id, cols: 80, rows: 24 });
+    expect(tabIds()).toEqual([OLD_CONN, NEW_CONN]);
   });
 });
 

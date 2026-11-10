@@ -13,6 +13,7 @@ import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { useSettingsStore } from "../stores/settingsStore";
 import { useToastStore } from "../stores/toastStore";
 import { CommandBar } from "./CommandBar";
+import { invokeConnect } from "../page";
 
 // eslint-disable-next-line @typescript-eslint/no-empty-function
 const noop = (): void => {};
@@ -181,16 +182,21 @@ export function TerminalTabs({ uiScale }: TerminalTabsProps): React.JSX.Element 
   const kbdInteractiveQueueRef = useRef<KbdInteractiveRequest[]>([]);
 
   const createLocalTab = useCallback(async () => {
-    const id = await invoke<string>("pty_spawn", { cols: 80, rows: 24 });
-    addTab(id, t("terminal.newTab", { count: String(tabs.length + 1) }), "local");
-  }, [addTab, tabs.length, t]);
+    try {
+      const id = await invokeConnect("pty_spawn", { cols: 80, rows: 24 });
+      addTab(id, t("terminal.newTab", { count: String(tabs.length + 1) }), "local");
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      addToast(t("terminal.connectionFailed", { message }));
+    }
+  }, [addTab, tabs.length, t, addToast]);
 
   const handleQuickConnect = useCallback(
     async (params: QuickConnectParams) => {
       setShowQuickConnect(false);
       try {
         if (params.protocol === "telnet") {
-          const id = await invoke<string>("telnet_connect", {
+          const id = await invokeConnect("telnet_connect", {
             host: params.host,
             port: params.port,
             cols: 80,
@@ -201,7 +207,7 @@ export function TerminalTabs({ uiScale }: TerminalTabsProps): React.JSX.Element 
             port: params.port,
           });
         } else {
-          const id = await invoke<string>("ssh_connect", {
+          const id = await invokeConnect("ssh_connect", {
             host: params.host,
             port: params.port,
             username: params.username,
@@ -371,7 +377,7 @@ export function TerminalTabs({ uiScale }: TerminalTabsProps): React.JSX.Element 
         .then(() => {
           // Closed meanwhile: there is no tab left to reconnect.
           if (tabGone()) return null;
-          return invoke<string>("session_connect", {
+          return invokeConnect("session_connect", {
             id: tab.sessionDbId,
             cols: 80,
             rows: 24,

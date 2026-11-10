@@ -43,6 +43,17 @@ export default defineConfig(
       curly: "error",
       "@typescript-eslint/no-explicit-any": "error", // Force types for Tauri commands
       "@typescript-eslint/no-floating-promises": "error", // Ensure Tauri 'invoke' is awaited
+      // The backend opens a session only for the page that announced itself
+      // and passes its token; invokeConnect does both.
+      "no-restricted-syntax": [
+        "error",
+        {
+          selector:
+            "CallExpression[callee.name='invoke'][arguments.0.value=/^(pty_spawn|ssh_connect|telnet_connect|session_connect)$/]",
+          message:
+            "Open a session through invokeConnect (src/page.ts), which announces the page and adds its token.",
+        },
+      ],
 
       // --- Tauri Security ---
       "security/detect-non-literal-fs-filename": "warn", // Critical if using tauri-plugin-fs
