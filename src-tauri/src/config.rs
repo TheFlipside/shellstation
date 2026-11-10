@@ -221,7 +221,7 @@ fn default_log_filename_format() -> String {
 }
 
 /// The placeholders the session logger fills in (see
-/// `SessionLogManager::generate_unique_path`).
+/// `SessionLogManager::log_path`).
 const FILENAME_PLACEHOLDERS: [&str; 6] = ["{name}", "{mm}", "{hh}", "{dd}", "{MM}", "{yy}"];
 
 /// Characters a filename format may hold besides letters, digits and the

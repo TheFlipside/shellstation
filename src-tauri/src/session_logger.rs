@@ -1,20 +1,98 @@
 use std::collections::HashMap;
-use std::fs::{self, File, OpenOptions};
-use std::io::Write;
-use std::path::PathBuf;
+use std::fs::File;
+use std::io::{self, Write};
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use chrono::{Datelike, Local, Timelike};
 use tracing::{info, warn};
 
+use crate::private_fs;
+
 /// A log entry is either waiting for its first write (Pending) or actively
 /// writing to a file (Active).  Pending entries never touch the filesystem,
 /// so failed connections leave no empty log files behind.
 enum LogEntry {
-    /// Path validated and generated, but no file created yet.
+    /// The name the log is to get, but no file created yet. The file may
+    /// end up with a number after the name: see [`create_log_file`].
     Pending(PathBuf),
-    /// File opened on first write.
+    /// File created on first write.
     Active(File),
+}
+
+/// How many more logs may share a name, as `_1` to `_999` after it.
+const MAX_SAME_NAME: u16 = 999;
+
+/// Create the log file for `base`: under that name, or with `_1`, `_2`, …
+/// before the extension when the name is taken. Returns the file and the
+/// name it got.
+///
+/// The name is predictable (session name and minute), and the log directory
+/// may be one that others can write to. So the file is never opened if it is
+/// already there: it is created, by a call that fails when anything holds the
+/// name, a symlink included, and as 0600 on Unix from the start. Terminal
+/// output therefore never goes into a file someone else put there, or through
+/// a link to a file elsewhere, and on Unix the log is never open to others,
+/// not even between creating it and restricting it. On Windows it gets its
+/// access list from the log directory, so there it is as private as the
+/// directory is. Two sessions with the same name that connect in the same
+/// minute get a file each this way, too.
+fn create_log_file(base: &Path) -> io::Result<(File, PathBuf)> {
+    let stem = base.file_stem().unwrap_or_default().to_string_lossy();
+    let extension = base.extension().map(|ext| ext.to_string_lossy());
+    for number in 0..=MAX_SAME_NAME {
+        let path = match (number, &extension) {
+            (0, _) => base.to_path_buf(),
+            (_, Some(ext)) => base.with_file_name(format!("{stem}_{number}.{ext}")),
+            (_, None) => base.with_file_name(format!("{stem}_{number}")),
+        };
+        match private_fs::create_private_append_file(&path) {
+            Ok(file) => return Ok((file, path)),
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
+            Err(e) => return Err(e),
+        }
+    }
+    Err(io::Error::new(
+        io::ErrorKind::AlreadyExists,
+        "too many log files with this name",
+    ))
+}
+
+/// Longest session name a log filename takes, in bytes. It keeps a long
+/// session name from making a filename longer than the 255 bytes file systems
+/// allow, with room for the rest of a format in plain letters and the number
+/// after a taken name. A format can still be too long by itself, by holding
+/// `{name}` more than twice or many letters beyond ASCII; the log then cannot
+/// be created and is given up.
+const MAX_LOG_NAME_BYTES: usize = 120;
+
+/// A session name as it goes into a log filename: letters, digits and `-_.`
+/// only, everything else as `_`. A dot is kept only between other characters
+/// and never next to another dot, so a name cannot make the filename start
+/// with a dot (a hidden file on Unix), run into the format's own dot as `..`,
+/// which [`SessionLogManager::log_path`] refuses, or end in a dot. A name
+/// that is empty becomes `session`, and one that is too long is cut.
+fn log_name(session_name: &str) -> String {
+    let mut name = String::new();
+    for c in session_name.chars() {
+        let c = match c {
+            '.' if name.is_empty() || name.ends_with('.') => '_',
+            c if c.is_alphanumeric() || matches!(c, '-' | '_' | '.') => c,
+            _ => '_',
+        };
+        if name.len() + c.len_utf8() > MAX_LOG_NAME_BYTES {
+            break;
+        }
+        name.push(c);
+    }
+    if name.ends_with('.') {
+        name.pop();
+        name.push('_');
+    }
+    if name.is_empty() {
+        name.push_str("session");
+    }
+    name
 }
 
 /// Per-connection state for the `ANSI` escape sequence stripper.
@@ -63,38 +141,29 @@ impl SessionLogManager {
     /// Validates the path and stores it as [`LogEntry::Pending`].  The actual
     /// file is created lazily on the first [`write_log`] call, so failed
     /// connections never leave empty log files on disk.
+    ///
+    /// [`write_log`]: Self::write_log
     pub fn open_log(&mut self, connection_id: &str, session_name: &str) -> Result<(), String> {
         if !self.enabled {
             return Ok(());
         }
 
-        fs::create_dir_all(&self.log_dir)
+        // A missing log directory is created owner-only on Unix (0700 is
+        // part of the create), so it is never open to others.
+        private_fs::create_private_dir(&self.log_dir)
             .map_err(|e| format!("Failed to create log directory: {e}"))?;
+        // One that was already there is restricted as before, as far as it
+        // can be. A directory that is not the user's, or on a file system
+        // without Unix modes, is still used: each log file is created
+        // owner-only on its own.
+        let _ = private_fs::restrict_dir_to_owner(&self.log_dir);
 
-        // Secure the log directory on Unix (owner-only access).
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let _ = fs::set_permissions(&self.log_dir, fs::Permissions::from_mode(0o700));
-        }
-
-        let path = self.generate_unique_path(session_name)?;
-
-        // Verify the resolved path stays within log_dir (prevent traversal).
-        let canonical_dir = self
-            .log_dir
-            .canonicalize()
-            .map_err(|e| format!("Failed to canonicalize log directory: {e}"))?;
-        // The file doesn't exist yet, so canonicalize the parent directory.
-        let parent = path
-            .parent()
-            .ok_or_else(|| "Log file path has no parent directory".to_string())?;
-        let canonical_parent = parent
-            .canonicalize()
-            .map_err(|e| format!("Failed to canonicalize log file parent: {e}"))?;
-        if !canonical_parent.starts_with(&canonical_dir) {
-            return Err("Log file path escapes the configured log directory".to_string());
-        }
+        // The log stays in the log directory because its name holds no path
+        // separator (see `log_path`), and it is never written through a link
+        // because it is created rather than opened (see `create_log_file`).
+        // Neither covers the log directory itself: someone able to replace
+        // it, or a directory above it, with a link decides where it leads.
+        let path = self.log_path(session_name)?;
 
         info!(
             connection_id = %connection_id,
@@ -108,121 +177,54 @@ impl SessionLogManager {
         Ok(())
     }
 
-    /// Promote a [`LogEntry::Pending`] to [`LogEntry::Active`] by creating the
-    /// file on disk.  Returns a mutable reference to the opened file.
-    fn activate_log(&mut self, connection_id: &str) -> Result<&mut File, String> {
-        // Take the entry out so we can replace it.
-        let (entry, stripper) = self
-            .entries
-            .remove(connection_id)
-            .ok_or_else(|| format!("No log entry for {connection_id}"))?;
-
-        let path = match entry {
-            LogEntry::Pending(p) => p,
-            LogEntry::Active(file) => {
-                // Already active — put it back and return.
-                self.entries.insert(
-                    connection_id.to_string(),
-                    (LogEntry::Active(file), stripper),
-                );
-                if let Some((LogEntry::Active(ref mut f), _)) = self.entries.get_mut(connection_id)
-                {
-                    return Ok(f);
-                }
-                unreachable!();
-            }
-        };
-
-        let file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&path)
-            .map_err(|e| {
-                // Re-insert as Pending so close_log can still clean up.
-                self.entries.insert(
-                    connection_id.to_string(),
-                    (LogEntry::Pending(path.clone()), stripper),
-                );
-                format!("Failed to open log file {}: {e}", path.display())
-            })?;
-
-        // Post-open verification: confirm the created file resolves within
-        // log_dir. Guards against symlink races between path validation and
-        // file creation.
-        let canonical_file = path.canonicalize().map_err(|e| {
-            let _ = fs::remove_file(&path);
-            format!("Failed to canonicalize created log file: {e}")
-        })?;
-        let canonical_dir = self.log_dir.canonicalize().map_err(|e| {
-            let _ = fs::remove_file(&path);
-            format!("Failed to canonicalize log directory during post-open check: {e}")
-        })?;
-        if !canonical_file.starts_with(&canonical_dir) {
-            let _ = fs::remove_file(&path);
-            return Err(
-                "Log file path escapes the configured log directory (post-open check)".to_string(),
-            );
-        }
-
-        // Set restrictive permissions on Unix (owner read/write only).
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).map_err(|e| {
-                let _ = fs::remove_file(&path);
-                format!("Failed to set log file permissions: {e}")
-            })?;
-        }
-
-        info!(
-            connection_id = %connection_id,
-            path = %path.display(),
-            "Session log file created"
-        );
-        self.entries.insert(
-            connection_id.to_string(),
-            (LogEntry::Active(file), stripper),
-        );
-
-        match self.entries.get_mut(connection_id) {
-            Some((LogEntry::Active(ref mut f), _)) => Ok(f),
-            _ => unreachable!(),
-        }
-    }
-
     /// Write terminal output to the log file, stripping `ANSI` escape sequences
     /// so the log contains only readable text.
     ///
     /// Creates the log file on the first call (lazy open).  The `ANSI` stripper
     /// state is preserved across calls so that escape sequences split across
     /// read boundaries (common with Windows `ConPTY`) are handled correctly.
+    ///
+    /// A log whose file cannot be created is given up: the session goes on
+    /// without one, and the reason is logged once rather than on every
+    /// output. Trying again each time would also mean up to a thousand
+    /// failed creates per output where every name is taken, under the lock
+    /// all sessions share.
     pub fn write_log(&mut self, connection_id: &str, data: &[u8]) {
-        if !self.entries.contains_key(connection_id) {
+        let Some((entry, stripper)) = self.entries.get_mut(connection_id) else {
             return;
-        }
+        };
 
         // Run the stripper with per-connection persistent state.
-        let stripper = &mut self
-            .entries
-            .get_mut(connection_id)
-            .expect("checked above")
-            .1;
         let clean = strip_ansi_stateful(stripper, data);
         if clean.is_empty() {
             return;
         }
 
         // Promote Pending → Active on first real data.
-        let file = match self.activate_log(connection_id) {
-            Ok(f) => f,
-            Err(e) => {
-                warn!(
-                    connection_id = %connection_id,
-                    error = %e,
-                    "Failed to activate session log"
-                );
-                return;
+        if let LogEntry::Pending(base) = entry {
+            match create_log_file(base) {
+                Ok((file, path)) => {
+                    info!(
+                        connection_id = %connection_id,
+                        path = %path.display(),
+                        "Session log file created"
+                    );
+                    *entry = LogEntry::Active(file);
+                }
+                Err(e) => {
+                    warn!(
+                        connection_id = %connection_id,
+                        path = %base.display(),
+                        error = %e,
+                        "Failed to create session log file; this session is not logged"
+                    );
+                    self.entries.remove(connection_id);
+                    return;
+                }
             }
+        }
+        let LogEntry::Active(file) = entry else {
+            return;
         };
 
         if let Err(e) = file.write_all(&clean) {
@@ -274,19 +276,12 @@ impl SessionLogManager {
         }
     }
 
-    /// Generate a unique file path, appending _1, _2, etc. if the name exists.
-    fn generate_unique_path(&self, session_name: &str) -> Result<PathBuf, String> {
+    /// The path a log for `session_name` is to get, from the filename format
+    /// and the current time. Whether the name is free is settled only when
+    /// the file is created: see [`create_log_file`].
+    fn log_path(&self, session_name: &str) -> Result<PathBuf, String> {
         let now = Local::now();
-        let safe_name: String = session_name
-            .chars()
-            .map(|c| {
-                if c.is_alphanumeric() || c == '-' || c == '_' || c == '.' {
-                    c
-                } else {
-                    '_'
-                }
-            })
-            .collect();
+        let safe_name = log_name(session_name);
 
         let mut filename = self
             .filename_format
@@ -309,33 +304,7 @@ impl SessionLogManager {
             return Err("Generated log filename contains path traversal characters".to_string());
         }
 
-        let base_path = self.log_dir.join(&filename);
-
-        if !base_path.exists() {
-            return Ok(base_path);
-        }
-
-        let stem = base_path
-            .file_stem()
-            .unwrap_or_default()
-            .to_string_lossy()
-            .to_string();
-        let ext = base_path
-            .extension()
-            .map(|e| e.to_string_lossy().to_string());
-
-        for i in 1..=999u16 {
-            let deduped = match &ext {
-                Some(e) => format!("{stem}_{i}.{e}"),
-                None => format!("{stem}_{i}"),
-            };
-            let path = self.log_dir.join(deduped);
-            if !path.exists() {
-                return Ok(path);
-            }
-        }
-
-        Err("Too many log files with the same name in this minute".to_string())
+        Ok(self.log_dir.join(&filename))
     }
 }
 
@@ -537,14 +506,205 @@ mod tests {
     fn a_session_named_like_a_device_gets_an_ordinary_log_file() {
         let dir = std::env::temp_dir().join(format!("ss-devlog-{}", uuid::Uuid::new_v4()));
         let mgr = SessionLogManager::new(true, dir.clone(), "{name}.log".to_string());
+        assert_eq!(mgr.log_path("COM1").unwrap(), dir.join("_COM1.log"));
+        assert_eq!(mgr.log_path("router").unwrap(), dir.join("router.log"));
+    }
+
+    /// A manager logging into a new directory under the temp directory,
+    /// which the caller removes.
+    fn manager() -> (SessionLogManager, PathBuf) {
+        let dir = std::env::temp_dir().join(format!("ss-sessionlog-{}", uuid::Uuid::new_v4()));
+        let mgr = SessionLogManager::new(true, dir.clone(), "{name}.log".to_string());
+        (mgr, dir)
+    }
+
+    #[test]
+    fn no_file_is_created_before_the_first_output() {
+        let (mut mgr, dir) = manager();
+        mgr.open_log("a", "router").unwrap();
+        assert!(dir.is_dir());
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0);
+        // Escape sequences alone are no output.
+        mgr.write_log("a", b"\x1b[0m");
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0);
+        mgr.write_log("a", b"hello\n");
+        mgr.write_log("a", b"again\n");
+        mgr.close_log("a");
         assert_eq!(
-            mgr.generate_unique_path("COM1").unwrap(),
-            dir.join("_COM1.log")
+            std::fs::read(dir.join("router.log")).unwrap(),
+            b"hello\nagain\n"
+        );
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn sessions_with_the_same_name_get_a_file_each() {
+        let (mut mgr, dir) = manager();
+        // Both are prepared before either has a file.
+        mgr.open_log("a", "router").unwrap();
+        mgr.open_log("b", "router").unwrap();
+        mgr.write_log("b", b"second session\n");
+        mgr.write_log("a", b"first session\n");
+        mgr.write_log("b", b"more\n");
+        mgr.close_log("a");
+        mgr.close_log("b");
+        assert_eq!(
+            std::fs::read(dir.join("router.log")).unwrap(),
+            b"second session\nmore\n"
         );
         assert_eq!(
-            mgr.generate_unique_path("router").unwrap(),
-            dir.join("router.log")
+            std::fs::read(dir.join("router_1.log")).unwrap(),
+            b"first session\n"
         );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_file_already_there_is_left_alone() {
+        let (mut mgr, dir) = manager();
+        mgr.open_log("a", "router").unwrap();
+        // Put there after the log was prepared, as someone else who can
+        // write to the directory might; a directory holds a name as well.
+        std::fs::write(dir.join("router.log"), b"not ours").unwrap();
+        std::fs::create_dir(dir.join("router_1.log")).unwrap();
+        mgr.write_log("a", b"output\n");
+        mgr.close_log("a");
+        assert_eq!(std::fs::read(dir.join("router.log")).unwrap(), b"not ours");
+        assert_eq!(
+            std::fs::read(dir.join("router_2.log")).unwrap(),
+            b"output\n"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_symlink_at_the_log_path_is_not_written_through() {
+        let (mut mgr, dir) = manager();
+        mgr.open_log("a", "router").unwrap();
+        let elsewhere = std::env::temp_dir().join(format!("ss-elsewhere-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&elsewhere).unwrap();
+        let existing = elsewhere.join("existing");
+        std::fs::write(&existing, b"untouched").unwrap();
+        let missing = elsewhere.join("missing");
+        // One link to a file that is there and one to a file that would be
+        // created, at the first two names the log would take.
+        for (name, target) in [("router.log", &existing), ("router_1.log", &missing)] {
+            let link = dir.join(name);
+            #[cfg(unix)]
+            std::os::unix::fs::symlink(target, &link).unwrap();
+            #[cfg(windows)]
+            if std::os::windows::fs::symlink_file(target, &link).is_err() {
+                // Creating a symlink takes Developer Mode or an elevated process.
+                eprintln!("skipped: this process may not create symbolic links");
+                let _ = std::fs::remove_dir_all(&dir);
+                let _ = std::fs::remove_dir_all(&elsewhere);
+                return;
+            }
+        }
+
+        mgr.write_log("a", b"output\n");
+        mgr.close_log("a");
+
+        assert_eq!(std::fs::read(&existing).unwrap(), b"untouched");
+        assert!(!missing.exists());
+        assert_eq!(
+            std::fs::read(dir.join("router_2.log")).unwrap(),
+            b"output\n"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+        std::fs::remove_dir_all(&elsewhere).unwrap();
+    }
+
+    #[test]
+    fn a_log_is_given_up_when_every_name_is_taken() {
+        let (mut mgr, dir) = manager();
+        mgr.open_log("a", "router").unwrap();
+        std::fs::write(dir.join("router.log"), b"").unwrap();
+        for number in 1..=MAX_SAME_NAME {
+            std::fs::write(dir.join(format!("router_{number}.log")), b"").unwrap();
+        }
+        let taken = usize::from(MAX_SAME_NAME) + 1;
+        mgr.write_log("a", b"output\n");
+        assert!(!mgr.has_log("a"));
+        // The names are not gone through again on the next output: freeing
+        // one now changes nothing.
+        std::fs::remove_file(dir.join("router_7.log")).unwrap();
+        mgr.write_log("a", b"more\n");
+        let entries: Vec<_> = std::fs::read_dir(&dir).unwrap().collect();
+        assert_eq!(entries.len(), taken - 1);
+        for entry in entries {
+            assert_eq!(entry.unwrap().metadata().unwrap().len(), 0);
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_session_name_cannot_misshape_the_filename() {
+        for (session, expected) in [
+            ("admin@core-sw1.example.com", "admin_core-sw1.example.com"),
+            ("a..b", "a._b"),
+            ("..", "__"),
+            (".ssh", "_ssh"),
+            ("trailing.", "trailing_"),
+            ("a/b\\c:d", "a_b_c_d"),
+            ("", "session"),
+            ("größe", "größe"),
+        ] {
+            assert_eq!(log_name(session), expected, "{session:?}");
+        }
+        // Cut at a character boundary, and not left ending in a dot.
+        let long = log_name(&"ä.".repeat(200));
+        assert!(long.len() <= MAX_LOG_NAME_BYTES, "{}", long.len());
+        assert!(long.len() > MAX_LOG_NAME_BYTES - 4, "{}", long.len());
+        assert!(!long.ends_with('.'));
+
+        // Each of these names got no log at all, or a hidden one.
+        let (mgr, dir) = manager();
+        for (session, expected) in [
+            ("a..b", "a._b.log"),
+            ("..", "__.log"),
+            ("trailing.", "trailing_.log"),
+            (".ssh", "_ssh.log"),
+            ("", "session.log"),
+        ] {
+            assert_eq!(mgr.log_path(session).unwrap(), dir.join(expected));
+        }
+    }
+
+    #[test]
+    fn a_log_that_cannot_be_created_is_given_up() {
+        let (mut mgr, dir) = manager();
+        mgr.open_log("a", "router").unwrap();
+        std::fs::remove_dir(&dir).unwrap();
+        mgr.write_log("a", b"output\n");
+        assert!(!mgr.has_log("a"));
+        // Not tried again, even once the directory is back.
+        std::fs::create_dir(&dir).unwrap();
+        mgr.write_log("a", b"more\n");
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0);
+        mgr.close_log("a");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_new_log_and_its_directory_are_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let (mut mgr, dir) = manager();
+        mgr.open_log("a", "router").unwrap();
+        mgr.write_log("a", b"output\n");
+        mgr.close_log("a");
+        for path in [dir.clone(), dir.join("router.log")] {
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+            assert_eq!(
+                mode & 0o077,
+                0,
+                "{}: group/other bits set: {mode:o}",
+                path.display()
+            );
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
@@ -552,7 +712,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("ss-colon-{}", uuid::Uuid::new_v4()));
         for format in ["C:{name}.log", "{name}.log:x"] {
             let mgr = SessionLogManager::new(true, dir.clone(), format.to_string());
-            assert!(mgr.generate_unique_path("router").is_err(), "{format}");
+            assert!(mgr.log_path("router").is_err(), "{format}");
         }
     }
 

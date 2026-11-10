@@ -59,11 +59,53 @@ pub(crate) fn write_private_file(path: &Path, contents: &[u8]) -> io::Result<()>
 }
 
 /// Create a new, empty file as 0600 on Unix. Fails with
-/// [`io::ErrorKind::AlreadyExists`] when there is one already, so an existing
+/// [`io::ErrorKind::AlreadyExists`] when the name is taken, so an existing
 /// file is never truncated or followed through a symlink.
 pub(crate) fn create_private_file(path: &Path) -> io::Result<std::fs::File> {
+    create_new_private(path, false)
+}
+
+/// [`create_private_file`] for a file that is written to for as long as it
+/// is open, such as a log: every write goes to the end of the file, wherever
+/// that is by then, so one that something else has truncated in the meantime
+/// carries on from its new end instead of leaving a gap. Appending is all the
+/// handle is good for: on Windows it carries the right to append only, so it
+/// cannot truncate the file or write anywhere but at its end.
+pub(crate) fn create_private_append_file(path: &Path) -> io::Result<std::fs::File> {
+    create_new_private(path, true)
+}
+
+/// `create_new` is what refuses a name already taken, whatever holds it: a
+/// file, a directory, or a symlink, dangling or not, which is not followed
+/// on either platform.
+fn create_new_private(path: &Path, append: bool) -> io::Result<std::fs::File> {
+    let created = open_new_private(path, append);
+    // Windows refuses a name that a directory holds with "access denied"
+    // rather than "already exists". Looking at the name, without following
+    // a link, tells that from a directory that cannot be written to: there,
+    // a free name has nothing to look at and stays "access denied". Whatever
+    // holds the name counts, not only a directory, since a caller that moves
+    // on to another name is right to do so for any of them.
+    #[cfg(windows)]
+    if let Err(e) = &created {
+        if e.kind() == io::ErrorKind::PermissionDenied && std::fs::symlink_metadata(path).is_ok() {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "the name is already taken",
+            ));
+        }
+    }
+    created
+}
+
+fn open_new_private(path: &Path, append: bool) -> io::Result<std::fs::File> {
     let mut options = std::fs::OpenOptions::new();
-    options.write(true).create_new(true);
+    if append {
+        options.append(true);
+    } else {
+        options.write(true);
+    }
+    options.create_new(true);
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
@@ -159,6 +201,72 @@ mod tests {
             let mode = std::fs::metadata(&file).unwrap().permissions().mode();
             assert_eq!(mode & 0o077, 0, "group/other bits set: {mode:o}");
         }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn create_private_append_file_writes_at_the_end_and_refuses_a_taken_name() {
+        use std::io::Write;
+        let root = scratch();
+        create_private_dir(&root).unwrap();
+        let file = root.join("session.log");
+        let mut log = create_private_append_file(&file).unwrap();
+        log.write_all(b"first\n").unwrap();
+        // Something else empties the file; the next write starts at its new
+        // end rather than at the old offset.
+        std::fs::OpenOptions::new()
+            .write(true)
+            .truncate(true)
+            .open(&file)
+            .unwrap();
+        log.write_all(b"second\n").unwrap();
+        assert_eq!(std::fs::read(&file).unwrap(), b"second\n");
+        let again = create_private_append_file(&file).unwrap_err();
+        assert_eq!(again.kind(), io::ErrorKind::AlreadyExists);
+        // A directory holds a name as a file does.
+        let taken = root.join("taken.log");
+        std::fs::create_dir(&taken).unwrap();
+        let by_directory = create_private_append_file(&taken).unwrap_err();
+        assert_eq!(by_directory.kind(), io::ErrorKind::AlreadyExists);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&file).unwrap().permissions().mode();
+            assert_eq!(mode & 0o077, 0, "group/other bits set: {mode:o}");
+        }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_symlink_holds_a_name_and_is_not_followed() {
+        let root = scratch();
+        create_private_dir(&root).unwrap();
+        let target = root.join("target");
+        std::fs::write(&target, b"untouched").unwrap();
+        let missing = root.join("missing");
+        let links = [
+            (root.join("to-file"), &target),
+            (root.join("dangling"), &missing),
+        ];
+        for (link, to) in &links {
+            #[cfg(unix)]
+            std::os::unix::fs::symlink(to, link).unwrap();
+            #[cfg(windows)]
+            if std::os::windows::fs::symlink_file(to, link).is_err() {
+                // Creating a symlink takes Developer Mode or an elevated process.
+                eprintln!("skipped: this process may not create symbolic links");
+                let _ = std::fs::remove_dir_all(&root);
+                return;
+            }
+        }
+        for (link, _) in &links {
+            for create in [create_private_file, create_private_append_file] {
+                let refused = create(link).unwrap_err();
+                assert_eq!(refused.kind(), io::ErrorKind::AlreadyExists);
+            }
+        }
+        assert_eq!(std::fs::read(&target).unwrap(), b"untouched");
+        assert!(!missing.exists());
         let _ = std::fs::remove_dir_all(&root);
     }
 }
