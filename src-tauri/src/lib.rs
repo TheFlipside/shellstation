@@ -848,19 +848,27 @@ pub fn run() {
     }
 
     // Load config first so the tracing subscriber can be configured from it.
-    // Tracing calls inside load_config itself are no-ops here (no subscriber
-    // yet), but we re-emit a confirmation line right after init_tracing.
-    let app_config = config::load_config(&config_dir);
+    // A tracing call inside load_config would be a no-op here (no subscriber
+    // yet), so it returns what it has to say as notes, which are logged
+    // right after init_tracing.
+    let (mut app_config, config_notes) = config::load_config(&config_dir);
     let _log_guard = init_tracing(&config_dir, &app_config.app_logging);
     if let Some(problem) = config_dir_problem {
         tracing::warn!(path = %config_dir.display(), "{problem}");
     }
+    // The host is whatever the config file holds, so it is logged escaped:
+    // a line break in it must not start a log line.
     tracing::info!(
         backend = ?app_config.db_backend,
-        pg_host = %app_config.postgres.host,
+        pg_host = ?app_config.postgres.host,
         pg_port = app_config.postgres.port,
         "ShellStation starting"
     );
+    for note in &config_notes {
+        note.log();
+    }
+    // After init_tracing, so that a keychain problem is logged.
+    config::load_postgres_password(&mut app_config);
 
     tauri::Builder::default()
         .manage(PtyState::default())
@@ -1032,8 +1040,11 @@ pub fn run() {
                     ) {
                         Ok(pool) => (pool, None),
                         Err(e) if app_config.sqlite_path.is_some() => {
+                            // The error can quote the path, which is whatever
+                            // the config file holds, so it is logged escaped.
                             tracing::error!(
-                                "Custom SQLite path failed: {e} — falling back to default"
+                                error = ?e.to_string(),
+                                "Custom SQLite path failed — falling back to default"
                             );
                             let fallback = init_local_sqlite(&config_dir, true, None)?;
                             (
@@ -1083,10 +1094,12 @@ pub fn run() {
                     app.manage(CredentialDbState(cred_provider.clone()));
                     app.manage(LoginSequenceDbState(cred_provider.clone()));
 
+                    // Host and database are whatever the config file holds,
+                    // so they are logged escaped.
                     tracing::info!(
-                        host = %app_config.postgres.host,
+                        host = ?app_config.postgres.host,
                         port = app_config.postgres.port,
-                        database = %app_config.postgres.database,
+                        database = ?app_config.postgres.database,
                         ssl_mode = %app_config.postgres.ssl_mode,
                         password_configured = !app_config.postgres.password.is_empty(),
                         "Connecting to PostgreSQL…"

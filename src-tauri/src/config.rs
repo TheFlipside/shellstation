@@ -313,9 +313,16 @@ pub struct PostgresConfig {
     pub password: String,
     /// `SSL` mode for the `PostgreSQL` connection.
     /// Accepted values: "disable", "prefer" (default), "require".
+    /// A value in the config file that is none of these loads as
+    /// [`FALLBACK_SSL_MODE`], not as the default.
     #[serde(default = "default_ssl_mode")]
     pub ssl_mode: String,
 }
+
+/// What an `ssl_mode` the app does not know connects as. Never the default,
+/// `prefer`, which falls back to an unencrypted connection: a hand-edited
+/// `required` or `verify-full` must not allow one.
+pub const FALLBACK_SSL_MODE: &str = "require";
 
 fn default_pg_port() -> u16 {
     5432
@@ -347,10 +354,14 @@ impl PostgresConfig {
     pub fn connect_options(&self) -> sqlx::postgres::PgConnectOptions {
         use sqlx::postgres::PgSslMode;
 
+        // `load_config` and the commands only let the three known modes get
+        // here. Should anything else get here, it is treated as
+        // `FALLBACK_SSL_MODE`: an unknown mode must never be the one that may
+        // connect unencrypted.
         let ssl_mode = match self.ssl_mode.as_str() {
             "disable" => PgSslMode::Disable,
-            "require" => PgSslMode::Require,
-            _ => PgSslMode::Prefer,
+            "prefer" => PgSslMode::Prefer,
+            _ => PgSslMode::Require,
         };
 
         sqlx::postgres::PgConnectOptions::new()
@@ -369,6 +380,23 @@ impl PostgresConfig {
             other => Err(format!(
                 "Invalid SSL mode: \"{other}\". Must be \"disable\", \"prefer\", or \"require\"."
             )),
+        }
+    }
+
+    /// Bring an `ssl_mode` from the config file into the form the app saves:
+    /// surrounding whitespace and letter case are dropped, so a hand-edited
+    /// `"Require"` is `require`. A value that is still not a known mode is
+    /// replaced by [`FALLBACK_SSL_MODE`] and returned; otherwise `None`.
+    pub fn reset_invalid_ssl_mode(&mut self) -> Option<String> {
+        let mode = self.ssl_mode.trim().to_ascii_lowercase();
+        if Self::validate_ssl_mode(&mode).is_ok() {
+            self.ssl_mode = mode;
+            None
+        } else {
+            Some(std::mem::replace(
+                &mut self.ssl_mode,
+                FALLBACK_SSL_MODE.to_string(),
+            ))
         }
     }
 }
@@ -408,18 +436,79 @@ fn defaults_restricting(restrict: bool) -> AppConfig {
     }
 }
 
+/// How a [`ConfigNote`] is logged.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NoteLevel {
+    /// What the load did, with nothing wrong.
+    Info,
+    /// The app changed or set aside something the file holds.
+    Warn,
+    /// The file, or a copy of it, could not be read, used or kept.
+    Error,
+}
+
+/// A line [`load_config`] has for the application log.
+///
+/// At startup `load_config` runs before the tracing subscriber exists,
+/// because the subscriber is set up from the config, so a `tracing` call in
+/// it would write nothing. It returns its lines instead, and the caller logs
+/// them once there is a log.
+///
+/// A note is logged as its text, so whatever comes from the config file, an
+/// error that quotes the file included, goes into the text escaped (`{:?}`):
+/// a line break in it must not start a log line.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConfigNote {
+    /// The level the note is logged at.
+    pub level: NoteLevel,
+    /// The log message, with anything from the config file escaped.
+    pub text: String,
+}
+
+impl ConfigNote {
+    fn info(text: String) -> Self {
+        Self {
+            level: NoteLevel::Info,
+            text,
+        }
+    }
+
+    fn warn(text: String) -> Self {
+        Self {
+            level: NoteLevel::Warn,
+            text,
+        }
+    }
+
+    fn error(text: String) -> Self {
+        Self {
+            level: NoteLevel::Error,
+            text,
+        }
+    }
+
+    /// Write the note to the application log.
+    pub fn log(&self) {
+        match self.level {
+            NoteLevel::Info => tracing::info!("{}", self.text),
+            NoteLevel::Warn => tracing::warn!("{}", self.text),
+            NoteLevel::Error => tracing::error!("{}", self.text),
+        }
+    }
+}
+
 /// Keep a config file that does not parse as `config.json.bad` beside it:
 /// the next save replaces it with the defaults this start fell back to.
 /// A copy kept by an earlier start is replaced: the file now there is the
 /// one the user last had.
-fn keep_damaged_copy(path: &Path, contents: &[u8]) {
+fn keep_damaged_copy(path: &Path, contents: &[u8]) -> ConfigNote {
     let copy = path.with_extension("json.bad");
     match crate::private_fs::write_private_file(&copy, contents) {
-        Ok(()) => tracing::warn!(
+        Ok(()) => ConfigNote::warn(format!(
             "Kept the config file that does not parse as {}",
             copy.display()
-        ),
-        Err(e) => tracing::error!("Could not keep a copy of {}: {e}", path.display()),
+        )),
+        Err(e) => ConfigNote::error(format!("Could not keep a copy of {}: {e}", path.display())),
     }
 }
 
@@ -430,102 +519,119 @@ fn keep_damaged_copy(path: &Path, contents: &[u8]) {
 /// private-address check as the file has it, or on if that cannot be read;
 /// a file that cannot be read gives the defaults with the check on.
 /// Connection settings outside their range get their defaults.
-/// The `PostgreSQL` password is loaded from the `OS` keychain (not from the file).
-pub fn load_config(config_dir: &Path) -> AppConfig {
+/// An `ssl_mode` that is not a known mode becomes [`FALLBACK_SSL_MODE`].
+/// The `PostgreSQL` password is not in the file: see
+/// [`load_postgres_password`].
+///
+/// What there is to say about the load is returned and not logged here,
+/// since at startup there is no log yet: see [`ConfigNote`].
+pub fn load_config(config_dir: &Path) -> (AppConfig, Vec<ConfigNote>) {
     let path = config_dir.join("config.json");
+    let mut notes = Vec::new();
     // Read as bytes, so a file that is not UTF-8 counts as one that does not
     // parse, and is kept, rather than as one that cannot be read.
     let mut config = match std::fs::read(&path) {
         Ok(contents) => match serde_json::from_slice::<AppConfig>(&contents) {
-            Ok(config) => {
-                tracing::info!(
-                    backend = ?config.db_backend,
-                    pg_host = %config.postgres.host,
-                    pg_port = config.postgres.port,
-                    pg_ssl_mode = %config.postgres.ssl_mode,
+            Ok(mut config) => {
+                notes.push(ConfigNote::info(format!(
                     "Loaded config from {}",
                     path.display()
-                );
+                )));
+                // The other arms give the defaults, which are valid.
+                if let Some(was) = config.postgres.reset_invalid_ssl_mode() {
+                    notes.push(ConfigNote::warn(format!(
+                        "{} holds an ssl_mode the app does not know ({was:?}) — using \
+                         \"{FALLBACK_SSL_MODE}\", which never connects unencrypted",
+                        path.display()
+                    )));
+                }
                 config
             }
             Err(e) => {
                 let restrict = restrict_private_ips_in(&contents);
-                tracing::error!(
-                    restrict_private_ips = restrict,
-                    "Failed to parse {}: {e} — using defaults",
-                    path.display()
-                );
-                keep_damaged_copy(&path, &contents);
+                // The error can quote the file (an unknown `db_backend`).
+                notes.push(ConfigNote::error(format!(
+                    "Failed to parse {} ({:?}) — using defaults, restrict_private_ips={restrict}",
+                    path.display(),
+                    e.to_string()
+                )));
+                notes.push(keep_damaged_copy(&path, &contents));
                 // Saving later writes this back, rather than the default.
                 defaults_restricting(restrict)
             }
         },
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            tracing::info!(
+            notes.push(ConfigNote::info(format!(
                 "Config file not found ({}) — using defaults",
                 path.display()
-            );
+            )));
             AppConfig::default()
         }
         Err(e) => {
             // There is a file, so it may switch the check on.
-            tracing::error!(
+            notes.push(ConfigNote::error(format!(
                 "Config file unreadable ({}): {e} — using defaults, blocking private addresses",
                 path.display()
-            );
+            )));
             defaults_restricting(true)
         }
     };
 
     let reset = config.connection.reset_invalid();
     if !reset.is_empty() {
-        tracing::warn!(
-            settings = ?reset,
-            "{} holds connection settings outside their range — using their defaults",
-            path.display()
-        );
+        notes.push(ConfigNote::warn(format!(
+            "{} holds connection settings outside their range ({}) — using their defaults",
+            path.display(),
+            reset.join(", ")
+        )));
     }
 
     // A format saved before the format rules existed, possibly by a
-    // compromised webview, could name a file such as `x.bat`.
+    // compromised webview, could name a file such as `x.bat`. The error
+    // quotes at most one character of it, escaped.
     if let Err(e) = LoggingConfig::validate_filename_format(&config.logging.filename_format) {
-        tracing::warn!(
+        notes.push(ConfigNote::warn(format!(
             "{} holds a session log filename format the app no longer accepts ({e}) — \
              using the default",
             path.display()
-        );
+        )));
         config.logging.filename_format = default_log_filename_format();
     }
 
-    // Populate PostgreSQL password from OS keychain.
-    if config.db_backend == DbBackend::Postgres {
-        match crate::credentials::retrieve(PG_PASSWORD_KEYCHAIN_REF) {
-            Ok(pw) if pw.is_empty() => {
-                tracing::error!(
-                    "Keychain returned an empty PostgreSQL password — connection will fail. \
-                     This often indicates the OS keychain was not ready during startup. \
-                     Try opening Settings and re-saving the database configuration."
-                );
-            }
-            Ok(pw) => {
-                tracing::info!(
-                    "Retrieved PostgreSQL password from keychain ({} bytes)",
-                    pw.len()
-                );
-                config.postgres.password.clone_from(&*pw);
-            }
-            Err(e) => {
-                tracing::error!(
-                    "Failed to retrieve PostgreSQL password from keychain: {e} \
-                     — connection will fail. This often indicates the OS keychain \
-                     was not ready during startup. Try opening Settings and re-saving \
-                     the database configuration."
-                );
-            }
+    (config, notes)
+}
+
+/// Put the `PostgreSQL` password from the `OS` keychain into `config`, if the
+/// backend is `PostgreSQL`. The password is never in the config file.
+///
+/// Not part of [`load_config`], so that it can run once there is a log: this
+/// and the keychain code say what went wrong through `tracing`. Nothing
+/// about the password itself is logged, its length included.
+pub fn load_postgres_password(config: &mut AppConfig) {
+    if config.db_backend != DbBackend::Postgres {
+        return;
+    }
+    match crate::credentials::retrieve(PG_PASSWORD_KEYCHAIN_REF) {
+        Ok(pw) if pw.is_empty() => {
+            tracing::error!(
+                "Keychain returned an empty PostgreSQL password — connection will fail. \
+                 This often indicates the OS keychain was not ready during startup. \
+                 Try opening Settings and re-saving the database configuration."
+            );
+        }
+        Ok(pw) => {
+            tracing::info!("Retrieved PostgreSQL password from keychain");
+            config.postgres.password.clone_from(&*pw);
+        }
+        Err(e) => {
+            tracing::error!(
+                "Failed to retrieve PostgreSQL password from keychain: {e} \
+                 — connection will fail. This often indicates the OS keychain \
+                 was not ready during startup. Try opening Settings and re-saving \
+                 the database configuration."
+            );
         }
     }
-
-    config
 }
 
 /// Save the application config to the given path.
@@ -585,6 +691,15 @@ mod tests {
             assert!(restrict_private_ips_in(damaged), "{damaged:?}");
         }
         assert!(defaults_restricting(true).connection.restrict_private_ips);
+    }
+
+    /// The texts of the notes of one level, in order.
+    fn texts(notes: &[ConfigNote], level: NoteLevel) -> Vec<String> {
+        notes
+            .iter()
+            .filter(|note| note.level == level)
+            .map(|note| note.text.clone())
+            .collect()
     }
 
     fn scratch_dir() -> PathBuf {
@@ -652,21 +767,193 @@ mod tests {
             r#"{"logging":{"enabled":true,"filename_format":"{name}.bat"}}"#,
         )
         .unwrap();
-        let config = load_config(&dir);
+        let (config, notes) = load_config(&dir);
         std::fs::remove_dir_all(&dir).unwrap();
         assert!(config.logging.enabled);
         assert_eq!(
             config.logging.filename_format,
             LoggingConfig::default().filename_format
         );
+        let warnings = texts(&notes, NoteLevel::Warn);
+        assert_eq!(warnings.len(), 1, "{notes:?}");
+        assert!(warnings[0].contains("filename format"), "{}", warnings[0]);
+    }
+
+    /// The `ssl_mode` a config file with `json_value` for it loads as, and
+    /// the warnings the load returns.
+    fn load_with_ssl_mode(json_value: &str) -> (String, Vec<String>) {
+        let dir = scratch_dir();
+        std::fs::write(
+            dir.join("config.json"),
+            format!(r#"{{"postgres":{{"host":"db.example","ssl_mode":{json_value}}}}}"#),
+        )
+        .unwrap();
+        let (config, notes) = load_config(&dir);
+        std::fs::remove_dir_all(&dir).unwrap();
+        // The rest of the file is kept, unlike for one that does not parse.
+        assert_eq!(config.postgres.host, "db.example");
+        assert!(texts(&notes, NoteLevel::Error).is_empty(), "{notes:?}");
+        (config.postgres.ssl_mode, texts(&notes, NoteLevel::Warn))
+    }
+
+    #[test]
+    fn an_unknown_ssl_mode_in_the_config_file_never_loads_as_prefer() {
+        for unknown in [
+            r#""required""#,
+            r#""verify-full""#,
+            r#""verify-ca""#,
+            r#""allow""#,
+            r#""disabled""#,
+            r#""off""#,
+            r#""prefer;""#,
+            r#""""#,
+            r#""  ""#,
+        ] {
+            let (mode, warnings) = load_with_ssl_mode(unknown);
+            assert_eq!(mode, FALLBACK_SSL_MODE, "{unknown}");
+            // The caller is told, with what the file said: `load_config`
+            // runs before there is a log, so it cannot say so itself.
+            assert_eq!(warnings.len(), 1, "{unknown}");
+            assert!(warnings[0].contains(unknown), "{}", warnings[0]);
+            assert!(warnings[0].contains("ssl_mode"), "{}", warnings[0]);
+        }
+    }
+
+    #[test]
+    fn the_warning_about_an_unknown_ssl_mode_quotes_it_escaped() {
+        let (mode, warnings) = load_with_ssl_mode(r#""x\n2026-01-01 ERROR forged\u001b[2J""#);
+        assert_eq!(mode, FALLBACK_SSL_MODE);
+        assert_eq!(warnings.len(), 1);
+        assert!(!warnings[0].contains('\n'), "{:?}", warnings[0]);
+        assert!(!warnings[0].contains('\u{1b}'), "{:?}", warnings[0]);
+        assert!(warnings[0].contains(r"x\n2026-01-01 ERROR forged"));
+    }
+
+    #[test]
+    fn a_known_ssl_mode_in_the_config_file_is_kept_in_any_case() {
+        for (written, loaded) in [
+            (r#""disable""#, "disable"),
+            (r#""prefer""#, "prefer"),
+            (r#""require""#, "require"),
+            (r#""Require""#, "require"),
+            (r#""REQUIRE""#, "require"),
+            (r#"" require\n""#, "require"),
+            (r#""Disable""#, "disable"),
+        ] {
+            let (mode, warnings) = load_with_ssl_mode(written);
+            assert_eq!(mode, loaded, "{written}");
+            assert!(warnings.is_empty(), "{written}: {warnings:?}");
+        }
+    }
+
+    #[test]
+    fn a_config_file_without_an_ssl_mode_gets_the_default() {
+        let dir = scratch_dir();
+        std::fs::write(
+            dir.join("config.json"),
+            r#"{"postgres":{"host":"db.example"}}"#,
+        )
+        .unwrap();
+        let (config, notes) = load_config(&dir);
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(config.postgres.ssl_mode, "prefer");
+        assert!(texts(&notes, NoteLevel::Warn).is_empty(), "{notes:?}");
+        // What every other way of loading falls back to is valid as well.
+        let mut defaults = PostgresConfig::default();
+        assert_eq!(defaults.reset_invalid_ssl_mode(), None);
+        assert_eq!(defaults.ssl_mode, "prefer");
+    }
+
+    #[test]
+    fn a_config_file_whose_ssl_mode_is_no_string_is_not_used_at_all() {
+        let file = |ssl_mode: &str| {
+            format!(
+                r#"{{"db_backend":"postgres","postgres":{{"host":"db.example","ssl_mode":{ssl_mode}}}}}"#
+            )
+        };
+        // With a string in that place the file parses, so it is the value
+        // alone that the cases below fail on.
+        let parsed: AppConfig = serde_json::from_str(&file(r#""require""#)).unwrap();
+        assert_eq!(parsed.db_backend, DbBackend::Postgres);
+        assert_eq!(parsed.postgres.host, "db.example");
+
+        // Such a file does not parse, so nothing of it is used: the app
+        // starts on the default backend, SQLite, with no PostgreSQL server
+        // to connect to, and so with no `ssl_mode` in use.
+        for value in [
+            "null",
+            "1",
+            "true",
+            r#"["require"]"#,
+            r#"{"mode":"require"}"#,
+        ] {
+            let dir = scratch_dir();
+            std::fs::write(dir.join("config.json"), file(value)).unwrap();
+            let (config, _) = load_config(&dir);
+            let kept = dir.join("config.json.bad").exists();
+            std::fs::remove_dir_all(&dir).unwrap();
+            assert_eq!(config.db_backend, DbBackend::Sqlite, "{value}");
+            assert_eq!(config.postgres.host, "", "{value}");
+            assert!(kept, "{value}");
+        }
+
+        // A key given twice does not parse either, whichever value comes
+        // last, so the second cannot replace the first.
+        let twice =
+            br#"{"db_backend":"postgres","postgres":{"ssl_mode":"require","ssl_mode":"prefer"}}"#;
+        let error = serde_json::from_slice::<AppConfig>(twice).unwrap_err();
+        assert!(error.to_string().contains("duplicate field"), "{error}");
+    }
+
+    #[test]
+    fn resetting_an_ssl_mode_returns_what_the_file_said() {
+        let mut postgres = PostgresConfig {
+            ssl_mode: "Required".to_string(),
+            ..PostgresConfig::default()
+        };
+        assert_eq!(
+            postgres.reset_invalid_ssl_mode(),
+            Some("Required".to_string())
+        );
+        assert_eq!(postgres.ssl_mode, FALLBACK_SSL_MODE);
+        assert_eq!(PostgresConfig::validate_ssl_mode(FALLBACK_SSL_MODE), Ok(()));
+    }
+
+    #[test]
+    fn connect_options_never_turn_an_unknown_ssl_mode_into_prefer() {
+        use sqlx::postgres::PgSslMode;
+
+        let mode_for = |ssl_mode: &str| {
+            PostgresConfig {
+                ssl_mode: ssl_mode.to_string(),
+                ..PostgresConfig::default()
+            }
+            .connect_options()
+            .get_ssl_mode()
+        };
+        assert!(matches!(mode_for("disable"), PgSslMode::Disable));
+        assert!(matches!(mode_for("prefer"), PgSslMode::Prefer));
+        assert!(matches!(mode_for("require"), PgSslMode::Require));
+        // Not reachable through `load_config` or the commands, which is why
+        // it is checked here.
+        for unknown in ["required", "Require", "verify-full", "disabled", ""] {
+            assert!(
+                matches!(mode_for(unknown), PgSslMode::Require),
+                "{unknown:?}"
+            );
+        }
     }
 
     #[test]
     fn a_missing_config_file_keeps_the_default() {
         let dir = scratch_dir();
-        let config = load_config(&dir);
+        let (config, notes) = load_config(&dir);
         std::fs::remove_dir_all(&dir).unwrap();
         assert!(!config.connection.restrict_private_ips);
+        // A first start is nothing to warn about.
+        assert_eq!(notes.len(), 1, "{notes:?}");
+        assert_eq!(notes[0].level, NoteLevel::Info);
+        assert!(notes[0].text.contains("not found"), "{}", notes[0].text);
     }
 
     #[test]
@@ -678,12 +965,62 @@ mod tests {
         ] {
             let dir = scratch_dir();
             std::fs::write(dir.join("config.json"), damaged).unwrap();
-            let config = load_config(&dir);
+            let (config, notes) = load_config(&dir);
             let kept = std::fs::read(dir.join("config.json.bad"));
             std::fs::remove_dir_all(&dir).unwrap();
             assert!(config.connection.restrict_private_ips, "{damaged:?}");
             assert_eq!(kept.unwrap(), damaged);
+            // Both are said: that the file is not used, and where it went.
+            let errors = texts(&notes, NoteLevel::Error);
+            assert_eq!(errors.len(), 1, "{notes:?}");
+            assert!(errors[0].contains("Failed to parse"), "{}", errors[0]);
+            let warnings = texts(&notes, NoteLevel::Warn);
+            assert_eq!(warnings.len(), 1, "{notes:?}");
+            assert!(warnings[0].contains("config.json.bad"), "{}", warnings[0]);
         }
+    }
+
+    #[test]
+    fn what_a_damaged_config_file_holds_cannot_start_a_log_line() {
+        // serde quotes an unknown `db_backend` in its error as it is.
+        let dir = scratch_dir();
+        std::fs::write(
+            dir.join("config.json"),
+            r#"{"db_backend":"x\n2026-01-01 ERROR forged"}"#,
+        )
+        .unwrap();
+        let (_, notes) = load_config(&dir);
+        std::fs::remove_dir_all(&dir).unwrap();
+        let errors = texts(&notes, NoteLevel::Error);
+        assert_eq!(errors.len(), 1, "{notes:?}");
+        assert!(
+            errors[0].contains(r"x\n2026-01-01 ERROR forged"),
+            "{}",
+            errors[0]
+        );
+        for note in &notes {
+            assert!(!note.text.contains('\n'), "{:?}", note.text);
+        }
+    }
+
+    #[test]
+    fn connection_settings_out_of_range_are_named_in_a_warning() {
+        let dir = scratch_dir();
+        std::fs::write(
+            dir.join("config.json"),
+            r#"{"connection":{"connect_timeout_secs":0,"keepalive_max":1000}}"#,
+        )
+        .unwrap();
+        let (config, notes) = load_config(&dir);
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(config.connection.connect_timeout_secs, 10);
+        let warnings = texts(&notes, NoteLevel::Warn);
+        assert_eq!(warnings.len(), 1, "{notes:?}");
+        assert!(
+            warnings[0].contains("connect_timeout_secs, keepalive_max"),
+            "{}",
+            warnings[0]
+        );
     }
 
     #[test]
@@ -691,9 +1028,12 @@ mod tests {
         let dir = scratch_dir();
         // Reading a directory fails, but not with NotFound.
         std::fs::create_dir(dir.join("config.json")).unwrap();
-        let config = load_config(&dir);
+        let (config, notes) = load_config(&dir);
         std::fs::remove_dir_all(&dir).unwrap();
         assert!(config.connection.restrict_private_ips);
+        let errors = texts(&notes, NoteLevel::Error);
+        assert_eq!(errors.len(), 1, "{notes:?}");
+        assert!(errors[0].contains("unreadable"), "{}", errors[0]);
     }
 
     #[test]
