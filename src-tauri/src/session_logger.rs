@@ -214,8 +214,21 @@ impl SessionLogManager {
         // One that was already there is restricted as before on Unix, as
         // far as it can be, and left as it is on Windows. A directory that
         // is not the user's, or on a file system without Unix modes, is
-        // still used: each log file is created owner-only on its own.
-        let _ = private_fs::restrict_dir_to_owner(&self.log_dir);
+        // still used: each log file is created owner-only on its own. A
+        // directory with a link at its name is still used as well, but the
+        // link is not followed to restrict what it leads to, since the
+        // directory may be where others can put one. That goes for the
+        // default directory too, as it does for the application log. Said
+        // in the application log for each session, as the line for a
+        // network share is, since nothing else tells the user.
+        if let Err(e) = private_fs::restrict_dir_to_owner_nofollow(&self.log_dir) {
+            info!(
+                connection_id = %connection_id,
+                error = %e,
+                "The session log directory could not be restricted to its owner: \
+                 others may see the names of the logs in it, but cannot open them"
+            );
+        }
 
         // The log stays in the log directory because its name holds no path
         // separator (see `log_path`), and it is never written through a link

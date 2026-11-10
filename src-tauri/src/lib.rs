@@ -727,7 +727,12 @@ fn init_tracing(
     } else {
         None
     };
-    let Some((file_appender, log_dir)) = log_file else {
+    let Some(AppLogFile {
+        appender,
+        dir: log_dir,
+        dir_problem,
+    }) = log_file
+    else {
         tracing_subscriber::registry()
             .with(env_filter)
             .with(stdout_layer)
@@ -735,23 +740,38 @@ fn init_tracing(
         return None;
     };
 
-    let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
+    let (non_blocking, guard) = tracing_appender::non_blocking(appender);
     let file_layer = fmt::layer().with_ansi(false).with_writer(non_blocking);
     tracing_subscriber::registry()
         .with(env_filter)
         .with(stdout_layer)
         .with(file_layer)
         .init();
+    // The directory is whatever the config file holds, so it is logged
+    // escaped: a line break in it must not start a log line.
     tracing::info!(
-        log_dir = %log_dir.display(),
+        log_dir = ?log_dir,
         level = %level,
         "Application file logging enabled (daily rotation)"
     );
+    // Said in the log itself as well: stderr is seldom where a user looks.
+    if let Some(problem) = dir_problem {
+        tracing::warn!(log_dir = ?log_dir, "{problem}");
+    }
     Some(guard)
 }
 
-/// Open the daily-rotating application log file for `init_tracing`, and
-/// return it with the directory it is in.
+/// The application log as [`open_app_log_file`] opens it.
+struct AppLogFile {
+    appender: tracing_appender::rolling::RollingFileAppender,
+    /// The directory the log is in.
+    dir: std::path::PathBuf,
+    /// Why the directory could not be restricted to its owner, if it could
+    /// not: the log is written there all the same.
+    dir_problem: Option<String>,
+}
+
+/// Open the daily-rotating application log file for `init_tracing`.
 ///
 /// Returns `None` when the configured directory is invalid or the directory
 /// or the file cannot be created, so that the caller falls back to
@@ -760,48 +780,52 @@ fn init_tracing(
 fn open_app_log_file(
     config_dir: &std::path::Path,
     cfg: &config::AppLoggingConfig,
-) -> Option<(
-    tracing_appender::rolling::RollingFileAppender,
-    std::path::PathBuf,
-)> {
-    // The default directory belongs to the app and is made owner-only on
-    // Unix, and on Windows when it is created here; the session logger keeps
-    // its logs there too. A directory the user chose is created if it is
-    // missing but otherwise left as it is.
-    let (log_dir, created) = match &cfg.log_directory {
+) -> Option<AppLogFile> {
+    let log_dir = match &cfg.log_directory {
         Some(p) if !p.is_empty() => match validate_config_path(p, "Application log directory") {
-            Ok(path) => {
-                let created = std::fs::create_dir_all(&path);
-                (path, created)
-            }
+            Ok(path) => path,
             Err(e) => {
                 eprintln!("{e} — application logging disabled for this session.");
                 return None;
             }
         },
-        _ => {
-            let path = config_dir.join("logs");
-            let created = crate::private_fs::create_private_dir(&path);
-            if created.is_ok() {
-                // A file system without Unix modes can refuse this; the
-                // directory is still usable, so logging goes ahead.
-                if let Err(e) = crate::private_fs::restrict_dir_to_owner(&path) {
-                    eprintln!(
-                        "Failed to restrict the application log directory {} to its owner: {e}",
-                        path.display()
-                    );
-                }
-            }
-            (path, created)
-        }
+        _ => config_dir.join("logs"),
     };
-    if let Err(e) = created {
+    // The log directory is treated as the session logger treats its own,
+    // whether it is the default or one the user chose: a missing one is
+    // created for its owner alone (0700 on Unix, an access list of its own
+    // on Windows), as is every directory above it that is missing too, and
+    // one that is already there is restricted to its owner
+    // on Unix and left as it is on Windows. The logging library creates the
+    // log file itself, by opening whatever holds the day's name, and with
+    // the mode the umask leaves it. On Unix the directory is therefore all
+    // that keeps others from reading the log, and only once it has been
+    // restricted.
+    if let Err(e) = crate::private_fs::create_private_dir(&log_dir) {
         eprintln!(
             "Failed to create application log directory {}: {e} — \
              application logging disabled for this session.",
             log_dir.display()
         );
         return None;
+    }
+    // A log directory may be where others can put a link, so one at its
+    // name is not followed for this, and a directory that belongs to another
+    // user is refused. That goes for the default directory as well, as it
+    // does in the session logger: it is in the config directory, where only
+    // the user can put a link, but only as long as that directory could be
+    // restricted itself. A file system without Unix modes can refuse this
+    // too. The directory is still usable, so logging goes ahead, into a
+    // directory that others may read.
+    let restricted = crate::private_fs::restrict_dir_to_owner_nofollow(&log_dir);
+    let dir_problem = restricted.err().map(|e| {
+        format!(
+            "Failed to restrict the application log directory to its owner: {e} — \
+             others may be able to read the application log"
+        )
+    });
+    if let Some(problem) = &dir_problem {
+        eprintln!("{problem} ({})", log_dir.display());
     }
     // Creating the directory can succeed and opening the file still fail
     // (directory not writable, disk full); that falls back the same way.
@@ -811,7 +835,11 @@ fn open_app_log_file(
         .filename_suffix("log")
         .build(&log_dir)
     {
-        Ok(appender) => Some((appender, log_dir)),
+        Ok(appender) => Some(AppLogFile {
+            appender,
+            dir: log_dir,
+            dir_problem,
+        }),
         Err(e) => {
             eprintln!(
                 "Failed to open application log file in {}: {e} — \
@@ -1491,10 +1519,83 @@ mod tests {
     #[test]
     fn open_app_log_file_opens_the_configured_directory() {
         let dir = std::env::temp_dir().join(format!("ss-applog-{}", uuid::Uuid::new_v4()));
-        let opened = open_app_log_file(&std::env::temp_dir(), &log_config(&dir));
-        assert_eq!(opened.as_ref().map(|(_, d)| d), Some(&dir));
+        let opened = open_app_log_file(&std::env::temp_dir(), &log_config(&dir)).unwrap();
+        assert_eq!(opened.dir, dir);
+        assert_eq!(opened.dir_problem, None);
         drop(opened);
+        // A chosen directory that had to be created is its owner's alone,
+        // as the session logger's is.
+        private_fs::assert_private(&dir);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A chosen directory that is already there is restricted to its owner
+    /// on Unix, as the session logger restricts its own, so that the log
+    /// file, which the logging library creates with the umask's mode, cannot
+    /// be read by others.
+    #[cfg(unix)]
+    #[test]
+    fn open_app_log_file_restricts_a_chosen_directory_already_there() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("ss-applog-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let opened = open_app_log_file(&std::env::temp_dir(), &log_config(&dir)).unwrap();
+        assert_eq!(opened.dir_problem, None);
+        drop(opened);
+        private_fs::assert_private(&dir);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A link at the name of the log directory is not followed to restrict
+    /// what it leads to, since others may be able to put one there. The log
+    /// is still written, and the problem is returned to be logged. That
+    /// goes for a directory the user chose and for the default one.
+    #[cfg(unix)]
+    #[test]
+    fn open_app_log_file_does_not_restrict_through_a_link() {
+        use std::os::unix::fs::PermissionsExt;
+        let mode =
+            |path: &std::path::Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o7777;
+        let root = std::env::temp_dir().join(format!("ss-applog-{}", uuid::Uuid::new_v4()));
+        let elsewhere = root.join("elsewhere");
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        std::fs::set_permissions(&elsewhere, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let chosen = root.join("chosen");
+        std::os::unix::fs::symlink(&elsewhere, &chosen).unwrap();
+        let opened = open_app_log_file(&root, &log_config(&chosen)).unwrap();
+        let problem = opened.dir_problem.clone().unwrap();
+        assert!(problem.contains("symbolic link"), "{problem}");
+        drop(opened);
+        assert_eq!(mode(&elsewhere), 0o755);
+
+        let config_dir = root.join("config");
+        std::fs::create_dir_all(&config_dir).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, config_dir.join("logs")).unwrap();
+        let cfg = config::AppLoggingConfig::default();
+        let opened = open_app_log_file(&config_dir, &cfg).unwrap();
+        let problem = opened.dir_problem.clone().unwrap();
+        assert!(problem.contains("symbolic link"), "{problem}");
+        drop(opened);
+        assert_eq!(mode(&elsewhere), 0o755);
+        // The log was written where the links lead all the same.
+        assert!(std::fs::read_dir(&elsewhere).unwrap().next().is_some());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The default directory gets the same treatment.
+    #[test]
+    fn open_app_log_file_creates_the_default_directory_owner_only() {
+        let config_dir = std::env::temp_dir().join(format!("ss-applog-{}", uuid::Uuid::new_v4()));
+        let cfg = config::AppLoggingConfig::default();
+        let opened = open_app_log_file(&config_dir, &cfg).unwrap();
+        let logs = config_dir.join("logs");
+        assert_eq!(opened.dir, logs);
+        assert_eq!(opened.dir_problem, None);
+        drop(opened);
+        private_fs::assert_private(&logs);
+        let _ = std::fs::remove_dir_all(&config_dir);
     }
 
     #[test]

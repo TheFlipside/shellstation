@@ -4972,6 +4972,7 @@ dependencies = [
  "dirs",
  "hmac 0.13.0",
  "keyring",
+ "libc",
  "portable-pty",
  "quick-xml 0.42.0",
  "regex",

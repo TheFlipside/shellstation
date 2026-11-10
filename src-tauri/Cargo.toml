@@ -86,6 +86,13 @@ regex = "1"
 # not choose its language). No dependencies on Windows, macOS or Linux.
 sys-locale = "0.3.2"
 
+# The open flags (`O_DIRECTORY`, `O_NOFOLLOW`) with which a log directory is
+# opened before it is restricted to its owner, so that a link at its name is
+# not followed, and the user's id (`geteuid`), which its owner is compared
+# with (`private_fs`). Already in the tree through other crates.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [target.'cfg(target_os = "linux")'.dependencies]
 keyring = { version = "3", features = [
     "linux-native-sync-persistent",

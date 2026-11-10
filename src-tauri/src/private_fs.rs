@@ -7,7 +7,8 @@
 //! and takes nothing from the directory above: see [`windows`]. A network
 //! share is the exception there: what is created on one gets its access list
 //! from the directory above. An existing directory is restricted on Unix
-//! only.
+//! only. One that may sit where others can write is restricted there
+//! without following a link at its name.
 
 use std::io;
 use std::path::Path;
@@ -39,10 +40,16 @@ pub(crate) fn create_private_dir(path: &Path) -> io::Result<()> {
     }
 }
 
-/// Restrict an existing directory to 0700 on Unix, for one that belongs to
-/// the app alone; nothing on Windows, where a directory that is already
-/// there keeps its access list. Separate from creating it, so that a
-/// file system without Unix modes can fail this and still be used.
+/// Restrict an existing directory to 0700 on Unix; nothing on Windows, where
+/// a directory that is already there keeps its access list. For a directory
+/// that is the app's own and sits where only the user can put anything: the
+/// config directory. A link at the path is followed, on purpose, so that a
+/// config directory the user keeps elsewhere and links to is restricted
+/// there; for a
+/// directory that may sit where others can write, there is
+/// [`restrict_dir_to_owner_nofollow`]. The mode is replaced whole. Separate
+/// from creating the directory, so that a file system without Unix modes can
+/// fail this and still be used.
 // It can only fail on Unix, where it changes the mode.
 #[cfg_attr(not(unix), allow(clippy::unnecessary_wraps))]
 pub(crate) fn restrict_dir_to_owner(
@@ -52,6 +59,58 @@ pub(crate) fn restrict_dir_to_owner(
     {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))?;
+    }
+    Ok(())
+}
+
+/// [`restrict_dir_to_owner`] for a directory that may sit where others can
+/// write, such as a log directory the user chose. The caller takes the
+/// directory to be for the app: the mode is replaced whole, so others who
+/// shared it lose it.
+///
+/// The directory is opened first, by a call that refuses a link at its name,
+/// and restricted through that handle. Someone able to put a link there, or
+/// to swap one in after the directory was created, therefore cannot have a
+/// directory elsewhere restricted: the link is an error, and so is anything
+/// but a directory. Links in the path above the name are followed as ever.
+/// A directory that belongs to another user is an error as well, also for
+/// root, who could change its mode. A directory the user cannot read cannot
+/// be opened, and is an error too; restricting it by its path instead would
+/// follow a link swapped in there.
+// It can only fail on Unix, where it changes the mode.
+#[cfg_attr(not(unix), allow(clippy::unnecessary_wraps))]
+pub(crate) fn restrict_dir_to_owner_nofollow(
+    #[cfg_attr(not(unix), allow(unused_variables))] path: &Path,
+) -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
+        // Without a separator at its end, as a path from the config file
+        // can have: with one, the system resolves a link at the name before
+        // it looks at the flags, and follows it after all.
+        let path = &path.components().collect::<std::path::PathBuf>();
+        let dir = std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW)
+            .open(path)
+            .map_err(|e| match std::fs::symlink_metadata(path) {
+                // What the system says of a link differs between systems.
+                Ok(at_name) if at_name.file_type().is_symlink() => io::Error::new(
+                    e.kind(),
+                    "a symbolic link is at its name, which is not followed",
+                ),
+                _ => e,
+            })?;
+        // SAFETY: `geteuid` takes no arguments, touches no memory and
+        // cannot fail.
+        let user = unsafe { libc::geteuid() };
+        if dir.metadata()?.uid() != user {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "the directory belongs to another user",
+            ));
+        }
+        dir.set_permissions(std::fs::Permissions::from_mode(0o700))?;
     }
     Ok(())
 }
@@ -216,6 +275,71 @@ mod tests {
             let mode = std::fs::metadata(&root).unwrap().permissions().mode();
             assert_eq!(mode & 0o077, 0, "group/other bits set: {mode:o}");
         }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn restrict_dir_to_owner_nofollow_restricts_an_existing_directory() {
+        let root = scratch();
+        std::fs::create_dir_all(&root).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            // With the bits a shared directory has, which go as well.
+            std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o2775)).unwrap();
+        }
+        // A separator at the end of the path makes no difference.
+        let with_separator = root.join("");
+        assert!(with_separator
+            .to_string_lossy()
+            .ends_with(std::path::MAIN_SEPARATOR));
+        restrict_dir_to_owner_nofollow(&with_separator).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&root).unwrap().permissions().mode();
+            assert_eq!(mode & 0o7777, 0o700, "{mode:o}");
+        }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A link at the directory's name is refused, whether it leads to a
+    /// directory or a file, and what it leads to keeps its mode; a file at
+    /// the name is refused as well. `restrict_dir_to_owner` follows the link.
+    #[cfg(unix)]
+    #[test]
+    fn restrict_dir_to_owner_nofollow_refuses_a_link_and_a_file() {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = |path: &Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o7777;
+        let root = scratch();
+        create_private_dir(&root).unwrap();
+        let elsewhere = root.join("elsewhere");
+        std::fs::create_dir(&elsewhere).unwrap();
+        std::fs::set_permissions(&elsewhere, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let file = root.join("file");
+        std::fs::write(&file, b"").unwrap();
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+        let to_dir = root.join("to-dir");
+        std::os::unix::fs::symlink(&elsewhere, &to_dir).unwrap();
+        let to_file = root.join("to-file");
+        std::os::unix::fs::symlink(&file, &to_file).unwrap();
+        let dangling = root.join("dangling");
+        std::os::unix::fs::symlink(root.join("missing"), &dangling).unwrap();
+        // With a separator at its end too, which would have the system
+        // follow the link whatever the flags say.
+        let to_dir_slash = std::path::PathBuf::from(format!("{}/", to_dir.display()));
+        for link in [&to_dir, &to_dir_slash, &to_file, &dangling] {
+            let refused = restrict_dir_to_owner_nofollow(link).unwrap_err();
+            assert!(refused.to_string().contains("symbolic link"), "{refused}");
+        }
+        assert!(restrict_dir_to_owner_nofollow(&file).is_err());
+        assert_eq!(mode(&elsewhere), 0o755);
+        assert_eq!(mode(&file), 0o644);
+
+        // The other one goes through the link.
+        restrict_dir_to_owner(&to_dir).unwrap();
+        assert_eq!(mode(&elsewhere), 0o700);
         let _ = std::fs::remove_dir_all(&root);
     }
 

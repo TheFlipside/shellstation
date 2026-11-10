@@ -30,13 +30,11 @@ pub async fn logging_get_config(state: State<'_, ConfigState>) -> Result<Logging
     Ok(config.logging.clone())
 }
 
-/// Validate that a log directory path is absolute.
+/// Validate a log directory by the rules startup applies to one from the
+/// config file: absolute, and without `..` components. A directory saved
+/// here is therefore one that the next start accepts.
 fn validate_log_directory(dir: &str) -> Result<(), String> {
-    let path = PathBuf::from(dir);
-    if !path.is_absolute() {
-        return Err("Log directory must be an absolute path".to_string());
-    }
-    Ok(())
+    crate::validate_config_path(dir, "Log directory").map(|_| ())
 }
 
 /// `<config_dir>/logs`, where both logs go unless the user chose otherwise.
@@ -204,6 +202,16 @@ mod tests {
         // A hand-edited config file can hold one.
         let err = validate_log_directory("logs").unwrap_err();
         assert!(err.contains("absolute"), "{err}");
+    }
+
+    #[test]
+    fn a_log_directory_with_a_parent_component_is_refused() {
+        // Startup refuses one too, and would fall back to the default.
+        let up = std::env::temp_dir().join("..").join("logs");
+        let err = validate_log_directory(&up.to_string_lossy()).unwrap_err();
+        assert!(err.contains("(..)"), "{err}");
+        let plain = std::env::temp_dir().join("logs");
+        assert_eq!(validate_log_directory(&plain.to_string_lossy()), Ok(()));
     }
 
     #[test]
