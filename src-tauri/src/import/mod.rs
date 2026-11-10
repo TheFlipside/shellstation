@@ -43,7 +43,10 @@ const MAX_WARNINGS: usize = 20;
 /// Mongolian free variation selectors and vowel separator (U+180B–U+180E),
 /// the combining grapheme joiner (U+034F), variation selectors (U+FE00–U+FE0F)
 /// and emoji tag characters (U+E0000–U+E007F) — are deliberately left alone.
-fn is_display_spoofing_char(c: char) -> bool {
+///
+/// The session logger drops the same characters from a log, and the tag
+/// characters as well.
+pub(crate) fn is_display_spoofing_char(c: char) -> bool {
     matches!(
         c,
         '\u{202A}'..='\u{202E}'
