@@ -51,7 +51,6 @@ use db::sqlite::SqliteProvider;
 use db::{CredentialDbState, DbState, LoginSequenceDbState, PgPoolState, PgUserState};
 use pty::PtyState;
 use sha2::{Digest, Sha384};
-use sqlx::postgres::PgPoolOptions;
 use sqlx::sqlite::SqliteConnectOptions;
 use sqlx::SqlitePool;
 use ssh::SshState;
@@ -300,6 +299,19 @@ fn sanitize_pg_error(raw: &str) -> String {
     if raw.contains("Connection refused") || raw.contains("connection refused") {
         return "Connection refused — check host and port.".to_string();
     }
+    // Before the timeout of a connection below, whose text these two would
+    // match as well. They are the limits of `db::postgres::pool_options`,
+    // which a migration runs under like everything else.
+    if raw.contains("lock timeout") {
+        return "The database update could not get a lock that another session holds. \
+                Start ShellStation again; if it keeps happening, see ADMIN_GUIDE.md §7."
+            .to_string();
+    }
+    if raw.contains("statement timeout") {
+        return "A statement of the database update took longer than the server allows. \
+                See ADMIN_GUIDE.md §7 for giving the owning role more time."
+            .to_string();
+    }
     if raw.contains("timeout") || raw.contains("Timed out") {
         return "Connection timed out — check host, port, and firewall rules.".to_string();
     }
@@ -337,10 +349,36 @@ fn sanitize_pg_error(raw: &str) -> String {
 /// [`setup_postgres_rls`] and [`claim_legacy_mappings`].
 const MAPPING_TABLES: [&str; 2] = ["session_credentials", "session_login_sequences"];
 
+/// What [`setup_postgres_rls`] returns for a role that does not own the
+/// tables, which is every regular user's start and nothing to act on. Any
+/// other error is a setup that the owning role could not finish.
+const RLS_SETUP_NOT_OWNER: &str = "RLS setup: the current role does not own the tables";
+
+/// The tables under row-level security; see [`setup_postgres_rls`].
+const RLS_TABLES: [&str; 4] = ["folders", "sessions", MAPPING_TABLES[0], MAPPING_TABLES[1]];
+
 /// Idempotent `RLS` setup for `PostgreSQL` multi-user isolation.
 ///
-/// Called after `sqlx::migrate!()` succeeds. Statements are written so that
-/// running them multiple times is harmless (`IF `NOT` EXISTS`, etc.).
+/// Called after `sqlx::migrate!()` succeeds, at every start. Only the role
+/// that owns the tables can apply it, and for any other role it ends at the
+/// check for that.
+///
+/// A start that finds everything in place takes no lock on a table beyond
+/// what the two fix-up updates at the top need, which conflict with nothing
+/// a reader or writer holds. Each step looks in the catalog first and
+/// changes only what is missing. `ALTER TABLE`, `CREATE POLICY` and
+/// `CREATE TRIGGER` lock the whole table before they find that there is
+/// nothing to do: the first two against every other use of it, the third
+/// against writers. A lock against every other use waits for every open
+/// transaction that has touched the table, and while it waits, everything
+/// else that wants the table waits behind it, plain reads included. One
+/// transaction left open somewhere would then hold up every user for as
+/// long as the owning role's start waits, at each of its starts. A step
+/// that does have something to change still takes its lock, and waits no
+/// longer than the session's `lock_timeout` (`db::postgres::pool_options`).
+/// If it gives up there, the setup leaves the rest of that table's steps
+/// and goes on with the next table, and the next start of the owning role
+/// goes on from there. Whatever failed is reported together at the end.
 async fn setup_postgres_rls(pool: &sqlx::PgPool) -> Result<(), String> {
     // Fix the placeholder owner from the migration DEFAULT.
     sqlx::query("UPDATE folders SET owner = current_user WHERE owner = 'local'")
@@ -352,25 +390,153 @@ async fn setup_postgres_rls(pool: &sqlx::PgPool) -> Result<(), String> {
         .await
         .map_err(|e| format!("RLS setup (fix session owners): {e}"))?;
 
-    // Enable RLS. FORCE ensures policies apply even to the table owner.
-    for stmt in [
-        "ALTER TABLE folders ENABLE ROW LEVEL SECURITY",
-        "ALTER TABLE folders FORCE ROW LEVEL SECURITY",
-        "ALTER TABLE sessions ENABLE ROW LEVEL SECURITY",
-        "ALTER TABLE sessions FORCE ROW LEVEL SECURITY",
-        "ALTER TABLE session_credentials ENABLE ROW LEVEL SECURITY",
-        "ALTER TABLE session_credentials FORCE ROW LEVEL SECURITY",
-        "ALTER TABLE session_login_sequences ENABLE ROW LEVEL SECURITY",
-        "ALTER TABLE session_login_sequences FORCE ROW LEVEL SECURITY",
-    ] {
-        sqlx::query(stmt)
-            .execute(pool)
-            .await
-            .map_err(|e| format!("RLS setup ({stmt}): {e}"))?;
+    // The rest is the table owner's to apply, and no one else gets past
+    // here. An `ALTER TABLE` used to be what stopped everyone else, at every
+    // start; the steps below no longer run one when nothing is missing, so
+    // the question is asked outright. It is the one `ALTER TABLE` asks: a
+    // superuser, or a role with the privileges of the role that owns the
+    // table. Without it, a role that may create functions in the schema
+    // (every role before PostgreSQL 15, and the users of Option B) could get
+    // as far as the trigger functions below on a database that does not have
+    // them yet, and the triggers would then call functions of that role's.
+    let tables = RLS_TABLES
+        .map(|table| format!("'{table}'::pg_catalog.regclass"))
+        .join(", ");
+    let owns_tables: bool = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+        "SELECT count(*) = {} AND bool_and(pg_catalog.pg_has_role(c.relowner, 'USAGE')) \
+         FROM pg_catalog.pg_class c WHERE c.oid IN ({tables})",
+        RLS_TABLES.len()
+    )))
+    .fetch_one(pool)
+    .await
+    .map_err(|e| format!("RLS setup (table ownership): {e}"))?;
+    if !owns_tables {
+        return Err(RLS_SETUP_NOT_OWNER.to_string());
     }
 
-    // Policies — use DO blocks so CREATE POLICY IF NOT EXISTS works on PG < 17.
-    // PG 14+ supports IF NOT EXISTS directly; wrap in exception handler for safety.
+    // From here on, a step that fails does not stop the ones after it, with
+    // the two exceptions below. The steps do not depend on each other (but
+    // for the triggers, which need their functions), so one that cannot be
+    // applied to this database, such as a constraint that existing rows
+    // break, must not keep the others from it at every start. Whatever
+    // failed is reported together at the end.
+    //
+    // The steps go a table at a time, and row-level security is each
+    // table's last, in one statement with its policies. Until that step, a
+    // table is as it was before the setup; after it, everything the setup
+    // has for it is in place. A step that gives up on a lock ends its
+    // table's steps, which would wait for the same lock and each spend
+    // `lock_timeout` on it before the app has a window, and the setup goes
+    // on with the next table. Whoever makes a step give up, by holding a
+    // lock when the owning role starts, thus has no say in which part of a
+    // table's protection is applied, and none over the other tables. The
+    // next start goes on from there. The other exception is a step that
+    // fails at the connection and not at the database: every further step
+    // would meet the same, so the setup ends there (`RlsStepEnds`).
+    let mut failed: Vec<String> = Vec::new();
+
+    // Triggers keep a shared row with its owner and where its owner put it.
+    // Anyone may update a shared row, and PostgreSQL accepts the updated row
+    // if it passes any permissive policy. That leaves two ways around the
+    // owner-only rule of `*_shared_delete`:
+    //
+    // - `SET owner = current_user` passes `*_owner_all` and makes the row the
+    //   updater's. A policy cannot stop this, because a `WITH CHECK` sees
+    //   only the new row. Owner changes are left to superusers (who reassign
+    //   a removed user's rows, ADMIN_GUIDE.md §4) and the table owner, plus
+    //   claiming a placeholder `'local'` row for oneself, as the fix-up at
+    //   the top of this function does.
+    // - Moving the row under a folder of one's own (`folder_id`, `parent_id`)
+    //   hides it from everyone else, and deleting that folder deletes it
+    //   too: the foreign keys cascade, and a cascade is not subject to RLS.
+    //   Moves are left to the row's owner, which the app's own move commands
+    //   already require, and to the table owner and superusers.
+    //
+    // The functions run as the updating user, so every name in them is
+    // pinned: a temporary table is found before `pg_catalog` unless the path
+    // says otherwise, and a temp table named `pg_class` would otherwise let
+    // any user claim to own the table. They are replaced on every run so
+    // that a fix to them reaches existing databases, which locks no table;
+    // only the table owner gets this far, the ownership check above stops
+    // everyone else. A failure to replace one (a function owned by another
+    // role) does not stop the steps after it, but its triggers are then
+    // left alone: a new one would call a function that is not this role's.
+    let functions = [
+        (
+            "shellstation_keep_owner",
+            "NEW.owner IS DISTINCT FROM OLD.owner \
+             AND NOT (OLD.owner = 'local' AND NEW.owner = current_user)",
+            "only the table owner can change the owner of a % row",
+        ),
+        (
+            "shellstation_keep_place",
+            "OLD.owner IS DISTINCT FROM current_user",
+            "only its owner can move a % row",
+        ),
+    ];
+    let mut replaced: Vec<&str> = Vec::new();
+    for (name, refuse_when, message) in functions {
+        let sql = format!(
+            "CREATE OR REPLACE FUNCTION {name}() RETURNS trigger \
+             LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp AS $fn$ \
+             BEGIN \
+                 IF {refuse_when} \
+                    AND NOT pg_catalog.pg_has_role(current_user, \
+                        (SELECT relowner FROM pg_catalog.pg_class WHERE oid = TG_RELID), 'MEMBER') \
+                 THEN \
+                     RAISE EXCEPTION '{message}', TG_TABLE_NAME \
+                         USING ERRCODE = 'insufficient_privilege'; \
+                 END IF; \
+                 RETURN NEW; \
+             END $fn$"
+        );
+        match rls_setup_step(pool, &format!("function {name}"), &sql).await {
+            Ok(()) => replaced.push(name),
+            Err(failure) => {
+                failed.push(failure.message);
+                if failure.ends == RlsStepEnds::Setup {
+                    return Err(failed.join("; "));
+                }
+            }
+        }
+    }
+    let triggers = [
+        (
+            "folders_keep_owner",
+            "folders",
+            "owner",
+            "shellstation_keep_owner",
+        ),
+        (
+            "sessions_keep_owner",
+            "sessions",
+            "owner",
+            "shellstation_keep_owner",
+        ),
+        (
+            "folders_keep_place",
+            "folders",
+            "parent_id",
+            "shellstation_keep_place",
+        ),
+        (
+            "sessions_keep_place",
+            "sessions",
+            "folder_id",
+            "shellstation_keep_place",
+        ),
+    ];
+
+    // Policies and row-level security are each table's in one statement,
+    // which is one transaction: a table gets its policies and has row-level
+    // security switched on, or neither. With it on and no policy, a table
+    // refuses everything to everyone; with it off, its policies do nothing.
+    // FORCE makes the policies apply to the table owner as well.
+    //
+    // A policy that is there is left as it is. When something is missing,
+    // the block takes the table's lock and looks again, since two starts of
+    // the owning role at the same time would both find it missing, and the
+    // second would fail at a policy that is there by then.
     let policies = [
         // Folders
         (
@@ -450,8 +616,8 @@ async fn setup_postgres_rls(pool: &sqlx::PgPool) -> Result<(), String> {
         // not that of a role named `local`, which is held to the sessions it
         // can see like any other.
         //
-        // An existing policy is left as it is (`duplicate_object` below), so
-        // a change to these two needs a new name.
+        // An existing policy is left as it is, so a change to these two
+        // needs a new name.
         (
             "session_credentials_owner_all",
             "session_credentials",
@@ -476,35 +642,6 @@ async fn setup_postgres_rls(pool: &sqlx::PgPool) -> Result<(), String> {
         ),
     ];
 
-    for (name, table, cmd, using_expr, check_expr) in &policies {
-        let with_check = check_expr.map_or_else(String::new, |e| format!(" WITH CHECK ({e})"));
-        let sql = format!(
-            "DO $$ BEGIN \
-                 CREATE POLICY {name} ON {table} FOR {cmd} USING ({using_expr}){with_check}; \
-             EXCEPTION WHEN duplicate_object THEN NULL; \
-             END $$"
-        );
-        sqlx::query(sqlx::AssertSqlSafe(sql.as_str()))
-            .execute(pool)
-            .await
-            .map_err(|e| format!("RLS setup (policy {name}): {e}"))?;
-    }
-
-    // CHECK constraints on visibility values.
-    for table in ["folders", "sessions"] {
-        let sql = format!(
-            "DO $$ BEGIN \
-                 ALTER TABLE {table} ADD CONSTRAINT {table}_vis_ck \
-                     CHECK (visibility IN ('personal', 'shared')); \
-             EXCEPTION WHEN duplicate_object THEN NULL; \
-             END $$"
-        );
-        sqlx::query(sqlx::AssertSqlSafe(sql.as_str()))
-            .execute(pool)
-            .await
-            .map_err(|e| format!("RLS setup (constraint {table}_vis_ck): {e}"))?;
-    }
-
     // A mapping's key includes its owner. The tables came with a primary key
     // of (session_id, user_ident): with it, a role that wrote a row under
     // someone else's `user_ident` would keep that user from mapping the
@@ -520,133 +657,183 @@ async fn setup_postgres_rls(pool: &sqlx::PgPool) -> Result<(), String> {
     // looks again, since two starts of the owning role at the same time
     // would both find it to do, and the second would fail at a primary key
     // that is no longer there.
-    for table in MAPPING_TABLES {
-        let sql = format!(
-            "DO $$ DECLARE pk name; BEGIN \
-                 SELECT conname INTO pk FROM pg_catalog.pg_constraint \
-                     WHERE conrelid = '{table}'::pg_catalog.regclass AND contype = 'p'; \
-                 IF pk IS DISTINCT FROM '{table}_owner_key' THEN \
-                     LOCK TABLE {table} IN ACCESS EXCLUSIVE MODE; \
-                     SELECT conname INTO pk FROM pg_catalog.pg_constraint \
-                         WHERE conrelid = '{table}'::pg_catalog.regclass AND contype = 'p'; \
-                     IF pk IS DISTINCT FROM '{table}_owner_key' THEN \
-                         IF pk IS NOT NULL THEN \
-                             EXECUTE pg_catalog.format( \
-                                 'ALTER TABLE {table} DROP CONSTRAINT %I', pk); \
+    for table in RLS_TABLES {
+        let mut steps: Vec<(String, String)> = Vec::new();
+
+        // CHECK constraint on visibility values.
+        if ["folders", "sessions"].contains(&table) {
+            steps.push((
+                format!("constraint {table}_vis_ck"),
+                format!(
+                    "DO $$ BEGIN \
+                         IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_constraint \
+                                        WHERE conrelid = '{table}'::pg_catalog.regclass \
+                                          AND conname = '{table}_vis_ck') THEN \
+                             ALTER TABLE {table} ADD CONSTRAINT {table}_vis_ck \
+                                 CHECK (visibility IN ('personal', 'shared')); \
                          END IF; \
-                         ALTER TABLE {table} ADD CONSTRAINT {table}_owner_key \
-                             PRIMARY KEY USING INDEX {table}_owner_key; \
+                     EXCEPTION WHEN duplicate_object THEN NULL; \
+                     END $$"
+                ),
+            ));
+        }
+
+        // The primary key of a mapping table; see above.
+        if MAPPING_TABLES.contains(&table) {
+            steps.push((
+                format!("primary key of {table}"),
+                format!(
+                    "DO $$ DECLARE pk name; BEGIN \
+                         SELECT conname INTO pk FROM pg_catalog.pg_constraint \
+                             WHERE conrelid = '{table}'::pg_catalog.regclass AND contype = 'p'; \
+                         IF pk IS DISTINCT FROM '{table}_owner_key' THEN \
+                             LOCK TABLE {table} IN ACCESS EXCLUSIVE MODE; \
+                             SELECT conname INTO pk FROM pg_catalog.pg_constraint \
+                                 WHERE conrelid = '{table}'::pg_catalog.regclass \
+                                   AND contype = 'p'; \
+                             IF pk IS DISTINCT FROM '{table}_owner_key' THEN \
+                                 IF pk IS NOT NULL THEN \
+                                     EXECUTE pg_catalog.format( \
+                                         'ALTER TABLE {table} DROP CONSTRAINT %I', pk); \
+                                 END IF; \
+                                 ALTER TABLE {table} ADD CONSTRAINT {table}_owner_key \
+                                     PRIMARY KEY USING INDEX {table}_owner_key; \
+                             END IF; \
+                         END IF; \
+                     END $$"
+                ),
+            ));
+        }
+
+        // The table's triggers, where their function is this run's.
+        for (name, _, column, function) in triggers
+            .iter()
+            .filter(|trigger| trigger.1 == table && replaced.contains(&trigger.3))
+        {
+            steps.push((
+                format!("trigger {name}"),
+                format!(
+                    "DO $$ BEGIN \
+                         IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_trigger \
+                                        WHERE tgrelid = '{table}'::pg_catalog.regclass \
+                                          AND tgname = '{name}' AND NOT tgisinternal) THEN \
+                             CREATE TRIGGER {name} BEFORE UPDATE OF {column} ON {table} \
+                                 FOR EACH ROW \
+                                 WHEN (OLD.{column} IS DISTINCT FROM NEW.{column}) \
+                                 EXECUTE FUNCTION {function}(); \
+                         END IF; \
+                     EXCEPTION WHEN duplicate_object THEN NULL; \
+                     END $$"
+                ),
+            ));
+        }
+
+        // Its policies and row-level security, last.
+        let rls_off = format!(
+            "NOT (SELECT c.relrowsecurity AND c.relforcerowsecurity \
+                  FROM pg_catalog.pg_class c \
+                  WHERE c.oid = '{table}'::pg_catalog.regclass)"
+        );
+        let mut anything_missing = vec![rls_off.clone()];
+        let mut create_missing = Vec::new();
+        for (name, _, cmd, using_expr, check_expr) in
+            policies.iter().filter(|policy| policy.1 == table)
+        {
+            let missing = format!(
+                "NOT EXISTS (SELECT 1 FROM pg_catalog.pg_policy \
+                             WHERE polrelid = '{table}'::pg_catalog.regclass \
+                               AND polname = '{name}')"
+            );
+            let with_check = check_expr.map_or_else(String::new, |e| format!(" WITH CHECK ({e})"));
+            create_missing.push(format!(
+                "IF {missing} THEN \
+                     CREATE POLICY {name} ON {table} FOR {cmd} \
+                         USING ({using_expr}){with_check}; \
+                 END IF; "
+            ));
+            anything_missing.push(missing);
+        }
+        let anything_missing = anything_missing.join(" OR ");
+        let create_missing = create_missing.concat();
+        steps.push((
+            format!("policies and row level security on {table}"),
+            format!(
+                "DO $$ BEGIN \
+                     IF {anything_missing} THEN \
+                         LOCK TABLE {table} IN ACCESS EXCLUSIVE MODE; \
+                         {create_missing}\
+                         IF {rls_off} THEN \
+                             ALTER TABLE {table} ENABLE ROW LEVEL SECURITY; \
+                             ALTER TABLE {table} FORCE ROW LEVEL SECURITY; \
+                         END IF; \
                      END IF; \
-                 END IF; \
-             END $$"
-        );
-        sqlx::query(sqlx::AssertSqlSafe(sql.as_str()))
-            .execute(pool)
-            .await
-            .map_err(|e| format!("RLS setup (primary key of {table}): {e}"))?;
+                 END $$"
+            ),
+        ));
+
+        for (what, sql) in &steps {
+            let Err(failure) = rls_setup_step(pool, what, sql).await else {
+                continue;
+            };
+            failed.push(failure.message);
+            match failure.ends {
+                RlsStepEnds::Step => {}
+                RlsStepEnds::Table => break,
+                RlsStepEnds::Setup => return Err(failed.join("; ")),
+            }
+        }
     }
 
-    // Triggers keep a shared row with its owner and where its owner put it.
-    // Anyone may update a shared row, and PostgreSQL accepts the updated row
-    // if it passes any permissive policy. That leaves two ways around the
-    // owner-only rule of `*_shared_delete`:
-    //
-    // - `SET owner = current_user` passes `*_owner_all` and makes the row the
-    //   updater's. A policy cannot stop this, because a `WITH CHECK` sees
-    //   only the new row. Owner changes are left to superusers (who reassign
-    //   a removed user's rows, ADMIN_GUIDE.md §4) and the table owner, plus
-    //   claiming a placeholder `'local'` row for oneself, as the fix-up at
-    //   the top of this function does.
-    // - Moving the row under a folder of one's own (`folder_id`, `parent_id`)
-    //   hides it from everyone else, and deleting that folder deletes it
-    //   too: the foreign keys cascade, and a cascade is not subject to RLS.
-    //   Moves are left to the row's owner, which the app's own move commands
-    //   already require, and to the table owner and superusers.
-    //
-    // The functions run as the updating user, so every name in them is
-    // pinned: a temporary table is found before `pg_catalog` unless the path
-    // says otherwise, and a temp table named `pg_class` would otherwise let
-    // any user claim to own the table. They are replaced on every run so
-    // that a fix to them reaches existing databases; only the table owner
-    // gets this far, the `ALTER TABLE`s above stop everyone else. This step
-    // comes last, so a failure to replace them (a function owned by another
-    // role) leaves the rest of the setup applied.
-    let functions = [
-        (
-            "shellstation_keep_owner",
-            "NEW.owner IS DISTINCT FROM OLD.owner \
-             AND NOT (OLD.owner = 'local' AND NEW.owner = current_user)",
-            "only the table owner can change the owner of a % row",
-        ),
-        (
-            "shellstation_keep_place",
-            "OLD.owner IS DISTINCT FROM current_user",
-            "only its owner can move a % row",
-        ),
-    ];
-    for (name, refuse_when, message) in functions {
-        let sql = format!(
-            "CREATE OR REPLACE FUNCTION {name}() RETURNS trigger \
-             LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp AS $fn$ \
-             BEGIN \
-                 IF {refuse_when} \
-                    AND NOT pg_catalog.pg_has_role(current_user, \
-                        (SELECT relowner FROM pg_catalog.pg_class WHERE oid = TG_RELID), 'MEMBER') \
-                 THEN \
-                     RAISE EXCEPTION '{message}', TG_TABLE_NAME \
-                         USING ERRCODE = 'insufficient_privilege'; \
-                 END IF; \
-                 RETURN NEW; \
-             END $fn$"
-        );
-        sqlx::query(sqlx::AssertSqlSafe(sql.as_str()))
-            .execute(pool)
-            .await
-            .map_err(|e| format!("RLS setup (function {name}): {e}"))?;
+    if failed.is_empty() {
+        tracing::info!("PostgreSQL RLS setup complete");
+        Ok(())
+    } else {
+        Err(failed.join("; "))
     }
-    let triggers = [
-        (
-            "folders_keep_owner",
-            "folders",
-            "owner",
-            "shellstation_keep_owner",
-        ),
-        (
-            "sessions_keep_owner",
-            "sessions",
-            "owner",
-            "shellstation_keep_owner",
-        ),
-        (
-            "folders_keep_place",
-            "folders",
-            "parent_id",
-            "shellstation_keep_place",
-        ),
-        (
-            "sessions_keep_place",
-            "sessions",
-            "folder_id",
-            "shellstation_keep_place",
-        ),
-    ];
-    for (name, table, column, function) in triggers {
-        let sql = format!(
-            "DO $$ BEGIN \
-                 CREATE TRIGGER {name} BEFORE UPDATE OF {column} ON {table} FOR EACH ROW \
-                     WHEN (OLD.{column} IS DISTINCT FROM NEW.{column}) \
-                     EXECUTE FUNCTION {function}(); \
-             EXCEPTION WHEN duplicate_object THEN NULL; \
-             END $$"
-        );
-        sqlx::query(sqlx::AssertSqlSafe(sql.as_str()))
-            .execute(pool)
-            .await
-            .map_err(|e| format!("RLS setup (trigger {name}): {e}"))?;
-    }
+}
 
-    tracing::info!("PostgreSQL RLS setup complete");
-    Ok(())
+/// What a step of [`setup_postgres_rls`] that failed puts an end to.
+#[derive(Debug, PartialEq, Eq)]
+enum RlsStepEnds {
+    /// Itself only: the database refused it, and the next step is another
+    /// matter.
+    Step,
+    /// The rest of its table's steps: it gave up waiting, on a lock
+    /// (`lock_not_available`, which `lock_timeout` raises) or as a statement
+    /// that took too long (`query_canceled`, which `statement_timeout`
+    /// raises, and which comes first where the server sets it shorter than
+    /// `lock_timeout`). The table's other steps would wait as long.
+    Table,
+    /// The setup: the failure is not the database's answer to the step but
+    /// the connection's, and every further step would meet it again, each
+    /// after the pool's wait for a connection.
+    Setup,
+}
+
+/// A step of [`setup_postgres_rls`] that failed: what to report for it, and
+/// what it ends.
+struct RlsStepFailure {
+    message: String,
+    ends: RlsStepEnds,
+}
+
+/// Runs one step of [`setup_postgres_rls`], which is applied or was already
+/// when this returns `Ok`.
+async fn rls_setup_step(pool: &sqlx::PgPool, what: &str, sql: &str) -> Result<(), RlsStepFailure> {
+    let Err(e) = sqlx::query(sqlx::AssertSqlSafe(sql)).execute(pool).await else {
+        return Ok(());
+    };
+    let ends = match &e {
+        sqlx::Error::Database(db) => match db.code().as_deref() {
+            Some("55P03" | "57014") => RlsStepEnds::Table,
+            _ => RlsStepEnds::Step,
+        },
+        _ => RlsStepEnds::Setup,
+    };
+    Err(RlsStepFailure {
+        message: format!("RLS setup ({what}): {e}"),
+        ends,
+    })
 }
 
 /// Claim the per-user mappings written under `user_ident` before a mapping
@@ -1329,9 +1516,10 @@ pub fn run() {
                     let password_configured = !app_config.postgres.password.is_empty();
                     let pg_opts = app_config.postgres.connect_options();
                     match tauri::async_runtime::block_on(async {
-                        let pool = PgPoolOptions::new()
-                            .max_connections(10)
-                            .acquire_timeout(std::time::Duration::from_secs(5))
+                        // With the session timeouts, so that neither the
+                        // statements below nor the setup after them wait
+                        // without end for a lock someone holds.
+                        let pool = db::postgres::pool_options()
                             .connect_with(pg_opts)
                             .await?;
                         // Fix CRLF/LF checksum mismatches before running migrations
@@ -1349,10 +1537,26 @@ pub fn run() {
                     }) {
                         Ok(pool) => {
                             // Run post-migration RLS setup (idempotent).
-                            if let Err(e) =
-                                tauri::async_runtime::block_on(setup_postgres_rls(&pool))
-                            {
-                                tracing::warn!("PostgreSQL RLS setup skipped; only the role that owns the tables can apply it (ADMIN_GUIDE.md §5): {e}");
+                            match tauri::async_runtime::block_on(setup_postgres_rls(&pool)) {
+                                Ok(()) => {}
+                                Err(e) if e == RLS_SETUP_NOT_OWNER => tracing::warn!(
+                                    "PostgreSQL RLS setup skipped; only the role that owns the tables can apply it (ADMIN_GUIDE.md §5)"
+                                ),
+                                // The setup stopped part of the way, such
+                                // as at a lock someone holds (it gives up
+                                // on one after `lock_timeout`). For the
+                                // owning role, what it had still to apply
+                                // is not in effect until a start of it gets
+                                // through. For any other role this is one
+                                // of the two fix-ups before the ownership
+                                // check, and nothing of the setup was its
+                                // to apply. The error can quote what the
+                                // database says, object names and the text
+                                // of an exception among it, so it is logged
+                                // escaped.
+                                Err(e) => tracing::error!(
+                                    "PostgreSQL RLS setup did not finish. If this role owns the tables, what the setup had still to apply is not in effect until a start with it gets through; see ADMIN_GUIDE.md §5, and §7 if it keeps failing: {e:?}"
+                                ),
                             }
                             // Mappings from before a mapping had an owner
                             // (see `claim_legacy_mappings`). After the setup
@@ -1401,8 +1605,18 @@ pub fn run() {
                         Err(e) => {
                             // Sanitize before logging — raw errors may contain
                             // connection strings or credentials.
-                            let safe_msg = if password_configured {
-                                sanitize_pg_error(&e.to_string())
+                            //
+                            // Without a password, a missing one is the
+                            // likely cause of whatever failed, and the text
+                            // says to look at the configuration. A migration
+                            // that gave up on a lock or on a long statement
+                            // got past connecting, so it has its own text
+                            // either way.
+                            let raw = e.to_string();
+                            let gave_up =
+                                raw.contains("lock timeout") || raw.contains("statement timeout");
+                            let safe_msg = if password_configured || gave_up {
+                                sanitize_pg_error(&raw)
                             } else {
                                 "PostgreSQL connection failed. Check your database \
                                  configuration in Settings."
@@ -1556,6 +1770,7 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sqlx::postgres::PgPoolOptions;
 
     #[test]
     fn app_log_directives_leave_other_crates_off() {
@@ -1841,6 +2056,16 @@ mod tests {
     #[test]
     fn pg_timeout() {
         assert!(sanitize_pg_error("connection timeout expired").contains("timed out"));
+        // The limits a migration runs under are not a connection that timed
+        // out.
+        let lock = sanitize_pg_error(
+            "error returned from database: canceling statement due to lock timeout",
+        );
+        assert!(lock.contains("lock that another session holds"), "{lock}");
+        let statement = sanitize_pg_error(
+            "error returned from database: canceling statement due to statement timeout",
+        );
+        assert!(statement.contains("took longer"), "{statement}");
         assert!(sanitize_pg_error("Timed out connecting").contains("timed out"));
     }
 
@@ -1942,6 +2167,16 @@ mod tests {
     #[ignore = "needs a throwaway PostgreSQL server in SHELLSTATION_TEST_PG_URL"]
     async fn per_user_mappings_are_private() {
         with_rls_test_database(check_per_user_mappings_are_private).await;
+    }
+
+    /// Locks another session holds, against a real server: the app's own
+    /// connections give up on them, and wait for fewer of them. Same server
+    /// as for `shared_rows_keep_their_owner`; run with
+    /// `--ignored held_locks`.
+    #[tokio::test]
+    #[ignore = "needs a throwaway PostgreSQL server in SHELLSTATION_TEST_PG_URL"]
+    async fn held_locks_do_not_hang_others() {
+        with_rls_test_database(check_held_locks_do_not_hang_others).await;
     }
 
     /// Run `checks` with a database of its own on the throwaway server and
@@ -2072,31 +2307,7 @@ mod tests {
             .connect_with(opts)
             .await
             .unwrap();
-        pg_exec(&pool, &format!("GRANT ALL ON SCHEMA public TO {admin}"))
-            .await
-            .unwrap();
-        pg_exec(
-            &pool,
-            &format!("GRANT USAGE ON SCHEMA public TO {alice}, {bob}"),
-        )
-        .await
-        .unwrap();
-
-        // As the admin: migrations and RLS setup, twice to show it is
-        // idempotent, then DML for the users (admin guide, Option A).
-        pg_exec(&pool, &format!("SET ROLE {admin}")).await.unwrap();
-        sqlx::migrate!().run(&pool).await.unwrap();
-        setup_postgres_rls(&pool).await.unwrap();
-        setup_postgres_rls(&pool).await.unwrap();
-        pg_exec(
-            &pool,
-            &format!(
-                "GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public \
-                 TO {alice}, {bob}"
-            ),
-        )
-        .await
-        .unwrap();
+        prepare_rls_test_database(&pool, &admin, &alice, &bob).await;
 
         pg_exec(&pool, &format!("SET ROLE {alice}")).await.unwrap();
         let folder = insert_folder(&pool, None, "shared").await;
@@ -2202,6 +2413,351 @@ mod tests {
         assert_eq!(pg_exec(&pool, &reassign).await.unwrap().rows_affected(), 1);
 
         pool.close().await;
+    }
+
+    /// A database as the admin guide sets it up under Option A, through a
+    /// pool of one connection, which is left as the admin: the admin migrates
+    /// and applies the RLS setup, twice to show it is idempotent, and the two
+    /// users get DML.
+    async fn prepare_rls_test_database(pool: &sqlx::PgPool, admin: &str, alice: &str, bob: &str) {
+        pg_exec(pool, &format!("GRANT ALL ON SCHEMA public TO {admin}"))
+            .await
+            .unwrap();
+        pg_exec(
+            pool,
+            &format!("GRANT USAGE ON SCHEMA public TO {alice}, {bob}"),
+        )
+        .await
+        .unwrap();
+        pg_exec(pool, &format!("SET ROLE {admin}")).await.unwrap();
+        sqlx::migrate!().run(pool).await.unwrap();
+        setup_postgres_rls(pool).await.unwrap();
+        setup_postgres_rls(pool).await.unwrap();
+        pg_exec(
+            pool,
+            &format!(
+                "GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public \
+                 TO {alice}, {bob}"
+            ),
+        )
+        .await
+        .unwrap();
+    }
+
+    /// One connection as `role`, made the way the app makes its own, and
+    /// with what it reports for each of the session timeouts.
+    async fn app_connection_as(
+        opts: &sqlx::postgres::PgConnectOptions,
+        role: &str,
+    ) -> (sqlx::PgPool, Vec<String>) {
+        let pool = db::postgres::pool_options()
+            .max_connections(1)
+            .connect_with(opts.clone())
+            .await
+            .unwrap();
+        pg_exec(&pool, &format!("SET ROLE {role}")).await.unwrap();
+        let mut timeouts = Vec::new();
+        for name in [
+            "lock_timeout",
+            "statement_timeout",
+            "idle_in_transaction_session_timeout",
+        ] {
+            let shown: String = sqlx::query_scalar("SELECT current_setting($1)")
+                .bind(name)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+            timeouts.push(shown);
+        }
+        (pool, timeouts)
+    }
+
+    /// What `PostgreSQL` says when a statement gives up on a lock.
+    const BY_LOCK_TIMEOUT: &str = "lock timeout";
+
+    /// Whether `result` failed at a lock, and soon: within a second of the
+    /// 300 ms the test sets, far from the 5 s of the app, let alone no end.
+    fn gave_up_on_lock<T: std::fmt::Debug>(
+        result: &Result<T, String>,
+        started: std::time::Instant,
+    ) -> bool {
+        matches!(result, Err(e) if e.contains(BY_LOCK_TIMEOUT))
+            && started.elapsed() < std::time::Duration::from_secs(2)
+    }
+
+    async fn check_held_locks_do_not_hang_others(
+        opts: sqlx::postgres::PgConnectOptions,
+        admin: String,
+        alice: String,
+        bob: String,
+    ) {
+        use db::models::{NewFolder, NewSession};
+        use db::DatabaseProvider;
+
+        let server = PgPoolOptions::new()
+            .max_connections(1)
+            .connect_with(opts.clone())
+            .await
+            .unwrap();
+        prepare_rls_test_database(&server, &admin, &alice, &bob).await;
+        pg_exec(&server, "RESET ROLE").await.unwrap();
+
+        // The app's connections set the three timeouts.
+        let (alice_pool, timeouts) = app_connection_as(&opts, &alice).await;
+        assert_eq!(timeouts, ["5s", "1min", "30s"]);
+        let (admin_pool, _) = app_connection_as(&opts, &admin).await;
+        // Shorter from here on, so that the test does not take the 5 s for
+        // each lock it runs into.
+        for pool in [&alice_pool, &admin_pool] {
+            pg_exec(pool, "SET lock_timeout = '300ms'").await.unwrap();
+        }
+        let alice_db = PostgresProvider::new(alice_pool.clone());
+        let new_folder = |name: &str| NewFolder {
+            name: name.to_string(),
+            parent_id: None,
+        };
+
+        // Alice and bob each have a shared folder at the top level.
+        let of_alice = alice_db
+            .create_folder(new_folder("alice"))
+            .await
+            .unwrap()
+            .id;
+        pg_exec(
+            &alice_pool,
+            &format!("UPDATE folders SET visibility = 'shared' WHERE id = '{of_alice}'"),
+        )
+        .await
+        .unwrap();
+        // Bob is not the app: a session with its own statements and no
+        // timeouts, as from any other client.
+        let bob_pool = PgPoolOptions::new()
+            .max_connections(1)
+            .connect_with(opts.clone())
+            .await
+            .unwrap();
+        pg_exec(&bob_pool, &format!("SET ROLE {bob}"))
+            .await
+            .unwrap();
+        insert_folder(&bob_pool, None, "shared").await;
+        // And a shared session of his in alice's folder, which the app would
+        // not put there but a statement of his own can: a new row has only
+        // its owner checked, and the foreign key is checked without RLS.
+        pg_exec(
+            &bob_pool,
+            &format!(
+                "INSERT INTO sessions (id, folder_id, name, hostname, username, owner, visibility) \
+                 VALUES ('{}', '{of_alice}', 'guest', 'host.example', '', current_user, 'shared')",
+                uuid::Uuid::new_v4()
+            ),
+        )
+        .await
+        .unwrap();
+        let new_session = |name: &str, folder_id| NewSession {
+            folder_id,
+            name: name.to_string(),
+            hostname: "host.example".to_string(),
+            port: 22,
+            protocol: "ssh".to_string(),
+            username: String::new(),
+            auth_method: "password".to_string(),
+            jump_host_id: None,
+            tags: "[]".to_string(),
+            icon: "desktop".to_string(),
+            highlight_profile_id: None,
+            credential_profile_id: None,
+            legacy_algorithms: false,
+            login_sequence_id: None,
+        };
+
+        // Bob holds a row lock on his own shared folder and on his session.
+        // The folder is a sibling of every top-level folder, and the session
+        // one of every session in alice's folder, but neither is one alice
+        // has to wait for to make or move something of her own.
+        let mut held = bob_pool.begin().await.unwrap();
+        for table in ["folders", "sessions"] {
+            let sql = format!("SELECT id FROM {table} WHERE owner = current_user FOR UPDATE");
+            let locked = sqlx::query(sqlx::AssertSqlSafe(sql))
+                .fetch_all(&mut *held)
+                .await
+                .unwrap();
+            assert_eq!(locked.len(), 1, "{table}");
+        }
+        let own = alice_db.create_folder(new_folder("own")).await.unwrap().id;
+        alice_db.move_folder(own, Some(of_alice)).await.unwrap();
+        alice_db.move_folder(own, None).await.unwrap();
+        let session = alice_db
+            .create_session(new_session("mine", own))
+            .await
+            .unwrap()
+            .id;
+        alice_db.move_session(session, of_alice).await.unwrap();
+        alice_db
+            .create_session(new_session("another", of_alice))
+            .await
+            .unwrap();
+
+        // Now he holds one on every folder he can see, alice's shared one
+        // included: RLS lets anyone lock a shared row. Her change to that
+        // folder gives up instead of waiting for him.
+        sqlx::query("SELECT id FROM folders FOR UPDATE")
+            .fetch_all(&mut *held)
+            .await
+            .unwrap();
+        let started = std::time::Instant::now();
+        let renamed = alice_db.rename_folder(of_alice, "renamed").await;
+        assert!(gave_up_on_lock(&renamed, started), "{renamed:?}");
+        // Her connection is as good as before, and reading needs no lock on
+        // a row.
+        assert_eq!(alice_db.list_folders().await.unwrap().len(), 3);
+        // The owning role's start finds its setup in place and changes
+        // nothing, so it does not wait for bob either. An `ALTER TABLE`
+        // would: it wants the whole table, and with it waiting, so would
+        // every reader after it.
+        setup_postgres_rls(&admin_pool).await.unwrap();
+        assert_eq!(alice_db.list_folders().await.unwrap().len(), 3);
+        held.rollback().await.unwrap();
+        alice_db.rename_folder(of_alice, "renamed").await.unwrap();
+
+        // Bob can lock a whole table as well: `LOCK TABLE` takes no more
+        // than the privileges the app needs. Then nothing gets through, but
+        // everything gives up: a read, and the start of the owning role,
+        // which fails at its first statement.
+        let mut held = bob_pool.begin().await.unwrap();
+        sqlx::query("LOCK TABLE folders IN ACCESS EXCLUSIVE MODE")
+            .execute(&mut *held)
+            .await
+            .unwrap();
+        let started = std::time::Instant::now();
+        let listed = alice_db.list_folders().await;
+        assert!(gave_up_on_lock(&listed, started), "{listed:?}");
+        let started = std::time::Instant::now();
+        let set_up = setup_postgres_rls(&admin_pool).await;
+        assert!(gave_up_on_lock(&set_up, started), "{set_up:?}");
+        held.rollback().await.unwrap();
+        assert_eq!(alice_db.list_folders().await.unwrap().len(), 3);
+        setup_postgres_rls(&admin_pool).await.unwrap();
+
+        // A table gets its policies and has row-level security switched on
+        // in one step, which puts back whichever of the two is missing.
+        let applied = "SELECT (SELECT count(*) FROM pg_policies WHERE tablename = 'folders' \
+                               AND policyname = 'folders_shared_read') \
+                            + (SELECT count(*) FROM pg_class WHERE oid = 'folders'::regclass \
+                               AND relrowsecurity AND relforcerowsecurity)";
+        let policy_on_sessions = "SELECT count(*) FROM pg_policies WHERE tablename = 'sessions' \
+                                  AND policyname = 'sessions_shared_read'";
+        for missing in [
+            "DROP POLICY folders_shared_read ON folders",
+            "ALTER TABLE folders NO FORCE ROW LEVEL SECURITY",
+            "ALTER TABLE folders DISABLE ROW LEVEL SECURITY",
+        ] {
+            pg_exec(&admin_pool, missing).await.unwrap();
+            assert_eq!(pg_count(&server, applied).await, 1, "{missing}");
+            setup_postgres_rls(&admin_pool).await.unwrap();
+            assert_eq!(pg_count(&server, applied).await, 2, "{missing}");
+        }
+
+        // Here both are missing on `folders`, and a policy on `sessions` as
+        // well, and bob holds a row lock on a folder when the owning role
+        // starts. The setup gives up on `folders`, which is as it was and
+        // not half protected, and still goes on to `sessions`.
+        for sql in [
+            "DROP POLICY folders_shared_read ON folders",
+            "ALTER TABLE folders NO FORCE ROW LEVEL SECURITY",
+            "DROP POLICY sessions_shared_read ON sessions",
+        ] {
+            pg_exec(&admin_pool, sql).await.unwrap();
+        }
+        let mut held = bob_pool.begin().await.unwrap();
+        sqlx::query("SELECT id FROM folders WHERE owner = current_user FOR UPDATE")
+            .fetch_all(&mut *held)
+            .await
+            .unwrap();
+        let started = std::time::Instant::now();
+        let set_up = setup_postgres_rls(&admin_pool).await;
+        assert!(gave_up_on_lock(&set_up, started), "{set_up:?}");
+        assert_eq!(pg_count(&server, applied).await, 0);
+        assert_eq!(pg_count(&server, policy_on_sessions).await, 1);
+        held.rollback().await.unwrap();
+        setup_postgres_rls(&admin_pool).await.unwrap();
+        assert_eq!(pg_count(&server, applied).await, 2);
+
+        // A step that cannot be applied does not keep the others from the
+        // database: a row breaks the constraint that is missing, and a
+        // trigger is missing as well. The setup reports the constraint and
+        // still puts the trigger back.
+        for sql in [
+            "ALTER TABLE folders DROP CONSTRAINT folders_vis_ck",
+            "DROP TRIGGER folders_keep_place ON folders",
+        ] {
+            pg_exec(&admin_pool, sql).await.unwrap();
+        }
+        let set_visibility = |visibility: &str| {
+            format!("UPDATE folders SET visibility = '{visibility}' WHERE id = '{own}'")
+        };
+        pg_exec(&server, &set_visibility("odd")).await.unwrap();
+        let failure = setup_postgres_rls(&admin_pool).await.unwrap_err();
+        assert!(failure.contains("constraint folders_vis_ck"), "{failure}");
+        assert!(!failure.contains(BY_LOCK_TIMEOUT), "{failure}");
+        let in_place = "SELECT (SELECT count(*) FROM pg_trigger WHERE tgname = 'folders_keep_place') \
+                             + (SELECT count(*) FROM pg_constraint WHERE conname = 'folders_vis_ck')";
+        assert_eq!(pg_count(&server, in_place).await, 1);
+        pg_exec(&server, &set_visibility("personal")).await.unwrap();
+        setup_postgres_rls(&admin_pool).await.unwrap();
+        assert_eq!(pg_count(&server, in_place).await, 2);
+
+        // The setup is for whoever `ALTER TABLE` would take for the owner:
+        // a member of the owning role that inherits its privileges, but not
+        // one that does not. Both are made here and dropped again.
+        let suffix = admin.trim_start_matches("ss_admin_");
+        let (heir, guest) = (format!("ss_heir_{suffix}"), format!("ss_guest_{suffix}"));
+        for sql in [
+            format!("CREATE ROLE {heir} NOLOGIN INHERIT"),
+            format!("CREATE ROLE {guest} NOLOGIN NOINHERIT"),
+            format!("GRANT {admin} TO {heir}, {guest}"),
+            // What a regular user has, which the one that inherits nothing
+            // needs for the fix-up before the check.
+            format!("GRANT USAGE ON SCHEMA public TO {guest}"),
+            format!(
+                "GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO {guest}"
+            ),
+            format!("SET ROLE {heir}"),
+        ] {
+            pg_exec(&server, &sql).await.unwrap();
+        }
+        setup_postgres_rls(&server).await.unwrap();
+        pg_exec(&server, &format!("SET ROLE {guest}"))
+            .await
+            .unwrap();
+        assert_eq!(
+            setup_postgres_rls(&server).await,
+            Err(RLS_SETUP_NOT_OWNER.to_string())
+        );
+        for sql in [
+            "RESET ROLE".to_string(),
+            format!("DROP OWNED BY {guest}"),
+            format!("DROP ROLE {heir}, {guest}"),
+        ] {
+            pg_exec(&server, &sql).await.unwrap();
+        }
+
+        // A timeout the server sets is kept, and the others are still set.
+        let database: String = sqlx::query_scalar("SELECT current_database()")
+            .fetch_one(&server)
+            .await
+            .unwrap();
+        pg_exec(
+            &server,
+            &format!("ALTER DATABASE {database} SET lock_timeout = '2s'"),
+        )
+        .await
+        .unwrap();
+        let (kept_pool, timeouts) = app_connection_as(&opts, &alice).await;
+        assert_eq!(timeouts, ["2s", "1min", "30s"]);
+
+        for pool in [server, alice_pool, admin_pool, bob_pool, kept_pool] {
+            pool.close().await;
+        }
     }
 
     /// What row-level security says when it refuses a new row.
@@ -2338,8 +2894,10 @@ mod tests {
         // Bob, before anyone has claimed anything. The setup is not his to
         // apply, as at every start of a regular user.
         pg_exec(&pool, &format!("SET ROLE {bob}")).await.unwrap();
-        let not_bobs = setup_postgres_rls(&pool).await.unwrap_err();
-        assert!(not_bobs.contains("must be owner of table"), "{not_bobs}");
+        assert_eq!(
+            setup_postgres_rls(&pool).await,
+            Err(RLS_SETUP_NOT_OWNER.to_string())
+        );
         for (table, column) in tables {
             // The placeholders of the shared session can be read, as before;
             // the one of alice's personal session cannot.

@@ -15,6 +15,79 @@ use super::models::{
 use super::update_builder::{BindVal, Dialect, SessionColumn, UpdateBuilder};
 use super::{cmp_hostname, BulkSessionEdit, DatabaseProvider, DbResult};
 
+/// The limits every connection of the app sets for itself, as `name` and
+/// value pairs: how long a statement waits for a lock, how long a statement
+/// may take, and how long a transaction may sit idle.
+///
+/// Row and table locks are held by whoever takes them for as long as their
+/// transaction is open, and `PostgreSQL` lets a statement wait for one
+/// without end. Any role with the app's privileges can take them: a row lock
+/// on every shared row with `SELECT … FOR UPDATE`, a lock on a whole table
+/// with `LOCK TABLE`. So can a transaction left open in another tool, or a
+/// client that stopped in the middle of one. Without a limit, a statement of
+/// this app that needs such a lock never returns: the edit hangs and keeps
+/// its connection, and a start waits in the setup before there is a window.
+///
+/// - `lock_timeout`: a statement that cannot get a lock in this time fails,
+///   and the edit can be tried again.
+/// - `statement_timeout`: the same for a statement that takes this long for
+///   any other reason.
+/// - `idle_in_transaction_session_timeout`: the server ends a session of
+///   this app that has left a transaction open for this long, with the locks
+///   it holds. The app's transactions do not wait for the user, so only a
+///   client that has stopped gets there.
+///
+/// These protect the other users from this client and this client from
+/// waiting. They do not stop another role from holding a lock: a session
+/// sets its own limits, so nothing set here or on the server binds a role
+/// that sends its own statements (`docs/ADMIN_GUIDE.md` §7).
+const SESSION_TIMEOUTS: [(&str, &str); 3] = [
+    ("lock_timeout", "5s"),
+    ("statement_timeout", "60s"),
+    ("idle_in_transaction_session_timeout", "30s"),
+];
+
+/// Sets each of [`SESSION_TIMEOUTS`] that the server has not set. A value
+/// from the server, such as one an admin gave the database or the role with
+/// `ALTER … SET`, is kept, shorter or longer. A timeout that is off reads as
+/// `0`, whether nobody set it or someone set it to `0`, so the server cannot
+/// switch one off for the app: the app then sets its own.
+fn session_timeouts_sql() -> String {
+    let values = SESSION_TIMEOUTS
+        .map(|(name, value)| format!("('{name}', '{value}')"))
+        .join(", ");
+    format!(
+        "SELECT pg_catalog.set_config(name, value, false) \
+         FROM (VALUES {values}) AS timeouts(name, value) \
+         WHERE pg_catalog.current_setting(name) = '0'"
+    )
+}
+
+/// The options of the pool the app's `PostgreSQL` connections come from.
+/// Every connection sets [`SESSION_TIMEOUTS`] before it is used, the ones
+/// that run the migrations and the row-level security setup at startup
+/// included.
+///
+/// The timeouts are set by a statement, not as startup parameters of the
+/// connection, which a connection pooler in front of the server may refuse.
+/// They are settings of the session, so they hold only where the app's
+/// connection is one session on the server: directly, or through a pooler
+/// that pools sessions. A pooler that hands each transaction to another
+/// session does not carry them along.
+pub fn pool_options() -> sqlx::postgres::PgPoolOptions {
+    sqlx::postgres::PgPoolOptions::new()
+        .max_connections(10)
+        .acquire_timeout(std::time::Duration::from_secs(5))
+        .after_connect(|conn, _meta| {
+            Box::pin(async move {
+                sqlx::query(sqlx::AssertSqlSafe(session_timeouts_sql()))
+                    .execute(&mut *conn)
+                    .await?;
+                Ok(())
+            })
+        })
+}
+
 pub struct PostgresProvider {
     pool: PgPool,
 }
@@ -146,9 +219,15 @@ impl DatabaseProvider for PostgresProvider {
         // Lock sibling rows to prevent concurrent sort_order races.
         // FOR UPDATE cannot be combined with aggregates, so we lock first
         // and then compute the max in a separate query.
+        //
+        // Only the user's own siblings: at the top level the siblings
+        // include every other user's shared folders, and waiting for a lock
+        // on one of those would let whoever holds it keep this user from
+        // creating a folder of their own. Two users who get the same
+        // sort_order there are told apart by name.
         sqlx::query(
             "SELECT id FROM folders \
-             WHERE parent_id IS NOT DISTINCT FROM $1 FOR UPDATE",
+             WHERE parent_id IS NOT DISTINCT FROM $1 AND owner = current_user FOR UPDATE",
         )
         .bind(&parent_str)
         .fetch_all(&mut *tx)
@@ -256,10 +335,11 @@ impl DatabaseProvider for PostgresProvider {
             }
         }
 
-        // Lock siblings in the target parent to prevent sort_order races.
+        // Lock the user's own siblings in the target parent to prevent
+        // sort_order races; see `create_folder` for why only those.
         sqlx::query(
             "SELECT id FROM folders \
-             WHERE parent_id IS NOT DISTINCT FROM $1 FOR UPDATE",
+             WHERE parent_id IS NOT DISTINCT FROM $1 AND owner = current_user FOR UPDATE",
         )
         .bind(&parent_str)
         .fetch_all(&mut *tx)
@@ -332,12 +412,15 @@ impl DatabaseProvider for PostgresProvider {
             return Err("You can only create sessions in your own folders".to_string());
         }
 
-        // Lock sibling sessions to prevent concurrent sort_order races.
-        sqlx::query("SELECT id FROM sessions WHERE folder_id = $1 FOR UPDATE")
-            .bind(&folder_str)
-            .fetch_all(&mut *tx)
-            .await
-            .map_err(|e| format!("Failed to lock sibling sessions: {e}"))?;
+        // Lock the user's own sibling sessions to prevent concurrent
+        // sort_order races; see `create_folder` for why only those.
+        sqlx::query(
+            "SELECT id FROM sessions WHERE folder_id = $1 AND owner = current_user FOR UPDATE",
+        )
+        .bind(&folder_str)
+        .fetch_all(&mut *tx)
+        .await
+        .map_err(|e| format!("Failed to lock sibling sessions: {e}"))?;
 
         let sort_order: i32 = sqlx::query_scalar(
             "SELECT COALESCE(MAX(sort_order), -1) + 1 FROM sessions WHERE folder_id = $1",
@@ -523,12 +606,15 @@ impl DatabaseProvider for PostgresProvider {
             return Err("You can only move items into your own folders".to_string());
         }
 
-        // Lock sibling sessions in the target folder to prevent sort_order races.
-        sqlx::query("SELECT id FROM sessions WHERE folder_id = $1 FOR UPDATE")
-            .bind(&folder_str)
-            .fetch_all(&mut *tx)
-            .await
-            .map_err(|e| format!("Failed to lock sibling sessions: {e}"))?;
+        // Lock the user's own sibling sessions in the target folder to
+        // prevent sort_order races; see `create_folder` for why only those.
+        sqlx::query(
+            "SELECT id FROM sessions WHERE folder_id = $1 AND owner = current_user FOR UPDATE",
+        )
+        .bind(&folder_str)
+        .fetch_all(&mut *tx)
+        .await
+        .map_err(|e| format!("Failed to lock sibling sessions: {e}"))?;
 
         let sort_order: i32 = sqlx::query_scalar(
             "SELECT COALESCE(MAX(sort_order), -1) + 1 FROM sessions WHERE folder_id = $1",

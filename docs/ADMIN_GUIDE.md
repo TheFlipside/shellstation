@@ -16,6 +16,7 @@ This guide is intended for system administrators deploying ShellStation with a s
   - [4. Removing a User](#4-removing-a-user)
   - [5. Applying Application Updates](#5-applying-application-updates)
   - [6. Backup and Restore](#6-backup-and-restore)
+  - [7. Locks Held by a User](#7-locks-held-by-a-user)
 
 ---
 
@@ -204,7 +205,7 @@ When a new ShellStation version includes database schema changes:
 
 **Option A — Separated roles (admin applies migrations):**
 
-1. **Stop all regular user instances** (or accept that they will fail to start until the migration is applied).
+1. **Stop all regular user instances** (or accept that they will fail to start until the migration is applied). A migration gives up if it has to wait more than 5 seconds for a lock, such as for a transaction another user has left open, or if one of its statements takes more than 60 seconds; ShellStation then says at startup which of the two it was, and tries again at the next start. See section 7 for finding what holds a lock, and for giving the owning role more time.
 2. **Start one instance using the admin credentials** (`shellstation_admin`). Migrations run automatically on startup.
 3. **If new tables were created**, re-run the default privilege grants (the `ALTER DEFAULT PRIVILEGES` from section 2 only covers tables created after the grant was set up — new tables from migrations executed by the admin role are covered).
 4. **Regular users can now connect** normally.
@@ -213,9 +214,9 @@ When a new ShellStation version includes database schema changes:
 
 1. Users update ShellStation independently. The **first user to launch the new version** automatically applies pending migrations.
 2. Subsequent users start normally — the migration check detects that all migrations are already applied.
-3. No admin coordination is required. In the unlikely event of two users starting simultaneously during a migration, the migration system uses a lock table to serialize execution — only one instance runs the migration, the other waits.
+3. No admin coordination is required. In the unlikely event of two users starting simultaneously during a migration, the migration system uses a lock to serialize execution — only one instance runs the migration, and the other waits for it, for up to 5 seconds. One that waits longer says at startup that it could not get a lock, and starts normally the next time.
 
-**Row-level security changes (both options):** The RLS setup (policies, and the triggers that keep shared items with their owner) runs on every startup. Only the role that owns the tables can apply it, though. That is normally `shellstation_admin`, which created the schema in section 1. For any other role the setup gets no further than the first `ALTER TABLE`, and that failure is logged and skipped.
+**Row-level security changes (both options):** The RLS setup (policies, and the triggers that keep shared items with their owner) runs on every startup. Only the role that owns the tables can apply it, though. That is normally `shellstation_admin`, which created the schema in section 1. For any other role the setup ends at its check that the role owns the tables, and that failure is logged and skipped.
 
 So when a release's notes mention a change to the RLS setup, start one instance with the owning role's credentials once after updating. This applies under Option B too. Until you do, the change is not in effect for anyone. For the release that adds these triggers, that means any user can still take over, move or delete other users' shared items.
 
@@ -274,3 +275,53 @@ pg_restore -h localhost -U postgres -d shellstation_restored shellstation_backup
 ```
 
 RLS policies, constraints, and the migration tracking table are included in the dump. After restoring, the admin should connect once to verify the schema is intact.
+
+---
+
+## 7. Locks Held by a User
+
+Every user of the database can hold a lock that other users' changes need, on purpose or not. A user can lock every shared item, or a whole table, with the same privileges ShellStation itself needs, so those cannot be taken away. A transaction left open in `psql` or another tool does the same without meaning to, and so does a client that has stopped responding in the middle of a change. See [DESIGN.md §4.5.3](DESIGN.md#453-locks) for what ShellStation does about it.
+
+**What users see.** A change that needs a lock someone else holds fails after 5 seconds with `canceling statement due to lock timeout`, and can be tried again. If a whole table is locked, the session tree does not load, for anyone and whoever owns the items, and ShellStation shows an error instead of waiting. Before this release it waited without end in both cases.
+
+**Finding the session that holds the lock.** Run these as a superuser or a member of `pg_monitor`, since others see only their own sessions' details:
+
+```sql
+-- Who is waiting, and for whom
+SELECT blocked.pid AS waiting_pid, blocked.usename AS waiting_user,
+       blocker.pid AS holding_pid, blocker.usename AS holding_user,
+       blocker.state, now() - blocker.xact_start AS open_for,
+       blocker.query AS last_statement
+FROM pg_stat_activity blocked
+JOIN LATERAL unnest(pg_blocking_pids(blocked.pid)) AS b(pid) ON true
+JOIN pg_stat_activity blocker ON blocker.pid = b.pid;
+
+-- ShellStation gives up after 5 seconds, so there is often nobody waiting to
+-- be seen. Transactions that have been open for more than a minute:
+SELECT pid, usename, state, now() - xact_start AS open_for,
+       query AS last_statement
+FROM pg_stat_activity
+WHERE datname = 'shellstation'  -- your database's name
+  AND xact_start < now() - interval '1 minute'
+ORDER BY xact_start;
+```
+
+**Ending it.** This closes that session and rolls back what it had not committed. It takes a superuser or a member of `pg_signal_backend`; `pg_monitor` only sees:
+
+```sql
+SELECT pg_terminate_backend(12345);  -- the pid from above
+```
+
+**Limits set on the server.** ShellStation's own sessions end a transaction they have left open for 30 seconds. Sessions from other tools have no such limit unless the server sets one:
+
+```sql
+-- Applies to sessions that connect from now on
+ALTER DATABASE shellstation SET idle_in_transaction_session_timeout = '30s';
+
+-- More time for the owning role's migrations (a role's setting overrides the database's):
+-- to wait for a lock, and for a statement that takes long
+ALTER ROLE shellstation_admin SET lock_timeout = '30s';
+ALTER ROLE shellstation_admin SET statement_timeout = '10min';
+```
+
+ShellStation keeps a value the server sets for `lock_timeout`, `statement_timeout` or `idle_in_transaction_session_timeout` instead of its own (5 s, 60 s and 30 s), so set none of these to more than you want ShellStation to wait. A value of 0, which switches a limit off, is the exception: ShellStation cannot tell it from no value and sets its own. A limit set here covers what is left open by accident. It does not bind a user who means to hold a lock: every session can change these settings for itself. For that there is only finding the session, ending it, and, if need be, removing the user's access afterwards (`ALTER ROLE jdoe NOLOGIN;`, which does not end a session that is open, and section 4).
