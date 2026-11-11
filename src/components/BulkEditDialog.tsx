@@ -2,7 +2,6 @@ import React, { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { DialogKeys } from "./DialogKeys";
 import type { Session, BulkSessionEdit } from "../stores/sessionStore";
-import { sessionHasTag } from "../stores/sessionStore";
 import { useHighlightStore } from "../stores/highlightStore";
 import { useLoginSequenceStore } from "../stores/loginSequenceStore";
 import { SESSION_ICON_KEYS, SessionIconComponent } from "./SessionIcons";
@@ -10,6 +9,7 @@ import { CustomSelect } from "./CustomSelect";
 
 interface BulkEditDialogProps {
   folderName: string;
+  /** The sessions to offer as a jump host; see `isJumpHostCandidate`. */
   jumpHostCandidates: Session[];
   onSubmit: (edit: BulkSessionEdit) => void;
   onCancel: () => void;
@@ -78,12 +78,10 @@ export function BulkEditDialog({
                 onChange={setJumpHostId}
                 options={[
                   { value: "", label: t("bulkEdit.clearValue") },
-                  ...jumpHostCandidates
-                    .filter((s) => sessionHasTag(s, "jumphost"))
-                    .map((s) => ({
-                      value: s.id,
-                      label: `${s.name} (${s.hostname})`,
-                    })),
+                  ...jumpHostCandidates.map((s) => ({
+                    value: s.id,
+                    label: `${s.name} (${s.hostname})`,
+                  })),
                 ]}
               />
             )}

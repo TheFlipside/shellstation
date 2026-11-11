@@ -817,10 +817,19 @@ pub async fn db_import(
     }
 
     // Second pass: wire up jump_host_id references with remapped IDs.
+    //
+    // In `PostgreSQL` mode a file's jump host can resolve to a session that
+    // is already there and is another user's, a shared one in a shared
+    // folder of the same name, and that is no jump host for a session of
+    // this user's. The session is then left without one and counted, and the
+    // import goes on: stopping here would leave the links after this one
+    // unset for good, since importing the file again finds its sessions
+    // already there and changes none of them.
+    let mut refused_jump_hosts = 0u32;
     for (session, new_session_id, new_jump_id) in
         jump_host_links(&data.sessions, &created_sessions, &session_id_map)
     {
-        state
+        let linked = state
             .0
             .update_session(
                 new_session_id,
@@ -829,8 +838,23 @@ pub async fn db_import(
                     ..Default::default()
                 },
             )
-            .await
-            .map_err(|e| format!("Failed to set jump host for '{}': {e}", session.name))?;
+            .await;
+        match linked {
+            Ok(()) => {}
+            Err(e) if e == crate::db::postgres::NOT_OWN_JUMP_HOST => {
+                tracing::warn!(
+                    session = %new_session_id,
+                    "Import left a session without its jump host, which is another user's session"
+                );
+                refused_jump_hosts += 1;
+            }
+            Err(e) => {
+                return Err(format!(
+                    "Failed to set jump host for '{}': {e}",
+                    session.name
+                ))
+            }
+        }
     }
 
     // Import credential metadata into local store.
@@ -917,7 +941,24 @@ pub async fn db_import(
              {skipped_profiles} duplicate highlight profiles, {skipped_sequences} duplicate login sequences)"
         );
     }
+    summary.push_str(&refused_jump_hosts_note(refused_jump_hosts));
     Ok(summary)
+}
+
+/// What the import's summary says about the sessions it left without the
+/// jump host their file names, because that is another user's session; see
+/// the second pass in [`db_import`]. Nothing if there are none.
+fn refused_jump_hosts_note(refused: u32) -> String {
+    match refused {
+        0 => String::new(),
+        1 => ". 1 session was imported without its jump host, which is another user's \
+              session: pick one of your own for it"
+            .to_string(),
+        n => format!(
+            ". {n} sessions were imported without their jump host, which is another \
+             user's session: pick one of your own for each"
+        ),
+    }
 }
 
 /// The jump host links an import sets: each file session with the database
@@ -1447,5 +1488,12 @@ mod tests {
         // here; `existing` keeps its own jump host, and a reference to no
         // session sets none.
         assert_eq!(links, [(new_web, old_bastion), (new_app, new_added)]);
+    }
+
+    #[test]
+    fn the_summary_says_how_many_jump_hosts_were_left_out() {
+        assert_eq!(refused_jump_hosts_note(0), "");
+        assert!(refused_jump_hosts_note(1).starts_with(". 1 session was imported without"));
+        assert!(refused_jump_hosts_note(3).starts_with(". 3 sessions were imported without"));
     }
 }

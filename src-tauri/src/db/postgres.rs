@@ -109,6 +109,61 @@ fn parse_optional_uuid(s: Option<&str>) -> DbResult<Option<Uuid>> {
     }
 }
 
+/// What a command says when it is given a jump host that is not one of the
+/// user's own sessions; see [`check_own_jump_host`]. The data import goes by
+/// it to leave such a jump host out and go on.
+pub(crate) const NOT_OWN_JUMP_HOST: &str = "A jump host has to be one of your own sessions";
+
+/// Refuses `jump_host` as a session's jump host unless it is a session of
+/// the user's own.
+///
+/// A session's jump host is a session of the same owner: whoever owns a
+/// shared session would otherwise decide through which of another user's
+/// sessions the people who open it connect, and the owner of a jump host
+/// could take it from under another user's session by deleting it. The
+/// database refuses the same (`shellstation_own_jump_host`, set up by
+/// `setup_postgres_rls`). This is the app's own check, as its statements
+/// check a folder: it has a message of its own, and it holds on a database
+/// whose owning role has not started the version with that trigger yet.
+///
+/// `keeps` is the session being changed, if it is one that exists and is the
+/// user's own: a jump host it has already is no change, and is let through
+/// as the trigger lets it through. Such a session names another user's from
+/// before this was refused, and can still be edited; it is not connected
+/// through that jump host (`commands::session::jump_host_is_its_owners`).
+/// A bulk edit keeps none: it sets one jump host for many sessions, and is
+/// refused one that is not the user's own even if a session among them has
+/// it already, where the trigger would let that one row through.
+///
+/// Only creating a session has a transaction for this to be part of. In the
+/// other two the statement that writes comes after it, by itself: a row's
+/// owner does not change in between (`shellstation_keep_owner`), and a jump
+/// host deleted in between fails the write at the foreign key.
+async fn check_own_jump_host<'e, E>(
+    executor: E,
+    jump_host: Uuid,
+    keeps: Option<Uuid>,
+) -> DbResult<()>
+where
+    E: sqlx::PgExecutor<'e>,
+{
+    let allowed: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM sessions WHERE id = $1 AND owner = current_user) \
+             OR EXISTS (SELECT 1 FROM sessions \
+                        WHERE id = $2 AND jump_host_id = $1 AND owner = current_user)",
+    )
+    .bind(jump_host.to_string())
+    .bind(keeps.map(|id| id.to_string()))
+    .fetch_one(executor)
+    .await
+    .map_err(|e| format!("Failed to check jump host ownership: {e}"))?;
+    if allowed {
+        Ok(())
+    } else {
+        Err(NOT_OWN_JUMP_HOST.to_string())
+    }
+}
+
 fn row_to_folder(row: &PgRow) -> DbResult<Folder> {
     Ok(Folder {
         id: parse_uuid(row.get("id"))?,
@@ -412,6 +467,10 @@ impl DatabaseProvider for PostgresProvider {
             return Err("You can only create sessions in your own folders".to_string());
         }
 
+        if let Some(jump_host) = session.jump_host_id {
+            check_own_jump_host(&mut *tx, jump_host, None).await?;
+        }
+
         // Lock the user's own sibling sessions to prevent concurrent
         // sort_order races; see `create_folder` for why only those.
         sqlx::query(
@@ -545,6 +604,10 @@ impl DatabaseProvider for PostgresProvider {
 
         if b.is_empty() {
             return Ok(());
+        }
+
+        if let Some(Some(jump_host)) = update.jump_host_id {
+            check_own_jump_host(&self.pool, jump_host, Some(id)).await?;
         }
 
         // RLS: a non-owner attempting to UPDATE will match zero rows, which
@@ -1124,6 +1187,11 @@ impl DatabaseProvider for PostgresProvider {
             && edit.login_sequence_id.is_none()
         {
             return Ok(0);
+        }
+
+        // Before either pass, so that a refused jump host changes nothing.
+        if let Some(Some(jump_host)) = edit.jump_host_id {
+            check_own_jump_host(&self.pool, jump_host, None).await?;
         }
 
         let subtree_cte = "WITH RECURSIVE subtree(id) AS ( \

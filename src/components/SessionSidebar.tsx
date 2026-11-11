@@ -12,7 +12,7 @@ import {
   type DragEndEvent,
   type Modifier,
 } from "@dnd-kit/core";
-import { useSessionStore } from "../stores/sessionStore";
+import { isJumpHostCandidate, jumpHostForCopy, useSessionStore } from "../stores/sessionStore";
 import type { Folder, Session } from "../stores/sessionStore";
 import { useToastStore } from "../stores/toastStore";
 import { SessionTree, parseDndId, flattenVisibleItems } from "./SessionTree";
@@ -202,30 +202,33 @@ export function SessionSidebar(): React.JSX.Element {
   }, [autoRefreshInterval, checkForUpdates]);
 
   /** Clone the given session by opening the SessionDialog in create mode with prefilled data. */
-  const cloneSession = useCallback((session: Session) => {
-    setSessionDialog({
-      mode: "create",
-      folderId: session.folder_id,
-      initial: {
+  const isPgMode = dbBackend === "postgres";
+  const cloneSession = useCallback(
+    (session: Session) => {
+      setSessionDialog({
+        mode: "create",
         folderId: session.folder_id,
-        name: session.name + "_copy",
-        hostname: session.hostname,
-        port: session.port,
-        protocol: session.protocol,
-        username: session.username,
-        tags: tagsToDisplay(session.tags),
-        icon: session.icon,
-        jumpHostId: session.jump_host_id,
-        highlightProfileId: session.highlight_profile_id,
-        credentialProfileId: session.credential_profile_id,
-        loginSequenceId: session.login_sequence_id,
-        legacyAlgorithms: session.legacy_algorithms,
-      },
-    });
-  }, []);
+        initial: {
+          folderId: session.folder_id,
+          name: session.name + "_copy",
+          hostname: session.hostname,
+          port: session.port,
+          protocol: session.protocol,
+          username: session.username,
+          tags: tagsToDisplay(session.tags),
+          icon: session.icon,
+          jumpHostId: jumpHostForCopy(session, sessions, isPgMode, pgUser),
+          highlightProfileId: session.highlight_profile_id,
+          credentialProfileId: session.credential_profile_id,
+          loginSequenceId: session.login_sequence_id,
+          legacyAlgorithms: session.legacy_algorithms,
+        },
+      });
+    },
+    [sessions, isPgMode, pgUser],
+  );
 
   // Ctrl+D clones the currently selected session.
-  const isPgMode = dbBackend === "postgres";
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent): void => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "d") {
@@ -1292,7 +1295,7 @@ export function SessionSidebar(): React.JSX.Element {
       {bulkEditFolder && (
         <BulkEditDialog
           folderName={bulkEditFolder.name}
-          jumpHostCandidates={sessions.filter((s) => s.protocol === "ssh")}
+          jumpHostCandidates={sessions.filter((s) => isJumpHostCandidate(s, isPgMode, pgUser))}
           onSubmit={(edit) => {
             store
               .folderBulkEditSessions(bulkEditFolder.id, edit)

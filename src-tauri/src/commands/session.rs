@@ -10,7 +10,7 @@ use tracing::debug;
 use crate::db::models::{
     CredentialProfile, DataFingerprint, Folder, NewFolder, NewSession, Session, UpdateSession,
 };
-use crate::db::{CredentialDbState, DbState};
+use crate::db::{CredentialDbState, DatabaseProvider, DbState};
 use crate::session_logger::SessionLogState;
 use crate::ssh::{establish_ssh_connection, SshConnectParams, SshState};
 use crate::telnet::{establish_telnet_connection, TelnetConnectParams, TelnetState};
@@ -766,8 +766,8 @@ pub async fn session_connect(
 
     // Resolve jump host chain.
     let jump_hops = resolve_jump_chain(
-        &db,
-        &cred_db,
+        db.0.as_ref(),
+        cred_db.0.as_ref(),
         &session,
         pg.0.as_ref(),
         user_ident.as_deref(),
@@ -917,11 +917,45 @@ fn not_own_session_hint(row_defaults: bool) -> &'static str {
     }
 }
 
+/// Whether a session may be the jump host of the session whose row names it,
+/// given the owners of the two.
+///
+/// In `PostgreSQL` mode a jump host has to be a session of the same owner,
+/// link by link, so a chain has one owner. The owner of a shared session
+/// chooses its jump host, and the database took any session's ID for it,
+/// another user's included. A user who opened such a session went through a
+/// jump host they had a profile for, which is first of all a session of
+/// their own: their own bastion then opened a connection to the host and
+/// port the other user's session names. And a jump host that its owner
+/// deleted was dropped from the session of someone else that named it, which
+/// then connected directly.
+///
+/// The database refuses to name such a jump host now
+/// (`shellstation_own_jump_host` in `setup_postgres_rls`). This is for what
+/// was named before, for a database whose owning role has not started that
+/// version yet, and for one where a trigger does not hold a user (Option B).
+/// It goes by the owners of the two rows, not by who connects, and so holds
+/// as far as a row's owner does: a user who can write another owner into a
+/// row of their own, which the policies and `shellstation_keep_owner` keep a
+/// regular user from, gets past it. Rows that still have the placeholder
+/// `'local'` for an owner count as one owner's among themselves, and as
+/// another owner's to everyone else's.
+///
+/// In `SQLite` mode every session is the user's own, whatever its owner says.
+fn jump_host_is_its_owners(pg_mode: bool, named_by_owner: &str, jump_host_owner: &str) -> bool {
+    !pg_mode || named_by_owner == jump_host_owner
+}
+
 /// Walk the `jump_host_id` chain in the database to build a list of `JumpHop`
-/// entries for the SSH connect call. Each hop pulls its own profile.
+/// entries for the SSH connect call. Each hop pulls its own profile. In
+/// `PostgreSQL` mode the walk fails at a hop that is not a session of the
+/// same owner as the session that names it, before that hop's profile is
+/// looked up, and no hop is returned; see [`jump_host_is_its_owners`]. The
+/// caller has resolved the target's own profile by then, and has connected
+/// to nothing.
 async fn resolve_jump_chain(
-    db: &State<'_, DbState>,
-    cred_db: &State<'_, CredentialDbState>,
+    db: &dyn DatabaseProvider,
+    cred_db: &dyn DatabaseProvider,
     session: &Session,
     pg_pool: Option<&sqlx::PgPool>,
     user_ident: Option<&str>,
@@ -930,6 +964,9 @@ async fn resolve_jump_chain(
     let mut hops = Vec::new();
     let mut visited = HashSet::new();
     let mut current_jump_id = session.jump_host_id;
+    // The session whose row names the hop being looked at: the target first,
+    // then each hop for the one before it.
+    let mut named_by = (session.name.clone(), session.owner.clone());
 
     while let Some(jump_id) = current_jump_id {
         if !visited.insert(jump_id) {
@@ -941,11 +978,22 @@ async fn resolve_jump_chain(
             return Err("Jump host chain too deep".to_string());
         }
 
-        let jump_session = db.0.get_session(jump_id).await?.ok_or_else(|| {
+        let jump_session = db.get_session(jump_id).await?.ok_or_else(|| {
             "Jump host session not found. It may be a personal session belonging \
              to another user — ask the owner to share it."
                 .to_string()
         })?;
+
+        if !jump_host_is_its_owners(pg_pool.is_some(), &named_by.1, &jump_session.owner) {
+            debug!(hop = hops.len(), jump_id = %jump_id, "Jump hop is not a session of the owner of the session that names it");
+            return Err(format!(
+                "\"{}\" names \"{}\" as its jump host, which is not a session \
+                 of the same owner. A jump host has to be one, so this \
+                 connection is not opened. The owner of \"{}\" can pick one of \
+                 their own sessions as its jump host.",
+                named_by.0, jump_session.name, named_by.0
+            ));
+        }
 
         debug!(
             hop = hops.len(),
@@ -982,7 +1030,6 @@ async fn resolve_jump_chain(
             )
         })?;
         let jump_profile = cred_db
-            .0
             .get_credential_profile(profile_id)
             .await?
             .ok_or_else(|| {
@@ -1003,6 +1050,7 @@ async fn resolve_jump_chain(
         });
 
         current_jump_id = jump_session.jump_host_id;
+        named_by = (jump_session.name, jump_session.owner);
     }
 
     // The chain is built from target→bastion order, but SSH needs bastion→target.
@@ -1014,6 +1062,9 @@ async fn resolve_jump_chain(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::db::models::NewCredentialProfile;
+    use crate::db::sqlite::SqliteProvider;
+    use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 
     fn session_of(owner: &str) -> Session {
         Session {
@@ -1067,5 +1118,145 @@ mod tests {
         ));
         assert_eq!(not_own_session_hint(true), "");
         assert!(not_own_session_hint(false).contains("another user's shared session"));
+    }
+
+    #[test]
+    fn a_jump_host_is_a_session_of_the_same_owner() {
+        // `SQLite`: every session is the user's own, whatever its owner says.
+        assert!(jump_host_is_its_owners(false, "local", "local"));
+        assert!(jump_host_is_its_owners(false, "alice", "bob"));
+        // `PostgreSQL`: the jump host of a session is its owner's, whoever
+        // connects. Another user's is none, and role names are not folded.
+        assert!(jump_host_is_its_owners(true, "alice", "alice"));
+        assert!(!jump_host_is_its_owners(true, "alice", "bob"));
+        assert!(!jump_host_is_its_owners(true, "bob", "alice"));
+        assert!(!jump_host_is_its_owners(true, "alice", "Alice"));
+        // A database from before rows had an owner, where every row still
+        // has the placeholder: there is one owner, and no one to keep apart.
+        assert!(jump_host_is_its_owners(true, "local", "local"));
+        assert!(!jump_host_is_its_owners(true, "local", "alice"));
+    }
+
+    /// The error of a chain that does not resolve.
+    async fn chain_error(
+        db: &SqliteProvider,
+        target: Uuid,
+        pg_pool: Option<&sqlx::PgPool>,
+    ) -> String {
+        let target = db.get_session(target).await.unwrap().unwrap();
+        resolve_jump_chain(db, db, &target, pg_pool, None, Some("alice"))
+            .await
+            .err()
+            .expect("the chain resolved")
+    }
+
+    #[tokio::test]
+    async fn a_chain_fails_at_the_first_jump_host_of_another_owner() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(SqliteConnectOptions::new().filename(":memory:"))
+            .await
+            .unwrap();
+        sqlx::migrate!().run(&pool).await.unwrap();
+        let db = SqliteProvider::new(pool.clone());
+        // What says that this is `PostgreSQL` mode. No server is contacted:
+        // the pool connects at its first statement, and without a user
+        // identity no mapping is looked up.
+        let pg = sqlx::postgres::PgPoolOptions::new()
+            .connect_lazy("postgres://localhost/none")
+            .unwrap();
+
+        let folder = db
+            .create_folder(NewFolder {
+                name: "folder".to_string(),
+                parent_id: None,
+            })
+            .await
+            .unwrap()
+            .id;
+        let profile = db
+            .create_credential_profile(NewCredentialProfile {
+                name: "key".to_string(),
+                auth_type: "key".to_string(),
+                username: "admin".to_string(),
+                key_path: "id_ed25519".to_string(),
+            })
+            .await
+            .unwrap()
+            .id;
+        // A session of `owner`, which a `PostgreSQL` row has and the `SQLite`
+        // provider writes as the placeholder.
+        let session = |name: &'static str,
+                       owner: &'static str,
+                       jump_host_id: Option<Uuid>,
+                       credential_profile_id: Option<Uuid>| {
+            let (db, pool) = (&db, &pool);
+            async move {
+                let id = db
+                    .create_session(NewSession {
+                        folder_id: folder,
+                        name: name.to_string(),
+                        hostname: format!("{name}.example"),
+                        port: 22,
+                        protocol: "ssh".to_string(),
+                        username: String::new(),
+                        auth_method: "password".to_string(),
+                        jump_host_id,
+                        tags: "[]".to_string(),
+                        icon: "desktop".to_string(),
+                        highlight_profile_id: None,
+                        credential_profile_id,
+                        login_sequence_id: None,
+                        legacy_algorithms: false,
+                    })
+                    .await
+                    .unwrap()
+                    .id;
+                sqlx::query("UPDATE sessions SET owner = ? WHERE id = ?")
+                    .bind(owner)
+                    .bind(id.to_string())
+                    .execute(pool)
+                    .await
+                    .unwrap();
+                id
+            }
+        };
+
+        // target (alice) -> near (alice) -> far (bob), and `far` has no
+        // profile.
+        let far = session("far", "bob", None, None).await;
+        let near = session("near", "alice", Some(far), Some(profile)).await;
+        let target = session("target", "alice", Some(near), None).await;
+
+        // The link that is refused is the one from `near` to `far`, whether
+        // it is the first of the chain or a later one, and the error names
+        // its two sessions. It comes before `far`'s profile is looked up, or
+        // the missing profile would be the error.
+        for from in [near, target] {
+            let error = chain_error(&db, from, Some(&pg)).await;
+            assert!(
+                error.starts_with("\"near\" names \"far\" as its jump host"),
+                "{error}"
+            );
+            assert!(error.contains("not a session of the same owner"), "{error}");
+        }
+
+        // `SQLite` mode has no such rule: the walk goes on to `far`.
+        let error = chain_error(&db, target, None).await;
+        assert!(
+            error.starts_with("No credential profile assigned to jump host \"far\""),
+            "{error}"
+        );
+
+        // A chain of one owner resolves, bastion first.
+        let far = session("far2", "alice", None, Some(profile)).await;
+        let near = session("near2", "alice", Some(far), Some(profile)).await;
+        let target = session("target2", "alice", Some(near), None).await;
+        let target = db.get_session(target).await.unwrap().unwrap();
+        let hops = resolve_jump_chain(&db, &db, &target, Some(&pg), None, Some("alice"))
+            .await
+            .expect("a chain of one owner did not resolve");
+        let hosts: Vec<&str> = hops.iter().map(|hop| hop.host.as_str()).collect();
+        assert_eq!(hosts, ["far2.example", "near2.example"]);
     }
 }

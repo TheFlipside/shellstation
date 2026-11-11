@@ -181,7 +181,7 @@ For older PostgreSQL versions, set a short expiry and coordinate with the user t
 
 ## 4. Removing a User
 
-Run these as a superuser (e.g., `postgres`). Row-level security applies to `shellstation_admin` as well, so as the admin the `UPDATE`s would reach none of the user's items. Once the triggers from section 5 are installed, only a superuser or the role that owns the tables (or a member of it) can change `owner`, apart from a user claiming a placeholder `'local'` row. If you leave a user's items orphaned instead, never create a role with that name again, because it would own them. Reassign a user's folders as whole trees. A user whose folder ends up below a folder of someone else's keeps what is in it and can rename it and move it out, but can put nothing new into it until then.
+Run these as a superuser (e.g., `postgres`). Row-level security applies to `shellstation_admin` as well, so as the admin the `UPDATE`s would reach none of the user's items. Once the triggers from section 5 are installed, only a superuser or the role that owns the tables (or a member of it) can change `owner`, apart from a user claiming a placeholder `'local'` row. If you leave a user's items orphaned instead, never create a role with that name again, because it would own them. Reassign a user's folders as whole trees. A user whose folder ends up below a folder of someone else's keeps what is in it and can rename it and move it out, but can put nothing new into it until then. Reassign a user's sessions together as well, as the statements below do: a session and its jump host have to have the same owner to connect (section 5). If you delete a user's sessions instead, look first for sessions of other users that still name one of them as their jump host, with the query at the end of the jump host part of section 5: such a session is left without a jump host and connects directly from then on.
 
 ```sql
 \c shellstation
@@ -224,21 +224,22 @@ When a new ShellStation version includes database schema changes:
 
 **Row-level security changes (both options):** The RLS setup (policies, and the triggers that keep shared items with their owner) runs on every startup. Only the role that owns the tables can apply it, though. That is normally `shellstation_admin`, which created the schema in section 1. For any other role the setup ends at its check that the role owns the tables, and that failure is logged and skipped.
 
-So when a release's notes mention a change to the RLS setup, start one instance with the owning role's credentials once after updating. This applies under Option B too. Until you do, the change is not in effect for anyone. For the release that adds these triggers, that means any user can still take over, move or delete other users' shared items. For the release that leaves shared items to their owner (below), it means any user can still rewrite them.
+So when a release's notes mention a change to the RLS setup, start one instance with the owning role's credentials once after updating. This applies under Option B too. Until you do, the change is not in effect for anyone. For the release that adds these triggers, that means any user can still take over, move or delete other users' shared items. For the release that leaves shared items to their owner (below), it means any user can still rewrite them. For the release that keeps a jump host with its session's owner (below), it means a statement of a user's own can still name another user's session as a jump host; ShellStation itself already refuses to set one, and to connect through one.
 
 Under Option B, too, the triggers are installed by the owning role, as under Option A. They do not stop a user who holds `TRIGGER` or `TRUNCATE` on the tables, though, and Option B grants both ([DESIGN.md §4.5.1](DESIGN.md#451-how-rls-works)).
 
 To check that the triggers are installed and enabled and call the functions of the setup, run the query below. It does not show whether the functions are current; starting the owning role once after an update takes care of that.
 
 ```sql
--- All six should be listed, with tgenabled = 'O', a function in the schema
+-- All seven should be listed, with tgenabled = 'O', a function in the schema
 -- shellstation_rls, and the owning role as that function's owner
 SELECT t.tgrelid::regclass, t.tgname, t.tgenabled,
        t.tgfoid::regprocedure AS function, f.proowner::regrole AS function_owner
 FROM pg_trigger t JOIN pg_proc f ON f.oid = t.tgfoid
 WHERE t.tgname IN ('folders_keep_owner', 'sessions_keep_owner',
                    'folders_keep_place', 'sessions_keep_place',
-                   'folders_own_folder', 'sessions_own_folder');
+                   'folders_own_folder', 'sessions_own_folder',
+                   'sessions_own_jump_host');
 ```
 
 If any is missing or differs, start an instance with the owning role's credentials.
@@ -266,7 +267,7 @@ REVOKE CREATE ON SCHEMA public FROM PUBLIC;
 
 In a query you run yourself as a superuser, compare an `oid` column with a name only after casting the name on to `oid`, as the queries in this guide do (`'public'::regnamespace::oid`).
 
-**Shared items (the release that leaves them to their owner):** Until this release any user could change another user's shared folder or session with a statement of their own, such as the host a shared session connects to, and could put a session of their own into another user's folder. From this release on only its owner changes a shared item, and an item goes only into a folder of its owner's ([DESIGN.md §4.5.1](DESIGN.md#451-how-rls-works)). ShellStation itself never did either. What users can notice is at connecting: a credential profile or login sequence that a session's own row names (Bulk Edit writes a login sequence there) now counts for that session's owner only, and a jump host that is another user's session needs the user's own credential mapping. The start of the owning role applies the rest. To check:
+**Shared items (the release that leaves them to their owner):** Until this release any user could change another user's shared folder or session with a statement of their own, such as the host a shared session connects to, and could put a session of their own into another user's folder. From this release on only its owner changes a shared item, and an item goes only into a folder of its owner's ([DESIGN.md §4.5.1](DESIGN.md#451-how-rls-works)). ShellStation itself never did either. What users can notice is at connecting: a credential profile or login sequence that a session's own row names (Bulk Edit writes a login sequence there) now counts for that session's owner only, and a jump host that is another user's session needs the user's own credential mapping (see below for whose session a jump host can be). The start of the owning role applies the rest. To check:
 
 ```sql
 -- No rows: the two policies that let anyone update a shared item are gone
@@ -282,6 +283,17 @@ FROM sessions s JOIN folders f ON f.id = s.folder_id WHERE s.owner <> f.owner;
 SELECT c.id, c.name, c.owner, p.name AS folder, p.owner AS folder_owner
 FROM folders c JOIN folders p ON p.id = c.parent_id WHERE c.owner <> p.owner;
 ```
+
+**Jump hosts (the release that keeps them with their session's owner):** Until this release a session could name any session as its jump host, another user's included, and for a statement of a user's own the ID was enough, shared or not. The owner of a shared session thereby chose which of another user's sessions that user went through when opening it, and the owner of a jump host could take it from under another user's session by deleting it. From this release on a session's jump host is one of its owner's own sessions ([DESIGN.md §4.5.1](DESIGN.md#451-how-rls-works)). ShellStation offers no other for a new choice and accepts no other for a session that does not have it already, and it opens no connection through one, whatever the database holds. The start of the owning role adds the trigger that makes the database refuse it as well, `sessions_own_jump_host` in the triggers query above.
+
+Sessions that name another user's session from before stay as they are. They no longer connect, and the message says which session names which. Their owner picks a jump host of their own instead; for a bastion that several users go through, each keeps a session of their own. Until then the jump host's owner can still delete it, and the session that named it then connects directly, to a host that was meant to be reached through a bastion, and nobody is told. Removing the jump host from these sessions for the users would do the same, so do not. What closes it is the session's owner picking a jump host of their own, so tell the owners the query lists, and ask the owners of the jump hosts to leave those in place until then. To list them, run this as a superuser: row-level security applies to `shellstation_admin` as well, which would see only its own and the shared sessions and get a list that is not complete, without an error. The query changes nothing.
+
+```sql
+SELECT s.id, s.name, s.owner, j.name AS jump_host, j.owner AS jump_host_owner
+FROM sessions s JOIN sessions j ON j.id = s.jump_host_id WHERE s.owner <> j.owner;
+```
+
+A session whose owner is still the placeholder `'local'` is listed against a jump host that has an owner, and the other way round; ShellStation refuses those connections too.
 
 **Per-user mappings (the release that gives them an owner):** Each user's mappings of sessions to their own credential profiles and login sequences (`session_credentials`, `session_login_sequences`) are protected by row-level security from this release on ([DESIGN.md §4.5.1](DESIGN.md#451-how-rls-works)). The release has a migration, so the owning role starts first, as above, and that start also applies the protection. To check it:
 
@@ -330,7 +342,7 @@ RLS policies, constraints, and the migration tracking table are included in the 
 
 ## 7. Locks Held by a User
 
-Every user of the database can hold a lock that other users' changes need, on purpose or not. A user can lock a whole table with the same privileges ShellStation itself needs, so those cannot be taken away. Single items a user can lock only where they are the user's own, with one exception: a row of a user's own that refers to another user's session keeps that session from being deleted, though not from being changed, while the transaction that wrote it is open. Such a row is a session that names the other as its jump host, for which its ID is enough, shared or not, a mapping for it, or a row in the central `credentials` table, which the app does not use and which has no row-level security. A transaction left open in `psql` or another tool does the same without meaning to, and so does a client that has stopped responding in the middle of a change. See [DESIGN.md §4.5.3](DESIGN.md#453-locks) for what ShellStation does about it.
+Every user of the database can hold a lock that other users' changes need, on purpose or not. A user can lock a whole table with the same privileges ShellStation itself needs, so those cannot be taken away. Single items a user can lock only where they are the user's own, with one exception: a row of a user's own that refers to another user's session keeps that session from being deleted, though not from being changed, while the transaction that wrote it is open. Such a row is a mapping for it, or a row in the central `credentials` table, which the app does not use and which has no row-level security. Naming it as a jump host does this only for a session that named it before the database refused that (section 5), and where the trigger that refuses it is not installed yet or does not hold the user (Option B). A transaction left open in `psql` or another tool does the same without meaning to, and so does a client that has stopped responding in the middle of a change. See [DESIGN.md §4.5.3](DESIGN.md#453-locks) for what ShellStation does about it.
 
 **What users see.** A change that needs a lock someone else holds fails after 5 seconds with `canceling statement due to lock timeout`, and can be tried again. If a whole table is locked, the session tree does not load, for anyone and whoever owns the items, and ShellStation shows an error instead of waiting. Before this release it waited without end in both cases.
 

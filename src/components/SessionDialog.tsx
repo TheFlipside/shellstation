@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
 import { DialogKeys } from "./DialogKeys";
 import type { Folder, Session } from "../stores/sessionStore";
-import { sessionHasTag } from "../stores/sessionStore";
+import { jumpHostChoices } from "../stores/sessionStore";
 import { useAppStore } from "../stores/appStore";
 import { useHighlightStore } from "../stores/highlightStore";
 import { useCredentialProfilesStore } from "../stores/credentialProfilesStore";
@@ -54,6 +54,7 @@ export function SessionDialog({
 }: SessionDialogProps): React.JSX.Element {
   const { t } = useTranslation();
   const isPg = useAppStore((s) => s.dbBackend) === "postgres";
+  const pgUser = useAppStore((s) => s.pgUser);
   const [folderId, setFolderId] = useState(() => {
     const preferred = initial?.folderId ?? defaultFolderId;
     if (folders.some((f) => f.id === preferred)) return preferred;
@@ -298,18 +299,10 @@ export function SessionDialog({
                   onChange={setJumpHostId}
                   options={[
                     { value: "", label: t("session.jumpHostNone") },
-                    ...sessions
-                      .filter((s) => {
-                        if (s.protocol !== "ssh") return false;
-                        if (s.id === sessionId) return false;
-                        // Keep the currently assigned jump host visible even if its tag was removed.
-                        if (s.id === jumpHostId) return true;
-                        return sessionHasTag(s, "jumphost");
-                      })
-                      .map((s) => ({
-                        value: s.id,
-                        label: `${s.name} (${s.hostname})`,
-                      })),
+                    ...jumpHostChoices(sessions, sessionId, jumpHostId, isPg, pgUser).map((s) => ({
+                      value: s.id,
+                      label: `${s.name} (${s.hostname})`,
+                    })),
                   ]}
                 />
               </div>

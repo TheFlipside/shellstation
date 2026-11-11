@@ -46,6 +46,70 @@ export function sessionHasTag(session: Session, tag: string): boolean {
   }
 }
 
+/**
+ * Whether a session is offered as a jump host: an SSH session tagged
+ * `jumphost`.
+ *
+ * In PostgreSQL mode it must also be one of the user's own sessions. A
+ * session's jump host has to be a session of the same owner, the dialogs
+ * that set one are for the user's own sessions, and the backend and the
+ * database refuse any other. `pgUser` is the role the app connected as, or
+ * `null` when the app does not run against PostgreSQL; as long as that role
+ * is not known, no session is taken for the user's own.
+ */
+export function isJumpHostCandidate(
+  session: Session,
+  pgMode: boolean,
+  pgUser: string | null,
+): boolean {
+  if (session.protocol !== "ssh") return false;
+  if (pgMode && session.owner !== pgUser) return false;
+  return sessionHasTag(session, "jumphost");
+}
+
+/**
+ * The sessions the session dialog lists as jump hosts: the candidates, without
+ * the session being edited (`editedId`), which is no jump host for itself.
+ *
+ * The jump host that is set (`assignedId`, empty for none) stays in the list
+ * even if it is no candidate: one that lost its tag, or, in PostgreSQL mode,
+ * another user's session named before that was refused. The user sees what is
+ * set and can change it. Saving the session with it unchanged is not refused;
+ * picking it for another session is.
+ */
+export function jumpHostChoices(
+  sessions: Session[],
+  editedId: string | undefined,
+  assignedId: string,
+  pgMode: boolean,
+  pgUser: string | null,
+): Session[] {
+  return sessions.filter((s) => {
+    if (s.id === editedId) return false;
+    if (s.id === assignedId) return s.protocol === "ssh";
+    return isJumpHostCandidate(s, pgMode, pgUser);
+  });
+}
+
+/**
+ * The jump host a copy of `session` starts with: the session's own, or none.
+ *
+ * In PostgreSQL mode a session can still name another user's session from
+ * before that was refused. The copy is a new session, for which it is
+ * refused, so the copy starts without it. So does the copy of a session whose
+ * jump host is not among `sessions`.
+ */
+export function jumpHostForCopy(
+  session: Session,
+  sessions: Session[],
+  pgMode: boolean,
+  pgUser: string | null,
+): string | null {
+  if (!pgMode || session.jump_host_id === null) return session.jump_host_id;
+  const jumpHost = sessions.find((s) => s.id === session.jump_host_id);
+  return jumpHost?.owner === pgUser ? session.jump_host_id : null;
+}
+
 interface SessionState {
   folders: Folder[];
   sessions: Session[];

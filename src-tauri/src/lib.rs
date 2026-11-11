@@ -391,7 +391,8 @@ const RLS_SCHEMA: &str = "shellstation_rls";
 
 /// When the triggers of [`setup_postgres_rls`] fire, as `pg_trigger.tgtype`
 /// has it: a row trigger (1) that fires before (2) an update (16), and for
-/// the one that looks at where a row is put, an insert (4) as well.
+/// the ones that look at what a row is put into or names as its jump host,
+/// an insert (4) as well.
 const ON_CHANGE: i16 = 1 | 2 | 16;
 const ON_PLACING: i16 = ON_CHANGE | 4;
 
@@ -490,11 +491,12 @@ async fn setup_postgres_rls(pool: &sqlx::PgPool) -> Result<(), String> {
     // would meet the same, so the setup ends there (`RlsStepEnds`).
     let mut failed: Vec<String> = Vec::new();
 
-    // Triggers keep a row with its owner and in a folder of its owner's.
+    // Triggers keep a row with its owner, in a folder of its owner's, and
+    // behind a jump host of its owner's.
     //
     // A shared row can be changed by its owner alone: the policies give no
     // one else an UPDATE on it (see `OBSOLETE_POLICIES` for when they did).
-    // What the policies cannot say is left to three functions:
+    // What the policies cannot say is left to four functions:
     //
     // - `shellstation_keep_owner`: an owner cannot hand a row to another
     //   role. Owner changes are left to superusers (who reassign a removed
@@ -520,6 +522,24 @@ async fn setup_postgres_rls(pool: &sqlx::PgPool) -> Result<(), String> {
     //   the queries that go down a folder's tree would not come to an end
     //   in such a ring. That is for folders only; a session has an id too,
     //   but is no folder to be found above one.
+    // - `shellstation_own_jump_host`: a session names only a session of the
+    //   role's own as its jump host, when it is created and when its jump
+    //   host is changed. The policies check a row's `owner` and nothing it
+    //   refers to, and the foreign key is checked without RLS, so the owner
+    //   of a shared session could otherwise name any session by its id,
+    //   another user's personal one included. Whoever then opened the shared
+    //   session and had a profile for that jump host, as its owner has, went
+    //   through it: a connection from their own bastion to a host and port
+    //   of the other user's choosing. The other way round, the owner of the
+    //   jump host could delete it, and the session that named it, which the
+    //   foreign key then leaves without one, connected directly. And the
+    //   foreign key's answer alone told whether a session with some id
+    //   exists; this function answers first, and the same for a session
+    //   that is not there as for one that is not the role's. With it, a
+    //   chain of jump hosts has one owner, who alone changes any part of
+    //   it. `session_connect` holds a chain to the same rule
+    //   (`commands::session::jump_host_is_its_owners`), for what was named
+    //   before this function refused it.
     //
     // The first two were all that kept a shared row from being taken over
     // or moved away while anyone could update it. They stay for a database
@@ -608,6 +628,38 @@ async fn setup_postgres_rls(pool: &sqlx::PgPool) -> Result<(), String> {
                      IF own IS NOT TRUE THEN \
                          RAISE EXCEPTION \
                              'a % row can only be put into one''s own folders, and not below another user''s', \
+                             TG_TABLE_NAME USING ERRCODE = 'insufficient_privilege'; \
+                     END IF; \
+                     RETURN NEW; \
+                 END"
+            ),
+        ),
+        // An update that leaves the jump host as it was is let through,
+        // whatever else it changes: a session that named another user's
+        // before this was refused can still be edited, and connects with
+        // none of it (`commands::session::jump_host_is_its_owners`). The
+        // look at `sessions` runs as the role and so under its policies,
+        // where its own rows are all it is asked for.
+        (
+            "shellstation_own_jump_host",
+            format!(
+                "DECLARE own boolean; \
+                 BEGIN \
+                     IF TG_OP = 'UPDATE' THEN \
+                         IF NEW.jump_host_id IS NOT DISTINCT FROM OLD.jump_host_id THEN \
+                             RETURN NEW; \
+                         END IF; \
+                     END IF; \
+                     IF NEW.jump_host_id IS NULL OR {table_owner} THEN \
+                         RETURN NEW; \
+                     END IF; \
+                     EXECUTE pg_catalog.format( \
+                         'SELECT EXISTS (SELECT 1 FROM %I.sessions s \
+                                         WHERE s.id = $1 AND s.owner = current_user)', \
+                         TG_TABLE_SCHEMA) USING NEW.jump_host_id INTO own; \
+                     IF own IS NOT TRUE THEN \
+                         RAISE EXCEPTION \
+                             'a % row can only name one of one''s own sessions as its jump host', \
                              TG_TABLE_NAME USING ERRCODE = 'insufficient_privilege'; \
                      END IF; \
                      RETURN NEW; \
@@ -711,8 +763,11 @@ async fn setup_postgres_rls(pool: &sqlx::PgPool) -> Result<(), String> {
     // Each trigger with its table, its function, when it fires, that last
     // as `pg_trigger.tgtype` has it (`ON_CHANGE`, `ON_PLACING`), and its
     // column. The first two functions are for updates that change their
-    // column; the third is for new rows as well, and looks at the column
-    // itself, which it is told as its argument.
+    // column. The other two are for new rows as well and look at the column
+    // themselves: `shellstation_own_folder` is told which as its argument,
+    // and `shellstation_own_jump_host`, which has one column to look at, is
+    // called only for a row that names a jump host. A foreign key that
+    // clears the column of a deleted jump host therefore does not call it.
     let on_change = |column: &str, table: &str, function: &str| {
         format!(
             "BEFORE UPDATE OF {column} ON {table} FOR EACH ROW \
@@ -774,6 +829,18 @@ async fn setup_postgres_rls(pool: &sqlx::PgPool) -> Result<(), String> {
             on_placing("folder_id", "sessions"),
             ON_PLACING,
             "folder_id",
+        ),
+        (
+            "sessions_own_jump_host",
+            "sessions",
+            "shellstation_own_jump_host",
+            format!(
+                "BEFORE INSERT OR UPDATE OF jump_host_id ON sessions FOR EACH ROW \
+                 WHEN (NEW.jump_host_id IS NOT NULL) \
+                 EXECUTE FUNCTION {RLS_SCHEMA}.shellstation_own_jump_host()"
+            ),
+            ON_PLACING,
+            "jump_host_id",
         ),
     ];
 
@@ -969,19 +1036,29 @@ async fn setup_postgres_rls(pool: &sqlx::PgPool) -> Result<(), String> {
             .iter()
             .filter(|trigger| trigger.1 == table && replaced.contains(&trigger.2))
         {
+            // Whether a trigger has an argument and a condition is read off
+            // the definition it is created with, so the two cannot differ:
+            // `shellstation_own_folder` has its column as its argument and
+            // no condition, the other functions a condition and no argument.
+            //
             // The argument is kept as its bytes with a zero byte after it,
             // which `encode` writes as a backslash and three zeros. The text
             // to compare it with is an `E''` string, in which a backslash is
             // written twice whatever `standard_conforming_strings` says.
-            let argument_and_condition = if *tgtype == ON_PLACING {
+            let argument = if definition.ends_with("()") {
+                "t.tgnargs = 0".to_string()
+            } else {
                 format!(
                     "t.tgnargs = 1 \
-                     AND pg_catalog.encode(t.tgargs, 'escape') = E'{column}\\\\000' \
-                     AND t.tgqual IS NULL"
+                     AND pg_catalog.encode(t.tgargs, 'escape') = E'{column}\\\\000'"
                 )
-            } else {
-                "t.tgnargs = 0 AND t.tgqual IS NOT NULL".to_string()
             };
+            let condition = if definition.contains(" WHEN (") {
+                "t.tgqual IS NOT NULL"
+            } else {
+                "t.tgqual IS NULL"
+            };
+            let argument_and_condition = format!("{argument} AND {condition}");
             let look = format!(
                 "SELECT t.oid, t.tgfoid, \
                         t.tgfoid = '{RLS_SCHEMA}.{function}()'::pg_catalog.regprocedure::pg_catalog.oid \
@@ -2515,6 +2592,16 @@ mod tests {
         with_rls_test_database(check_trigger_functions_are_the_owning_roles).await;
     }
 
+    /// A session's jump host is a session of its owner's, against a real
+    /// server: the trigger for it, the app's own statements, and what the
+    /// foreign key does when a jump host is deleted. Same server as for
+    /// `shared_rows_keep_their_owner`; run with `--ignored jump_hosts`.
+    #[tokio::test]
+    #[ignore = "needs a throwaway PostgreSQL server in SHELLSTATION_TEST_PG_URL"]
+    async fn jump_hosts_stay_with_their_owner() {
+        with_rls_test_database(check_jump_hosts_stay_with_their_owner).await;
+    }
+
     /// Run `checks` with a database of its own on the throwaway server and
     /// the names of three roles made for it: an admin and two users. All
     /// four are dropped again afterwards.
@@ -3302,8 +3389,8 @@ mod tests {
             async move { pg_exec(&pool, &sql).await.unwrap() }
         };
 
-        // The schema and the three functions in it are the owning role's,
-        // and the six triggers call them and are enabled.
+        // The schema and the four functions in it are the owning role's,
+        // and the seven triggers call them and are enabled.
         let schema_owner = format!(
             "SELECT count(*) FROM pg_namespace n JOIN pg_roles r ON r.oid = n.nspowner \
              WHERE n.nspname = '{RLS_SCHEMA}' AND r.rolname = '{admin}'"
@@ -3322,8 +3409,8 @@ mod tests {
                          WHERE pronamespace = 'public'::regnamespace \
                            AND proname LIKE 'shellstation\\_%'";
         assert_eq!(pg_count(&pool, &schema_owner).await, 1);
-        assert_eq!(pg_count(&pool, &functions_owner).await, 3);
-        assert_eq!(pg_count(&pool, &triggers).await, 6);
+        assert_eq!(pg_count(&pool, &functions_owner).await, 4);
+        assert_eq!(pg_count(&pool, &triggers).await, 7);
         assert_eq!(pg_count(&pool, in_public).await, 0);
 
         // A start that finds the triggers as they should be leaves them: a
@@ -3360,9 +3447,9 @@ mod tests {
             ))
             .await;
         }
-        assert_eq!(pg_count(&pool, &triggers).await, 4);
+        assert_eq!(pg_count(&pool, &triggers).await, 5);
         setup_postgres_rls(&pool).await.unwrap();
-        assert_eq!(pg_count(&pool, &triggers).await, 6);
+        assert_eq!(pg_count(&pool, &triggers).await, 7);
         assert_eq!(pg_count(&pool, in_public).await, 0);
 
         // While something else still calls the old function, it stays.
@@ -3380,7 +3467,7 @@ mod tests {
             .await;
         }
         setup_postgres_rls(&pool).await.unwrap();
-        assert_eq!(pg_count(&pool, &triggers).await, 6);
+        assert_eq!(pg_count(&pool, &triggers).await, 7);
         assert_eq!(pg_count(&pool, in_public).await, 1);
         run("DROP TRIGGER another ON sessions".to_string()).await;
         run("DROP FUNCTION public.shellstation_keep_place()".to_string()).await;
@@ -3429,9 +3516,42 @@ mod tests {
 
         // A trigger that is switched off is put back as well.
         run("ALTER TABLE folders DISABLE TRIGGER folders_keep_place".to_string()).await;
-        assert_eq!(pg_count(&pool, &triggers).await, 5);
-        setup_postgres_rls(&pool).await.unwrap();
         assert_eq!(pg_count(&pool, &triggers).await, 6);
+        setup_postgres_rls(&pool).await.unwrap();
+        assert_eq!(pg_count(&pool, &triggers).await, 7);
+
+        // The jump host's trigger is held to a shape of its own: for new
+        // rows as well as updates of its column, with a condition and
+        // without an argument. One that calls the right function and misses
+        // any one of these is replaced.
+        let as_it_should_be = "SELECT count(*) FROM pg_trigger t JOIN pg_attribute a \
+                 ON a.attrelid = t.tgrelid AND a.attnum::text = t.tgattr::text \
+             WHERE t.tgname = 'sessions_own_jump_host' AND a.attname = 'jump_host_id' \
+               AND t.tgtype = 23 AND t.tgnargs = 0 AND t.tgqual IS NOT NULL";
+        assert_eq!(pg_count(&pool, as_it_should_be).await, 1);
+        let named = "WHEN (NEW.jump_host_id IS NOT NULL)";
+        for (when_and_for, condition, argument) in [
+            ("BEFORE UPDATE OF jump_host_id", named, ""),
+            ("BEFORE INSERT OR UPDATE OF folder_id", named, ""),
+            ("BEFORE INSERT OR UPDATE OF jump_host_id", "", ""),
+            (
+                "BEFORE INSERT OR UPDATE OF jump_host_id",
+                named,
+                "'jump_host_id'",
+            ),
+        ] {
+            run("DROP TRIGGER sessions_own_jump_host ON sessions".to_string()).await;
+            run(format!(
+                "CREATE TRIGGER sessions_own_jump_host {when_and_for} ON sessions \
+                 FOR EACH ROW {condition} \
+                 EXECUTE FUNCTION {RLS_SCHEMA}.shellstation_own_jump_host({argument})"
+            ))
+            .await;
+            assert_eq!(pg_count(&pool, as_it_should_be).await, 0, "{when_and_for}");
+            setup_postgres_rls(&pool).await.unwrap();
+            assert_eq!(pg_count(&pool, as_it_should_be).await, 1, "{when_and_for}");
+        }
+        assert_eq!(pg_count(&pool, &triggers).await, 7);
 
         // Bob may create functions in `public`, as every role could before
         // PostgreSQL 15, and triggers on `sessions`, as under Option B. He
@@ -3484,9 +3604,9 @@ mod tests {
         // The owning role's start replaces his trigger by one that calls its
         // own function. His function stays, with nothing calling it.
         pg_exec(&pool, &role(&admin)).await.unwrap();
-        assert_eq!(pg_count(&pool, &triggers).await, 5);
-        setup_postgres_rls(&pool).await.unwrap();
         assert_eq!(pg_count(&pool, &triggers).await, 6);
+        setup_postgres_rls(&pool).await.unwrap();
+        assert_eq!(pg_count(&pool, &triggers).await, 7);
         assert_eq!(pg_count(&pool, in_public).await, 1);
         pg_exec(&pool, &role(&bob)).await.unwrap();
         assert!(refused(
@@ -3507,8 +3627,8 @@ mod tests {
         pg_exec(&pool, &role(&heir)).await.unwrap();
         setup_postgres_rls(&pool).await.unwrap();
         assert_eq!(pg_count(&pool, &schema_owner).await, 1);
-        assert_eq!(pg_count(&pool, &functions_owner).await, 3);
-        assert_eq!(pg_count(&pool, &triggers).await, 6);
+        assert_eq!(pg_count(&pool, &functions_owner).await, 4);
+        assert_eq!(pg_count(&pool, &triggers).await, 7);
         pg_exec(&pool, "RESET ROLE").await.unwrap();
         run(format!("DROP ROLE {heir}")).await;
 
@@ -3524,12 +3644,12 @@ mod tests {
         );
         assert!(!failure.contains("function "), "{failure}");
         assert_eq!(pg_count(&pool, &schema_owner).await, 0);
-        assert_eq!(pg_count(&pool, &triggers).await, 6);
+        assert_eq!(pg_count(&pool, &triggers).await, 7);
         pg_exec(&pool, "RESET ROLE").await.unwrap();
         setup_postgres_rls(&pool).await.unwrap();
         assert_eq!(pg_count(&pool, &schema_owner).await, 1);
-        assert_eq!(pg_count(&pool, &functions_owner).await, 3);
-        assert_eq!(pg_count(&pool, &triggers).await, 6);
+        assert_eq!(pg_count(&pool, &functions_owner).await, 4);
+        assert_eq!(pg_count(&pool, &triggers).await, 7);
 
         // What anyone else was granted on the schema is taken back.
         let granted = format!(
@@ -3589,7 +3709,7 @@ mod tests {
         for name in ["class", "procedure", "namespace", "number"] {
             run(format!("DROP FUNCTION public.planted_{name} CASCADE")).await;
         }
-        assert_eq!(pg_count(&pool, &triggers).await, 6);
+        assert_eq!(pg_count(&pool, &triggers).await, 7);
         assert_eq!(pg_count(&pool, &granted).await, 0);
         let restored = "SELECT (SELECT count(*) FROM pg_policies \
                                 WHERE policyname = 'folders_shared_read') \
@@ -3597,6 +3717,263 @@ mod tests {
                              + (SELECT count(*) FROM pg_class WHERE oid = 'sessions'::regclass \
                                 AND relforcerowsecurity)";
         assert_eq!(pg_count(&pool, restored).await, 3);
+
+        pool.close().await;
+    }
+
+    /// The refusal of the trigger for jump hosts.
+    const BY_JUMP_HOST_TRIGGER: &str = "can only name one of one's own sessions as its jump host";
+
+    async fn check_jump_hosts_stay_with_their_owner(
+        opts: sqlx::postgres::PgConnectOptions,
+        admin: String,
+        alice: String,
+        bob: String,
+    ) {
+        use db::models::{NewSession, UpdateSession};
+        use db::{BulkSessionEdit, DatabaseProvider};
+
+        // One connection, so each SET ROLE holds for the statements after
+        // it, the app's own included.
+        let pool = PgPoolOptions::new()
+            .max_connections(1)
+            .connect_with(opts)
+            .await
+            .unwrap();
+        prepare_rls_test_database(&pool, &admin, &alice, &bob).await;
+        let app = PostgresProvider::new(pool.clone());
+        let role = |role: &str| format!("SET ROLE {role}");
+        let affected = |sql: String| {
+            let pool = pool.clone();
+            async move { pg_exec(&pool, &sql).await.unwrap().rows_affected() }
+        };
+        let new_session = |folder: uuid::Uuid, visibility: &str, jump: Option<uuid::Uuid>| {
+            let id = uuid::Uuid::new_v4();
+            let jump = jump.map_or_else(|| "NULL".to_string(), |jump| format!("'{jump}'"));
+            let sql = format!(
+                "INSERT INTO sessions \
+                     (id, folder_id, name, hostname, username, jump_host_id, owner, visibility) \
+                 VALUES ('{id}', '{folder}', 'session', 'host.example', '', {jump}, \
+                         current_user, '{visibility}')"
+            );
+            (id, sql)
+        };
+        let set_jump = |session: uuid::Uuid, jump: uuid::Uuid| {
+            format!("UPDATE sessions SET jump_host_id = '{jump}' WHERE id = '{session}'")
+        };
+        let jump_of = |session: uuid::Uuid| {
+            let pool = pool.clone();
+            async move {
+                let sql = format!("SELECT jump_host_id FROM sessions WHERE id = '{session}'");
+                sqlx::query_scalar::<_, Option<String>>(sqlx::AssertSqlSafe(sql))
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap()
+            }
+        };
+
+        // Bob has two bastions, one shared and one that only he sees.
+        pg_exec(&pool, &role(&bob)).await.unwrap();
+        let of_bob = insert_folder(&pool, None, "shared").await;
+        let (his_shared, sql) = new_session(of_bob, "shared", None);
+        pg_exec(&pool, &sql).await.unwrap();
+        let (his_personal, sql) = new_session(of_bob, "personal", None);
+        pg_exec(&pool, &sql).await.unwrap();
+
+        // Alice names a bastion of her own as a jump host, for a new session
+        // and for one she has.
+        pg_exec(&pool, &role(&alice)).await.unwrap();
+        let of_alice = insert_folder(&pool, None, "shared").await;
+        let (hers, sql) = new_session(of_alice, "personal", None);
+        pg_exec(&pool, &sql).await.unwrap();
+        let (target, sql) = new_session(of_alice, "shared", Some(hers));
+        pg_exec(&pool, &sql).await.unwrap();
+        let (other, sql) = new_session(of_alice, "shared", None);
+        pg_exec(&pool, &sql).await.unwrap();
+        assert_eq!(affected(set_jump(other, hers)).await, 1);
+
+        // She names none of bob's: not the one he shares, and not the one
+        // she cannot see, for which the foreign key alone would have said
+        // that it exists. A session that is not there gets the same answer,
+        // from the trigger and not from the foreign key.
+        let nowhere = uuid::Uuid::new_v4();
+        for jump in [his_shared, his_personal, nowhere] {
+            for sql in [
+                new_session(of_alice, "shared", Some(jump)).1,
+                new_session(of_alice, "personal", Some(jump)).1,
+                set_jump(target, jump),
+            ] {
+                assert!(
+                    refused(pg_exec(&pool, &sql).await, BY_JUMP_HOST_TRIGGER),
+                    "{sql}"
+                );
+            }
+        }
+        assert_eq!(jump_of(target).await, Some(hers.to_string()));
+        // Taking a jump host away is always hers to do, and so is naming
+        // another of her own in place of the one a session has.
+        let clear = format!("UPDATE sessions SET jump_host_id = NULL WHERE id = '{other}'");
+        assert_eq!(affected(clear).await, 1);
+        let (hers_too, sql) = new_session(of_alice, "personal", None);
+        pg_exec(&pool, &sql).await.unwrap();
+        assert_eq!(affected(set_jump(target, hers_too)).await, 1);
+        assert_eq!(jump_of(target).await, Some(hers_too.to_string()));
+        assert_eq!(affected(set_jump(target, hers)).await, 1);
+
+        // The app's own statements say so themselves, before the trigger
+        // does, and take a jump host of hers.
+        let new_in_app = |jump: uuid::Uuid| NewSession {
+            folder_id: of_alice,
+            name: "from the app".to_string(),
+            hostname: "host.example".to_string(),
+            port: 22,
+            protocol: "ssh".to_string(),
+            username: String::new(),
+            auth_method: "profile".to_string(),
+            jump_host_id: Some(jump),
+            tags: "[]".to_string(),
+            icon: "desktop".to_string(),
+            highlight_profile_id: None,
+            credential_profile_id: None,
+            legacy_algorithms: false,
+            login_sequence_id: None,
+        };
+        let jump_in_app = |jump: uuid::Uuid| UpdateSession {
+            jump_host_id: Some(Some(jump)),
+            ..UpdateSession::default()
+        };
+        let bulk_in_app = |jump: uuid::Uuid| BulkSessionEdit {
+            jump_host_id: Some(Some(jump)),
+            ..BulkSessionEdit::default()
+        };
+        let by_app = db::postgres::NOT_OWN_JUMP_HOST;
+        for jump in [his_shared, his_personal, nowhere] {
+            assert_eq!(
+                app.create_session(new_in_app(jump)).await.unwrap_err(),
+                by_app
+            );
+            assert_eq!(
+                app.update_session(other, jump_in_app(jump))
+                    .await
+                    .unwrap_err(),
+                by_app
+            );
+            assert_eq!(
+                app.bulk_edit_sessions(of_alice, bulk_in_app(jump))
+                    .await
+                    .unwrap_err(),
+                by_app
+            );
+        }
+        assert_eq!(jump_of(other).await, None);
+        let created = app.create_session(new_in_app(hers)).await.unwrap().id;
+        assert_eq!(jump_of(created).await, Some(hers.to_string()));
+        app.update_session(other, jump_in_app(hers)).await.unwrap();
+        assert_eq!(jump_of(other).await, Some(hers.to_string()));
+
+        // A session that names a jump host of bob's from before this was
+        // refused, as a superuser makes one here: alice still changes it,
+        // with her own statement and with the app's, which sends the jump
+        // host along with every change. She cannot name another of his.
+        pg_exec(&pool, "RESET ROLE").await.unwrap();
+        assert_eq!(affected(set_jump(target, his_shared)).await, 1);
+        pg_exec(&pool, &role(&alice)).await.unwrap();
+        let keep = format!(
+            "UPDATE sessions SET jump_host_id = jump_host_id, name = 'renamed' \
+             WHERE id = '{target}'"
+        );
+        assert_eq!(affected(keep).await, 1);
+        app.update_session(
+            target,
+            UpdateSession {
+                hostname: Some("other.example".to_string()),
+                ..jump_in_app(his_shared)
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(jump_of(target).await, Some(his_shared.to_string()));
+        assert_eq!(
+            app.update_session(target, jump_in_app(his_personal))
+                .await
+                .unwrap_err(),
+            by_app
+        );
+        assert!(refused(
+            pg_exec(&pool, &set_jump(target, his_personal)).await,
+            BY_JUMP_HOST_TRIGGER
+        ));
+
+        // Bob deletes that bastion, and the foreign key takes it from her
+        // session, which the trigger does not stand in the way of. This is
+        // what a jump host of another user's meant: he decides that her
+        // session has none.
+        pg_exec(&pool, &role(&bob)).await.unwrap();
+        let delete = format!("DELETE FROM sessions WHERE id = '{his_shared}'");
+        assert_eq!(affected(delete).await, 1);
+        assert_eq!(jump_of(target).await, None);
+
+        // Her own bastion she deletes herself, with the same outcome for the
+        // sessions behind it, which are hers.
+        pg_exec(&pool, &role(&alice)).await.unwrap();
+        assert_eq!(
+            affected(format!("DELETE FROM sessions WHERE id = '{hers}'")).await,
+            1
+        );
+        assert_eq!(jump_of(other).await, None);
+        assert_eq!(jump_of(created).await, None);
+
+        // A database whose owning role has not started this version yet has
+        // no such trigger: a statement of alice's own names bob's bastion,
+        // and the app's statements still refuse to.
+        pg_exec(&pool, &role(&admin)).await.unwrap();
+        pg_exec(&pool, "DROP TRIGGER sessions_own_jump_host ON sessions")
+            .await
+            .unwrap();
+        pg_exec(&pool, &role(&alice)).await.unwrap();
+        assert_eq!(affected(set_jump(other, his_personal)).await, 1);
+        assert_eq!(
+            app.update_session(target, jump_in_app(his_personal))
+                .await
+                .unwrap_err(),
+            by_app
+        );
+        assert_eq!(
+            app.create_session(new_in_app(his_personal))
+                .await
+                .unwrap_err(),
+            by_app
+        );
+        assert_eq!(
+            app.bulk_edit_sessions(of_alice, bulk_in_app(his_personal))
+                .await
+                .unwrap_err(),
+            by_app
+        );
+        assert_eq!(jump_of(target).await, None);
+
+        // The owning role's start puts the trigger back.
+        pg_exec(&pool, &role(&admin)).await.unwrap();
+        setup_postgres_rls(&pool).await.unwrap();
+        pg_exec(&pool, &role(&alice)).await.unwrap();
+        assert!(refused(
+            pg_exec(&pool, &set_jump(target, his_personal)).await,
+            BY_JUMP_HOST_TRIGGER
+        ));
+
+        // The table owner gets past the function, as past the others, for
+        // rows of its own, which are all that row-level security leaves it.
+        // It names bob's bastion for a new row and for one it has; alice's
+        // session is not its to update.
+        pg_exec(&pool, &role(&admin)).await.unwrap();
+        let of_admin = insert_folder(&pool, None, "personal").await;
+        let (_, sql) = new_session(of_admin, "personal", Some(his_personal));
+        pg_exec(&pool, &sql).await.unwrap();
+        let (its_own, sql) = new_session(of_admin, "personal", None);
+        pg_exec(&pool, &sql).await.unwrap();
+        assert_eq!(affected(set_jump(its_own, his_personal)).await, 1);
+        assert_eq!(jump_of(its_own).await, Some(his_personal.to_string()));
+        assert_eq!(affected(set_jump(target, his_personal)).await, 0);
 
         pool.close().await;
     }
