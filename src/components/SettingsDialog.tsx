@@ -98,6 +98,24 @@ interface LoggingConfig {
   enabled: boolean;
   log_directory: string | null;
   filename_format: string;
+  max_size_mb: number;
+  max_files: number;
+}
+
+// The limits on a session's log. Mirrors LoggingConfig::MAX_SIZE_MB and
+// LoggingConfig::MAX_FILES in src-tauri/src/config.rs, which check what is
+// saved; neither limit can be switched off.
+const LOG_MAX_SIZE_MB = { min: 1, max: 256, default: 10 };
+const LOG_MAX_FILES = { min: 1, max: 50, default: 10 };
+
+/**
+ * What a number field holds, as a whole number within `range`. The field
+ * keeps what was typed until it loses focus, so that it can be emptied and
+ * typed into; this is what it then shows, and what is saved.
+ */
+function clampToRange(value: string, range: { min: number; max: number }): number {
+  const number = Math.trunc(Number(value)) || range.min;
+  return Math.max(range.min, Math.min(range.max, number));
 }
 
 interface AppLoggingConfig {
@@ -262,6 +280,9 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
   const [loggingEnabled, setLoggingEnabled] = useState(false);
   const [logDirectory, setLogDirectory] = useState("");
   const [logFilenameFormat, setLogFilenameFormat] = useState("{name}_{mm}-{hh}_{dd}{MM}{yy}.log");
+  // As typed: see `clampToRange`.
+  const [logMaxSizeMb, setLogMaxSizeMb] = useState(String(LOG_MAX_SIZE_MB.default));
+  const [logMaxFiles, setLogMaxFiles] = useState(String(LOG_MAX_FILES.default));
   const [loggingDirty, setLoggingDirty] = useState(false);
   const [loggingSaved, setLoggingSaved] = useState(false);
   const [loggingError, setLoggingError] = useState<string | null>(null);
@@ -366,6 +387,8 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
         setLoggingEnabled(cfg.enabled);
         setLogDirectory(cfg.log_directory ?? "");
         setLogFilenameFormat(cfg.filename_format);
+        setLogMaxSizeMb(String(cfg.max_size_mb));
+        setLogMaxFiles(String(cfg.max_files));
       })
       .catch(() => {
         // Config load failed — keep defaults
@@ -404,11 +427,18 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
 
   const handleLoggingSave = useCallback(async () => {
     setLoggingError(null);
+    // A field that still has the focus holds what was typed.
+    const maxSizeMb = clampToRange(logMaxSizeMb, LOG_MAX_SIZE_MB);
+    const maxFiles = clampToRange(logMaxFiles, LOG_MAX_FILES);
+    setLogMaxSizeMb(String(maxSizeMb));
+    setLogMaxFiles(String(maxFiles));
     try {
       await invoke("logging_save_config", {
         enabled: loggingEnabled,
         logDirectory: logDirectory || null,
         filenameFormat: logFilenameFormat || null,
+        maxSizeMb,
+        maxFiles,
       });
       setLoggingDirty(false);
       setLoggingSaved(true);
@@ -422,7 +452,7 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
     } catch (e) {
       setLoggingError(String(e));
     }
-  }, [loggingEnabled, logDirectory, logFilenameFormat]);
+  }, [loggingEnabled, logDirectory, logFilenameFormat, logMaxSizeMb, logMaxFiles]);
 
   const handleAppLoggingSave = useCallback(async () => {
     setAppLoggingError(null);
@@ -1266,6 +1296,52 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
                   setLogFilenameFormat(e.target.value);
                   setLoggingDirty(true);
                   setLoggingSaved(false);
+                }}
+              />
+            </div>
+            <div className="dialog-field">
+              <div className="settings-label-row">
+                <label htmlFor="settings-log-max-size">{t("settings.loggingMaxSizeLabel")}</label>
+                <span className="settings-help" title={t("settings.loggingMaxSizeHint")}>
+                  ?
+                </span>
+              </div>
+              <input
+                id="settings-log-max-size"
+                type="number"
+                value={logMaxSizeMb}
+                min={LOG_MAX_SIZE_MB.min}
+                max={LOG_MAX_SIZE_MB.max}
+                onChange={(e) => {
+                  setLogMaxSizeMb(e.target.value);
+                  setLoggingDirty(true);
+                  setLoggingSaved(false);
+                }}
+                onBlur={() => {
+                  setLogMaxSizeMb(String(clampToRange(logMaxSizeMb, LOG_MAX_SIZE_MB)));
+                }}
+              />
+            </div>
+            <div className="dialog-field">
+              <div className="settings-label-row">
+                <label htmlFor="settings-log-max-files">{t("settings.loggingMaxFilesLabel")}</label>
+                <span className="settings-help" title={t("settings.loggingMaxFilesHint")}>
+                  ?
+                </span>
+              </div>
+              <input
+                id="settings-log-max-files"
+                type="number"
+                value={logMaxFiles}
+                min={LOG_MAX_FILES.min}
+                max={LOG_MAX_FILES.max}
+                onChange={(e) => {
+                  setLogMaxFiles(e.target.value);
+                  setLoggingDirty(true);
+                  setLoggingSaved(false);
+                }}
+                onBlur={() => {
+                  setLogMaxFiles(String(clampToRange(logMaxFiles, LOG_MAX_FILES)));
                 }}
               />
             </div>

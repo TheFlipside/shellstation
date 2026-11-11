@@ -18,7 +18,7 @@ use tauri::{State, Window};
 use super::path_dialog::{self, PickSlot};
 use super::path_dialog_text;
 use crate::config::{self, AppLoggingConfig, ConfigState, LoggingConfig};
-use crate::session_logger::SessionLogState;
+use crate::session_logger::{LogLimits, SessionLogState};
 
 /// The folder the user last chose for each log.
 static SESSION_LOG_DIR: PickSlot = PickSlot::new("Choose a new log directory with Browse");
@@ -77,7 +77,10 @@ pub async fn logging_pick_directory(
 
 /// Save the session log settings. `log_directory` must be the default
 /// (`None` or empty), the directory already configured, or the folder just
-/// chosen with `logging_pick_directory`.
+/// chosen with `logging_pick_directory`. `max_size_mb` and `max_files` are
+/// the limits on a session's log (see `session_logger::LogLimits`), each
+/// within its range: neither can be switched off from here. One that is not
+/// passed stays as it is.
 #[tauri::command]
 pub async fn logging_save_config(
     config_state: State<'_, ConfigState>,
@@ -85,6 +88,8 @@ pub async fn logging_save_config(
     enabled: bool,
     log_directory: Option<String>,
     filename_format: Option<String>,
+    max_size_mb: Option<u32>,
+    max_files: Option<u32>,
 ) -> Result<(), String> {
     // Validate inputs before persisting.
     if let Some(ref dir) = log_directory {
@@ -108,6 +113,8 @@ pub async fn logging_save_config(
             updated.logging.filename_format = fmt;
         }
     }
+    // Checked here, before anything is saved: see `LoggingConfig::set_limits`.
+    updated.logging.set_limits(max_size_mb, max_files)?;
     SESSION_LOG_DIR.save_with(
         log_directory.as_deref(),
         config.logging.log_directory.as_deref(),
@@ -126,6 +133,7 @@ pub async fn logging_save_config(
     mgr.log_dir = log_dir;
     mgr.filename_format
         .clone_from(&config.logging.filename_format);
+    mgr.limits = LogLimits::from(&config.logging);
 
     Ok(())
 }

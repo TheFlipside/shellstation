@@ -1050,6 +1050,7 @@ pub fn run() {
                 log_dir,
                 app_config.logging.filename_format.clone(),
             );
+            log_manager.limits = session_logger::LogLimits::from(&app_config.logging);
             // A session that goes on without a log says so in its tab, which
             // shows a toast (`Terminal.tsx`). The logger calls this from a
             // log's writer thread, where a session's reader waits for its

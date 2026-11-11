@@ -9,6 +9,7 @@ use std::time::Duration;
 use chrono::{Datelike, Local, Timelike};
 use tracing::{info, warn};
 
+use crate::config::LoggingConfig;
 use crate::private_fs;
 
 /// What the manager keeps for a session's log. The file is not here: it
@@ -33,11 +34,7 @@ enum LogFile {
     /// [`create_log_file`].
     Pending(PathBuf),
     /// File created on first write.
-    Active {
-        file: File,
-        /// Whether the last write to the file failed: see [`write_text`].
-        after_failed_write: bool,
-    },
+    Active(ActiveLog),
     /// The log directory could not be prepared, or the file not created.
     /// The session's first output says so in its tab.
     Unavailable,
@@ -353,12 +350,17 @@ impl Drop for RunningWriter {
 /// log is far behind (see [`LogBehind`]), and nothing else. It makes sure
 /// the log directory is there when the session connects, creates the file
 /// on the session's first text, writes the text that waits a piece at a
-/// time (see [`WRITE_PIECE_BYTES`]), and ends when the session has closed
-/// the log and nothing is left to write, or when it has to give the log up.
+/// time (see [`WRITE_PIECE_BYTES`]), goes on in a new file when the one it
+/// writes is full and deletes the oldest (see [`LogLimits`]), and ends when
+/// the session has closed the log and nothing is left to write, or when it
+/// has to give the log up.
 struct LogWriter {
     connection_id: String,
     shared: Arc<LogShared>,
     on_given_up: Option<GivenUpNotifier>,
+    /// How large a file of this log may get, and how many are kept: what
+    /// was set when the session connected.
+    limits: LogLimits,
     /// Counts this writer among the running ones until it ends.
     _running: RunningWriter,
     /// Held by a test for as long as writing is to take.
@@ -414,10 +416,7 @@ impl LogWriter {
                             path = %path.display(),
                             "Session log file created"
                         );
-                        LogFile::Active {
-                            file,
-                            after_failed_write: false,
-                        }
+                        LogFile::Active(ActiveLog::new(file, path))
                     }
                     Err(e) => {
                         warn!(
@@ -430,11 +429,7 @@ impl LogWriter {
                     }
                 };
             }
-            let LogFile::Active {
-                file,
-                after_failed_write,
-            } = &mut log
-            else {
+            let LogFile::Active(active) = &mut log else {
                 // The reason is in the application log by now. Trying again
                 // with each output would also mean up to a thousand failed
                 // creates per output where every name is taken.
@@ -442,12 +437,23 @@ impl LogWriter {
                 return;
             };
 
-            self.write(file, after_failed_write, &text);
+            if let Err(e) = self.write(active, &text) {
+                // What the log holds so far stays. As above, the next
+                // output does not try again.
+                warn!(
+                    connection_id = %self.connection_id,
+                    error = %e,
+                    "The session log cannot go on in a new file; \
+                     this session is no longer logged"
+                );
+                self.give_up();
+                return;
+            }
         }
 
         match log {
-            LogFile::Active { mut file, .. } => {
-                if let Err(e) = file.flush() {
+            LogFile::Active(mut active) => {
+                if let Err(e) = active.file.flush() {
                     warn!(
                         connection_id = %self.connection_id,
                         error = %e,
@@ -466,18 +472,117 @@ impl LogWriter {
         }
     }
 
-    /// Write a piece of the session's text to the log. One that cannot be
-    /// written is lost, and said in the application log.
-    fn write(&self, file: &mut File, after_failed_write: &mut bool, piece: &str) {
+    /// Write a piece of the session's text to the log: to the file that is
+    /// being written as far as it has room, and the rest to a new one, or to
+    /// several (see [`LogLimits`]). Text that cannot be written is lost, and
+    /// said in the application log.
+    ///
+    /// # Errors
+    /// The log cannot go on in a new file: see [`Self::start_next_part`].
+    /// The rest of the piece is not written then.
+    fn write(&self, log: &mut ActiveLog, piece: &str) -> io::Result<()> {
         #[cfg(test)]
         let _writing = lock(&self.write_gate);
-        if let Err(e) = write_text(file, after_failed_write, piece) {
+        let mut rest = piece;
+        while !rest.is_empty() {
+            let (now, later) = log.split_for_room(rest, self.limits.max_file_bytes);
+            if now.is_empty() {
+                self.start_next_part(log)?;
+                continue;
+            }
+            if let Err(e) = write_text(&mut log.file, &mut log.after_failed_write, now) {
+                warn!(
+                    connection_id = %self.connection_id,
+                    error = %e,
+                    "Failed to write session log"
+                );
+            }
+            rest = later;
+        }
+        Ok(())
+    }
+
+    /// Close the file that is being written, which is full, and go on in a
+    /// new one. Then delete the oldest files of this log, so that no more
+    /// than [`LogLimits::max_files`] are left.
+    ///
+    /// Only files this writer created are deleted, by the names it gave
+    /// them. As for creating a log, that protects the name and not the log
+    /// directory: someone able to replace that directory, or one above it,
+    /// with a link decides where a name leads.
+    ///
+    /// A file that cannot be deleted stays, and is tried again when the next
+    /// file is full: one that another program holds open, on Windows, may be
+    /// free by then. The application log has a warning for it the first
+    /// time, and not for each time it is tried again: a host that puts out
+    /// text fast enough fills a file many times a second. A file that is
+    /// gone already counts as deleted.
+    ///
+    /// # Errors
+    /// The new file cannot be created, or too many files could not be
+    /// deleted: more than twice [`LogLimits::max_files`] would be left. The
+    /// log has a limit only as long as its oldest files go, so it ends here
+    /// rather than grow without one.
+    fn start_next_part(&self, log: &mut ActiveLog) -> io::Result<()> {
+        if let Err(e) = log.file.flush() {
             warn!(
                 connection_id = %self.connection_id,
                 error = %e,
-                "Failed to write session log"
+                "Failed to flush session log"
             );
         }
+        let (file, path, part) = create_next_part(&log.first, log.part)?;
+        info!(
+            connection_id = %self.connection_id,
+            path = %path.display(),
+            "The session log file is full; the log goes on in a new file"
+        );
+        // The file that was written is closed here, before any is deleted:
+        // with one file kept, it is the one to go.
+        log.file = Counted::new(file);
+        log.after_failed_write = false;
+        log.part = part;
+        log.kept.push_back(path);
+
+        // The file being written is always kept, whatever the limit says.
+        let max_files = self.limits.max_files.max(1);
+        let excess = log.kept.len().saturating_sub(max_files);
+        // Those that could not be deleted before are the first ones again.
+        let tried_before = std::mem::take(&mut log.not_deleted);
+        let mut not_deleted = Vec::new();
+        for (index, path) in log.kept.drain(..excess).enumerate() {
+            match std::fs::remove_file(&path) {
+                Ok(()) => info!(
+                    connection_id = %self.connection_id,
+                    path = %path.display(),
+                    "Oldest file of the session log deleted"
+                ),
+                // Someone has removed it already.
+                Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+                Err(e) => {
+                    if index >= tried_before {
+                        warn!(
+                            connection_id = %self.connection_id,
+                            path = %path.display(),
+                            error = %e,
+                            "Failed to delete the oldest file of the session log; \
+                             it is tried again when the next file is full"
+                        );
+                    }
+                    not_deleted.push(path);
+                }
+            }
+        }
+        log.not_deleted = not_deleted.len();
+        for path in not_deleted.into_iter().rev() {
+            log.kept.push_front(path);
+        }
+        if log.kept.len() > max_files.saturating_mul(2) {
+            return Err(io::Error::other(
+                "too many files of this log could not be deleted",
+            ));
+        }
+        Ok(())
     }
 
     /// Wait for text of the session and take the next piece of it to write:
@@ -530,6 +635,200 @@ impl LogWriter {
             }
         }
     }
+}
+
+/// How large a session's log may get on disk: the size a file of it may
+/// reach, and how many files of it are kept.
+///
+/// A log has no end of its own, and what goes into it is what the remote
+/// host sends, so without a limit a host could fill the volume the log
+/// directory is on. A file that is full is therefore closed, and the log
+/// goes on in a new one (see [`create_next_part`] for its name); once more
+/// than `max_files` are there, the oldest is deleted. One session's log
+/// thus takes no more than `max_files` times `max_file_bytes`, and holds the
+/// session's latest output. The exception is a file that cannot be deleted:
+/// with such files a log can take up to twice that before it is given up
+/// (see [`LogWriter::start_next_part`]).
+///
+/// This limits each log by itself, not the log directory: every session has
+/// a log of its own, and the logs of sessions that have ended stay until the
+/// user removes them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LogLimits {
+    /// The size a log file may reach, in bytes. No file is larger, unless
+    /// this is less than a single character takes. A write that fails does
+    /// not take a file over it either, but may leave part of its text there.
+    pub max_file_bytes: u64,
+    /// How many files of one session's log are kept, the one being written
+    /// included.
+    pub max_files: usize,
+}
+
+impl LogLimits {
+    /// The limits for a file size in MiB and a number of files, as the
+    /// config holds them.
+    #[must_use]
+    pub fn new(max_size_mb: u32, max_files: u32) -> Self {
+        Self {
+            max_file_bytes: u64::from(max_size_mb) * 1024 * 1024,
+            max_files: usize::try_from(max_files).unwrap_or(usize::MAX),
+        }
+    }
+}
+
+impl From<&LoggingConfig> for LogLimits {
+    fn from(config: &LoggingConfig) -> Self {
+        Self::new(config.max_size_mb, config.max_files)
+    }
+}
+
+impl Default for LogLimits {
+    fn default() -> Self {
+        Self::from(&LoggingConfig::default())
+    }
+}
+
+/// Counts the bytes that a file has taken, whether the write they were part
+/// of then failed or not: a log file's size is held against its limit by
+/// what went into it, without asking the file system.
+struct Counted<W> {
+    inner: W,
+    written: u64,
+}
+
+impl<W> Counted<W> {
+    fn new(inner: W) -> Self {
+        Self { inner, written: 0 }
+    }
+}
+
+impl<W: Write> Write for Counted<W> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        let written = self.inner.write(buf)?;
+        self.written = self
+            .written
+            .saturating_add(u64::try_from(written).unwrap_or(u64::MAX));
+        Ok(written)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.inner.flush()
+    }
+}
+
+/// A log that has a file, and what its writer knows about it.
+struct ActiveLog {
+    /// The file that is being written: the newest of the log.
+    file: Counted<File>,
+    /// Whether the last write to the file failed: see [`write_text`].
+    after_failed_write: bool,
+    /// The name the log's first file got, which the later ones are named
+    /// after: see [`create_next_part`].
+    first: PathBuf,
+    /// Which file of the log is being written, counted from 1.
+    part: u32,
+    /// The files of this log that this writer created and has not deleted,
+    /// the oldest first and the one being written last.
+    kept: VecDeque<PathBuf>,
+    /// How many of `kept`, its first ones, are files that could not be
+    /// deleted when they were to go: see [`LogWriter::start_next_part`].
+    not_deleted: usize,
+}
+
+impl ActiveLog {
+    /// A log whose first file, `file`, has just been created at `path`.
+    fn new(file: File, path: PathBuf) -> Self {
+        Self {
+            file: Counted::new(file),
+            after_failed_write: false,
+            first: path.clone(),
+            part: 1,
+            kept: VecDeque::from([path]),
+            not_deleted: 0,
+        }
+    }
+
+    /// Split `text` into what the file being written still has room for,
+    /// with `max_file_bytes` as its limit, and what has to go into the next
+    /// file. The first is empty when the file is full.
+    ///
+    /// The split is between two characters, and never between a CR and its
+    /// LF: a file that ended in a CR would have whatever a terminal shows
+    /// after it written over its last line (see [`AnsiStripperState::emit`]).
+    /// That is for what is written: a write that fails part of the way can
+    /// still leave a file ending there, as it can in a log of one file.
+    /// A file that holds nothing yet takes one character whatever the limit,
+    /// so that a limit smaller than a character cannot keep a log from
+    /// getting anywhere.
+    fn split_for_room<'a>(&self, text: &'a str, max_file_bytes: u64) -> (&'a str, &'a str) {
+        // The write after a failed one starts with a line feed of its own.
+        let taken = self
+            .file
+            .written
+            .saturating_add(u64::from(self.after_failed_write));
+        let room = usize::try_from(max_file_bytes.saturating_sub(taken)).unwrap_or(usize::MAX);
+        if text.len() <= room {
+            return (text, "");
+        }
+        let mut end = room;
+        while !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        if text.get(..end).is_some_and(|start| start.ends_with('\r')) {
+            end -= 1;
+        }
+        if end == 0 && self.file.written == 0 {
+            end = if text.starts_with("\r\n") {
+                2
+            } else {
+                text.chars().next().map_or(0, char::len_utf8)
+            };
+        }
+        text.split_at(end)
+    }
+}
+
+/// How many names are tried for the next file of a log before the log is
+/// given up: the names that are taken are passed over.
+const MAX_PART_NAMES_TRIED: u32 = 1000;
+
+/// Create the next file of the log whose first file is `first`, after its
+/// file number `part`. Returns the file, its name and its number.
+///
+/// The file is named after the first one, with `.part0002`, `.part0003`, …
+/// before the extension: `router.log` goes on in `router.part0002.log`. The
+/// numbers only go up, so a name is not used again once its file has been
+/// deleted, and the names sort in the order the files were written up to
+/// `.part9999`: the numbers after it are longer and sort before it. Which
+/// file is the oldest is not read from the names. The file is created as the
+/// first one is (see
+/// [`create_log_file`]): never opened if it is already there, and for its
+/// owner alone. A name that is taken, by a file of an earlier log or by
+/// whatever someone else put there, is passed over for the next number.
+fn create_next_part(first: &Path, part: u32) -> io::Result<(File, PathBuf, u32)> {
+    let stem = first.file_stem().unwrap_or_default().to_string_lossy();
+    let extension = first.extension().map(|ext| ext.to_string_lossy());
+    let mut part = part;
+    for _ in 0..MAX_PART_NAMES_TRIED {
+        let Some(next) = part.checked_add(1) else {
+            break;
+        };
+        part = next;
+        let name = match &extension {
+            Some(ext) => format!("{stem}.part{part:04}.{ext}"),
+            None => format!("{stem}.part{part:04}"),
+        };
+        let path = first.with_file_name(name);
+        match private_fs::create_private_append_file(&path) {
+            Ok(file) => return Ok((file, path, part)),
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
+            Err(e) => return Err(e),
+        }
+    }
+    Err(io::Error::new(
+        io::ErrorKind::AlreadyExists,
+        "too many log files with this name",
+    ))
 }
 
 /// Make sure the log directory is there for the log at `path`, restricted
@@ -725,6 +1024,9 @@ pub struct SessionLogManager {
     pub enabled: bool,
     pub log_dir: PathBuf,
     pub filename_format: String,
+    /// How large a log file may get, and how many files of a session's log
+    /// are kept. A log keeps what was set when its session connected.
+    pub limits: LogLimits,
     /// Tells the window that a session goes on without a log: see
     /// [`Self::notify_when_given_up`].
     on_given_up: Option<GivenUpNotifier>,
@@ -745,6 +1047,7 @@ impl SessionLogManager {
             enabled,
             log_dir,
             filename_format,
+            limits: LogLimits::default(),
             on_given_up: None,
             writers: Arc::default(),
             stall_timeout: STALL_TIMEOUT,
@@ -822,6 +1125,7 @@ impl SessionLogManager {
             connection_id: connection_id.to_string(),
             shared: Arc::clone(&shared),
             on_given_up: self.on_given_up.clone(),
+            limits: self.limits,
             _running: running,
             #[cfg(test)]
             write_gate: Arc::clone(&self.write_gate),
@@ -1701,6 +2005,449 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
+    /// A manager as [`manager`] gives, whose logs get files of at most
+    /// `max_file_bytes` and keep `max_files` of them.
+    fn manager_with_limits(max_file_bytes: u64, max_files: usize) -> (SessionLogManager, PathBuf) {
+        let (mut mgr, dir) = manager();
+        mgr.limits = LogLimits {
+            max_file_bytes,
+            max_files,
+        };
+        (mgr, dir)
+    }
+
+    /// The names in `dir`, sorted.
+    fn names_in(dir: &Path) -> Vec<String> {
+        let mut names: Vec<String> = std::fs::read_dir(dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        names
+    }
+
+    fn text_of(path: &Path) -> String {
+        String::from_utf8(std::fs::read(path).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn the_limits_are_those_of_the_config() {
+        assert_eq!(
+            LogLimits::new(10, 10),
+            LogLimits {
+                max_file_bytes: 10 * 1024 * 1024,
+                max_files: 10,
+            }
+        );
+        assert_eq!(LogLimits::default(), LogLimits::new(10, 10));
+        // The largest values the config allows.
+        let largest = LogLimits::new(
+            *LoggingConfig::MAX_SIZE_MB.end(),
+            *LoggingConfig::MAX_FILES.end(),
+        );
+        assert_eq!(largest.max_file_bytes, 256 * 1024 * 1024);
+        assert_eq!(largest.max_files, 50);
+    }
+
+    /// However the outputs are put together for writing, a file takes what
+    /// it has room for and no more: each output in a write of its own, and
+    /// outputs that waited for the writer and were joined.
+    #[test]
+    fn a_log_that_is_full_goes_on_in_a_new_file() {
+        for joined in [false, true] {
+            let (mut mgr, dir) = manager_with_limits(16, 10);
+            let reported = record_given_up(&mut mgr);
+            mgr.open_log("a", "router").unwrap();
+            let gate = Arc::clone(&mgr.write_gate);
+            // Held, the writer gets no further than its first write, and
+            // what is handed on after that waits and is joined.
+            let held = joined.then(|| lock(&gate));
+            for _ in 0..3 {
+                mgr.write_log("a", b"0123456789\n");
+                if !joined {
+                    mgr.settle("a");
+                }
+            }
+            drop(held);
+            mgr.close_log("a");
+            mgr.wait_until_written();
+            assert_eq!(
+                names_in(&dir),
+                ["router.log", "router.part0002.log", "router.part0003.log"],
+                "joined: {joined}"
+            );
+            assert_eq!(text_of(&dir.join("router.log")), "0123456789\n01234");
+            assert_eq!(
+                text_of(&dir.join("router.part0002.log")),
+                "56789\n0123456789"
+            );
+            assert_eq!(text_of(&dir.join("router.part0003.log")), "\n");
+            assert!(reported.lock().unwrap().is_empty());
+            std::fs::remove_dir_all(&dir).unwrap();
+        }
+    }
+
+    /// A file that is exactly full is not followed by an empty one: the
+    /// next file is created for text, not ahead of it.
+    #[test]
+    fn no_new_file_is_started_without_text_for_it() {
+        let (mut mgr, dir) = manager_with_limits(8, 10);
+        mgr.open_log("a", "router").unwrap();
+        mgr.write_log("a", b"abcdefg\n");
+        mgr.settle("a");
+        assert_eq!(names_in(&dir), ["router.log"]);
+        mgr.write_log("a", b"h");
+        mgr.close_log("a");
+        mgr.wait_until_written();
+        assert_eq!(names_in(&dir), ["router.log", "router.part0002.log"]);
+        assert_eq!(text_of(&dir.join("router.part0002.log")), "h");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn the_oldest_files_of_a_log_are_deleted() {
+        let (mut mgr, dir) = manager_with_limits(8, 2);
+        let reported = record_given_up(&mut mgr);
+        mgr.open_log("a", "router").unwrap();
+        mgr.open_log("b", "router").unwrap();
+        mgr.settle("a");
+        // Not this log's, so not this log's to delete: a file of another
+        // session, and a file at a name this log would have taken, which
+        // would be its oldest by now.
+        mgr.write_log("b", b"other\n");
+        mgr.settle("b");
+        mgr.close_log("b");
+        std::fs::write(dir.join("router_1.part0003.log"), b"not ours").unwrap();
+
+        for part in [
+            "one....\n",
+            "two....\n",
+            "three..\n",
+            "four...\n",
+            "five...\n",
+        ] {
+            mgr.write_log("a", part.as_bytes());
+        }
+        mgr.close_log("a");
+        mgr.wait_until_written();
+        // The log of `b` took the plain name, so this one is `router_1`,
+        // and it passed over the name that was taken.
+        assert_eq!(
+            names_in(&dir),
+            [
+                "router.log",
+                "router_1.part0003.log",
+                "router_1.part0005.log",
+                "router_1.part0006.log",
+            ]
+        );
+        assert_eq!(text_of(&dir.join("router.log")), "other\n");
+        assert_eq!(text_of(&dir.join("router_1.part0003.log")), "not ours");
+        assert_eq!(text_of(&dir.join("router_1.part0005.log")), "four...\n");
+        assert_eq!(text_of(&dir.join("router_1.part0006.log")), "five...\n");
+        assert!(reported.lock().unwrap().is_empty());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// With one file kept, the file that was just full is the one deleted.
+    #[test]
+    fn a_log_that_keeps_one_file_holds_the_latest_output() {
+        let (mut mgr, dir) = manager_with_limits(8, 1);
+        mgr.open_log("a", "router").unwrap();
+        for part in ["one....\n", "two....\n", "three"] {
+            mgr.write_log("a", part.as_bytes());
+        }
+        mgr.close_log("a");
+        mgr.wait_until_written();
+        assert_eq!(names_in(&dir), ["router.part0003.log"]);
+        assert_eq!(text_of(&dir.join("router.part0003.log")), "three");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_file_ends_neither_inside_a_character_nor_inside_a_line_break() {
+        // Between the CR and the LF there is room for the CR alone.
+        let (mut mgr, dir) = manager_with_limits(3, 10);
+        mgr.open_log("a", "router").unwrap();
+        mgr.write_log("a", b"ab\r\ncd\r\n");
+        mgr.close_log("a");
+        mgr.wait_until_written();
+        assert_eq!(text_of(&dir.join("router.log")), "ab");
+        assert_eq!(text_of(&dir.join("router.part0002.log")), "\r\nc");
+        assert_eq!(text_of(&dir.join("router.part0003.log")), "d\r\n");
+        assert_eq!(names_in(&dir).len(), 3);
+        std::fs::remove_dir_all(&dir).unwrap();
+
+        // Two bytes to a character: the third byte of room stays unused.
+        let (mut mgr, dir) = manager_with_limits(3, 10);
+        mgr.open_log("a", "router").unwrap();
+        mgr.write_log("a", "äöü".as_bytes());
+        mgr.close_log("a");
+        mgr.wait_until_written();
+        assert_eq!(text_of(&dir.join("router.log")), "ä");
+        assert_eq!(text_of(&dir.join("router.part0002.log")), "ö");
+        assert_eq!(text_of(&dir.join("router.part0003.log")), "ü");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A limit that is smaller than a character, which the config does not
+    /// allow, still lets a log get on: a character to a file.
+    #[test]
+    fn a_limit_smaller_than_a_character_does_not_stop_a_log() {
+        let (mut mgr, dir) = manager_with_limits(1, 10);
+        mgr.open_log("a", "router").unwrap();
+        mgr.write_log("a", "ä\r\nx".as_bytes());
+        mgr.close_log("a");
+        mgr.wait_until_written();
+        assert_eq!(text_of(&dir.join("router.log")), "ä");
+        assert_eq!(text_of(&dir.join("router.part0002.log")), "\r\n");
+        assert_eq!(text_of(&dir.join("router.part0003.log")), "x");
+        assert_eq!(names_in(&dir).len(), 3);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn the_room_in_a_file_counts_what_went_into_it() {
+        let dir = std::env::temp_dir().join(format!("ss-sessionlog-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&dir).unwrap();
+        let path = dir.join("router.log");
+        let file = private_fs::create_private_append_file(&path).unwrap();
+        let mut log = ActiveLog::new(file, path);
+
+        assert_eq!(log.split_for_room("abcd", 4), ("abcd", ""));
+        assert_eq!(log.split_for_room("abcde", 4), ("abcd", "e"));
+        // The write after a failed one starts with a line feed, which takes
+        // room as well.
+        log.after_failed_write = true;
+        assert_eq!(log.split_for_room("abcd", 4), ("abc", "d"));
+        log.after_failed_write = false;
+
+        log.file.write_all(b"ab").unwrap();
+        assert_eq!(log.file.written, 2);
+        assert_eq!(log.split_for_room("cd", 4), ("cd", ""));
+        assert_eq!(log.split_for_room("cde", 4), ("cd", "e"));
+        assert_eq!(log.split_for_room("c\r\n", 4), ("c", "\r\n"));
+        assert_eq!(log.split_for_room("cä", 4), ("c", "ä"));
+        // A file that holds something takes nothing it has no room for.
+        log.file.write_all(b"cd").unwrap();
+        assert_eq!(log.split_for_room("e", 4), ("", "e"));
+        assert_eq!(log.split_for_room("e", 2), ("", "e"));
+        drop(log);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Bytes that went into the file count, also those of a write that then
+    /// failed: they take room in the file all the same.
+    #[test]
+    fn bytes_of_a_failed_write_are_counted() {
+        struct TakesThree(usize);
+        impl Write for TakesThree {
+            fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+                if self.0 == 3 {
+                    return Err(io::Error::other("full"));
+                }
+                let taken = buf.len().min(3 - self.0);
+                self.0 += taken;
+                Ok(taken)
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+        let mut counted = Counted::new(TakesThree(0));
+        assert!(counted.write_all(b"abcdef").is_err());
+        assert_eq!(counted.written, 3);
+        assert!(counted.write_all(b"g").is_err());
+        assert_eq!(counted.written, 3);
+    }
+
+    #[test]
+    fn a_name_that_is_taken_is_passed_over_for_the_next_file() {
+        let (mut mgr, dir) = manager_with_limits(4, 1);
+        mgr.open_log("a", "router").unwrap();
+        mgr.settle("a");
+        // As a log of an earlier session with this name may have left it,
+        // or someone else who can write to the directory.
+        std::fs::write(dir.join("router.part0002.log"), b"not ours").unwrap();
+        std::fs::create_dir(dir.join("router.part0003.log")).unwrap();
+        mgr.write_log("a", b"aaaabbbb");
+        mgr.close_log("a");
+        mgr.wait_until_written();
+        // Neither written to nor deleted, although one file is kept.
+        assert_eq!(text_of(&dir.join("router.part0002.log")), "not ours");
+        assert!(dir.join("router.part0003.log").is_dir());
+        assert_eq!(text_of(&dir.join("router.part0004.log")), "bbbb");
+        assert_eq!(names_in(&dir).len(), 3);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_symlink_at_the_name_of_the_next_file_is_not_written_through() {
+        let (mut mgr, dir) = manager_with_limits(4, 10);
+        mgr.open_log("a", "router").unwrap();
+        mgr.settle("a");
+        let elsewhere = std::env::temp_dir().join(format!("ss-elsewhere-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&elsewhere).unwrap();
+        let existing = elsewhere.join("existing");
+        std::fs::write(&existing, b"untouched").unwrap();
+        let missing = elsewhere.join("missing");
+        for (name, target) in [
+            ("router.part0002.log", &existing),
+            ("router.part0003.log", &missing),
+        ] {
+            let link = dir.join(name);
+            #[cfg(unix)]
+            std::os::unix::fs::symlink(target, &link).unwrap();
+            #[cfg(windows)]
+            if std::os::windows::fs::symlink_file(target, &link).is_err() {
+                // Creating a symlink takes Developer Mode or an elevated process.
+                eprintln!("skipped: this process may not create symbolic links");
+                let _ = std::fs::remove_dir_all(&dir);
+                let _ = std::fs::remove_dir_all(&elsewhere);
+                return;
+            }
+        }
+
+        mgr.write_log("a", b"aaaabbbb");
+        mgr.close_log("a");
+        mgr.wait_until_written();
+
+        assert_eq!(std::fs::read(&existing).unwrap(), b"untouched");
+        assert!(!missing.exists());
+        assert_eq!(text_of(&dir.join("router.part0004.log")), "bbbb");
+        std::fs::remove_dir_all(&dir).unwrap();
+        std::fs::remove_dir_all(&elsewhere).unwrap();
+    }
+
+    #[test]
+    fn a_log_that_cannot_go_on_in_a_new_file_is_given_up() {
+        let (mut mgr, dir) = manager_with_limits(4, 10);
+        let reported = record_given_up(&mut mgr);
+        mgr.open_log("a", "router").unwrap();
+        mgr.write_log("a", b"aaaa");
+        mgr.settle("a");
+        for number in 2..MAX_PART_NAMES_TRIED + 2 {
+            std::fs::write(dir.join(format!("router.part{number:04}.log")), b"").unwrap();
+        }
+        assert!(mgr.has_log("a"));
+        mgr.write_log("a", b"bbbb");
+        mgr.settle("a");
+        assert!(!mgr.has_log("a"));
+        // Not tried again with the next output, and said once.
+        std::fs::remove_file(dir.join("router.part0002.log")).unwrap();
+        mgr.write_log("a", b"cccc");
+        mgr.close_log("a");
+        mgr.wait_until_written();
+        assert_eq!(*reported.lock().unwrap(), ["a"]);
+        // What the log held stays.
+        assert_eq!(text_of(&dir.join("router.log")), "aaaa");
+        assert!(!dir.join("router.part0002.log").exists());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Put a directory where a file of a log was, so that deleting the file
+    /// by its name fails.
+    fn make_undeletable(path: &Path) {
+        std::fs::remove_file(path).unwrap();
+        std::fs::create_dir(path).unwrap();
+    }
+
+    #[test]
+    fn a_file_that_could_not_be_deleted_is_tried_again() {
+        let (mut mgr, dir) = manager_with_limits(4, 2);
+        let reported = record_given_up(&mut mgr);
+        mgr.open_log("a", "router").unwrap();
+        mgr.write_log("a", b"aaaabbbb");
+        mgr.settle("a");
+        make_undeletable(&dir.join("router.log"));
+
+        mgr.write_log("a", b"cccc");
+        mgr.settle("a");
+        // One file more than is kept, and the log goes on.
+        assert!(mgr.has_log("a"));
+        assert_eq!(
+            names_in(&dir),
+            ["router.log", "router.part0002.log", "router.part0003.log"]
+        );
+
+        // Whatever kept it from being deleted is over.
+        std::fs::remove_dir(dir.join("router.log")).unwrap();
+        std::fs::write(dir.join("router.log"), b"aaaa").unwrap();
+        mgr.write_log("a", b"dddd");
+        mgr.close_log("a");
+        mgr.wait_until_written();
+        assert_eq!(
+            names_in(&dir),
+            ["router.part0003.log", "router.part0004.log"]
+        );
+        assert!(reported.lock().unwrap().is_empty());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A log whose oldest files cannot be deleted has no limit, so it ends
+    /// once more than twice the files it may keep would be left.
+    #[test]
+    fn a_log_with_too_many_files_that_cannot_be_deleted_is_given_up() {
+        let (mut mgr, dir) = manager_with_limits(4, 1);
+        let reported = record_given_up(&mut mgr);
+        mgr.open_log("a", "router").unwrap();
+        mgr.write_log("a", b"aaaabbbb");
+        mgr.settle("a");
+        // The first file went when the second was started.
+        assert_eq!(names_in(&dir), ["router.part0002.log"]);
+
+        // The file being written is the newest, so the one before it is
+        // closed and can be swapped for something that cannot be deleted.
+        mgr.limits.max_files = 2;
+        mgr.open_log("b", "switch").unwrap();
+        mgr.write_log("b", b"aaaabbbb");
+        mgr.settle("b");
+        make_undeletable(&dir.join("switch.log"));
+        mgr.write_log("b", b"cccc");
+        mgr.settle("b");
+        make_undeletable(&dir.join("switch.part0002.log"));
+        mgr.write_log("b", b"dddd");
+        mgr.settle("b");
+        // Two that could not be deleted and two that are kept: the limit.
+        assert!(mgr.has_log("b"));
+        assert_eq!(names_in(&dir).len(), 5);
+        make_undeletable(&dir.join("switch.part0003.log"));
+        mgr.write_log("b", b"eeee");
+        mgr.settle("b");
+        assert!(!mgr.has_log("b"));
+        assert_eq!(*reported.lock().unwrap(), ["b"]);
+        // The other log is not affected.
+        assert!(mgr.has_log("a"));
+
+        mgr.write_log("b", b"ffff");
+        mgr.close_log("a");
+        mgr.close_log("b");
+        mgr.wait_until_written();
+        assert_eq!(*reported.lock().unwrap(), ["b"]);
+        assert_eq!(text_of(&dir.join("switch.part0004.log")), "dddd");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Settings saved while a session is connected are for the sessions
+    /// that connect after: a log keeps the limits it started with.
+    #[test]
+    fn a_log_keeps_the_limits_it_was_opened_with() {
+        let (mut mgr, dir) = manager_with_limits(4, 10);
+        mgr.open_log("a", "router").unwrap();
+        mgr.limits = LogLimits::default();
+        mgr.open_log("b", "switch").unwrap();
+        mgr.write_log("a", b"aaaabbbb");
+        mgr.write_log("b", b"aaaabbbb");
+        mgr.close_log("a");
+        mgr.close_log("b");
+        mgr.wait_until_written();
+        assert_eq!(
+            names_in(&dir),
+            ["router.log", "router.part0002.log", "switch.log"]
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
     /// A log directory that cannot be created is found out by the writer,
     /// not at connect, and said with the first output all the same.
     #[test]
@@ -2191,6 +2938,7 @@ mod tests {
             on_given_up: Some(Arc::new(move |id: &str| {
                 sink.lock().unwrap().push(id.to_string());
             })),
+            limits: LogLimits::default(),
             _running: writers.count().unwrap(),
             write_gate: Arc::default(),
         };

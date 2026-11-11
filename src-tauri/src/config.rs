@@ -214,10 +214,26 @@ pub struct LoggingConfig {
     /// Filename format template. Placeholders: {name}, {mm}, {hh}, {dd}, {MM}, {yy}.
     #[serde(default = "default_log_filename_format")]
     pub filename_format: String,
+    /// The size at which a log file is closed and the session's log goes on
+    /// in a new one, in MiB: see [`Self::MAX_SIZE_MB`].
+    #[serde(default = "default_log_max_size_mb")]
+    pub max_size_mb: u32,
+    /// How many files of a session's log are kept, the newest ones; older
+    /// ones are deleted as new ones are started: see [`Self::MAX_FILES`].
+    #[serde(default = "default_log_max_files")]
+    pub max_files: u32,
 }
 
 fn default_log_filename_format() -> String {
     "{name}_{mm}-{hh}_{dd}{MM}{yy}.log".to_string()
+}
+
+fn default_log_max_size_mb() -> u32 {
+    10
+}
+
+fn default_log_max_files() -> u32 {
+    10
 }
 
 /// The placeholders the session logger fills in (see
@@ -233,6 +249,76 @@ const FILENAME_PUNCTUATION: &str = " -_.()";
 const MAX_FILENAME_FORMAT_LEN: usize = 100;
 
 impl LoggingConfig {
+    /// The sizes a log file may be allowed to reach, in MiB. There is no
+    /// value for "no limit": the limit is what keeps a remote host from
+    /// filling the volume the logs are on with one session's output, and the
+    /// webview, which saves these settings, must not be able to take it away.
+    /// The largest size and the largest number of files together are what a
+    /// webview can raise one session's log to: 12.5 GiB.
+    /// Mirrored by `LOG_MAX_SIZE_MB` in `src/components/SettingsDialog.tsx`.
+    pub const MAX_SIZE_MB: RangeInclusive<u32> = 1..=256;
+    /// The numbers of files of one session's log that may be kept. Mirrored
+    /// by `LOG_MAX_FILES` in `src/components/SettingsDialog.tsx`.
+    pub const MAX_FILES: RangeInclusive<u32> = 1..=50;
+
+    /// Set the limits that are given, each checked against its range; one
+    /// that is `None` stays as it is. Nothing is changed when either is
+    /// outside its range.
+    ///
+    /// # Errors
+    /// Says which range a value is outside of.
+    pub fn set_limits(
+        &mut self,
+        max_size_mb: Option<u32>,
+        max_files: Option<u32>,
+    ) -> Result<(), String> {
+        if let Some(mb) = max_size_mb {
+            Self::validate_max_size_mb(mb)?;
+        }
+        if let Some(count) = max_files {
+            Self::validate_max_files(count)?;
+        }
+        if let Some(mb) = max_size_mb {
+            self.max_size_mb = mb;
+        }
+        if let Some(count) = max_files {
+            self.max_files = count;
+        }
+        Ok(())
+    }
+
+    /// Check a log file size limit against [`Self::MAX_SIZE_MB`].
+    ///
+    /// # Errors
+    /// Says which range the value is outside of.
+    pub fn validate_max_size_mb(mb: u32) -> Result<(), String> {
+        check_range("log file size limit", mb, &Self::MAX_SIZE_MB)
+    }
+
+    /// Check a number of log files to keep against [`Self::MAX_FILES`].
+    ///
+    /// # Errors
+    /// Says which range the value is outside of.
+    pub fn validate_max_files(count: u32) -> Result<(), String> {
+        check_range("number of log files kept", count, &Self::MAX_FILES)
+    }
+
+    /// Put the default back for a size limit or a number of files outside
+    /// its range, as a hand-edited config file can hold. Returns the names
+    /// of the values that were reset.
+    pub fn reset_invalid_limits(&mut self) -> Vec<&'static str> {
+        let mut reset = Vec::new();
+        if Self::validate_max_size_mb(self.max_size_mb).is_err() {
+            self.max_size_mb = default_log_max_size_mb();
+            reset.push("max_size_mb");
+        }
+        if Self::validate_max_files(self.max_files).is_err() {
+            self.max_files = default_log_max_files();
+            reset.push("max_files");
+        }
+        reset
+    }
+
     /// Validate a filename format template: letters, digits, spaces,
     /// `-_.()` and the placeholders only, not starting with a dot or a
     /// space, and ending in `.log` or `.txt`. The webview chooses the format and the
@@ -283,6 +369,8 @@ impl Default for LoggingConfig {
             enabled: false,
             log_directory: None,
             filename_format: default_log_filename_format(),
+            max_size_mb: default_log_max_size_mb(),
+            max_files: default_log_max_files(),
         }
     }
 }
@@ -598,6 +686,15 @@ pub fn load_config(config_dir: &Path) -> (AppConfig, Vec<ConfigNote>) {
         config.logging.filename_format = default_log_filename_format();
     }
 
+    let reset = config.logging.reset_invalid_limits();
+    if !reset.is_empty() {
+        notes.push(ConfigNote::warn(format!(
+            "{} holds session log limits outside their range ({}) — using their defaults",
+            path.display(),
+            reset.join(", ")
+        )));
+    }
+
     (config, notes)
 }
 
@@ -777,6 +874,106 @@ mod tests {
         let warnings = texts(&notes, NoteLevel::Warn);
         assert_eq!(warnings.len(), 1, "{notes:?}");
         assert!(warnings[0].contains("filename format"), "{}", warnings[0]);
+    }
+
+    #[test]
+    fn a_config_without_log_limits_gets_the_defaults() {
+        // A config file written before the limits existed.
+        let dir = scratch_dir();
+        std::fs::write(dir.join("config.json"), r#"{"logging":{"enabled":true}}"#).unwrap();
+        let (config, notes) = load_config(&dir);
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(config.logging.max_size_mb, 10);
+        assert_eq!(config.logging.max_files, 10);
+        assert!(texts(&notes, NoteLevel::Warn).is_empty(), "{notes:?}");
+    }
+
+    #[test]
+    fn saved_log_limits_outside_their_range_get_the_defaults() {
+        // Neither can be switched off in a hand-edited config file.
+        let dir = scratch_dir();
+        std::fs::write(
+            dir.join("config.json"),
+            r#"{"logging":{"enabled":true,"max_size_mb":0,"max_files":4000000000}}"#,
+        )
+        .unwrap();
+        let (config, notes) = load_config(&dir);
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert!(config.logging.enabled);
+        assert_eq!(config.logging.max_size_mb, 10);
+        assert_eq!(config.logging.max_files, 10);
+        let warnings = texts(&notes, NoteLevel::Warn);
+        assert_eq!(warnings.len(), 1, "{notes:?}");
+        assert!(
+            warnings[0].contains("max_size_mb, max_files"),
+            "{}",
+            warnings[0]
+        );
+    }
+
+    /// A limit that is no whole number from 0 to 4294967295 is not a value
+    /// outside its range but a file that cannot be read, as with every
+    /// other number in the config: the whole file is set aside, and the
+    /// limits are the defaults with the rest.
+    #[test]
+    fn a_log_limit_of_the_wrong_type_makes_the_config_file_unreadable() {
+        for limit in ["-1", "1.5", "\"10\"", "null", "5000000000"] {
+            let dir = scratch_dir();
+            let file =
+                format!(r#"{{"logging":{{"enabled":true,"max_size_mb":{limit},"max_files":3}}}}"#);
+            std::fs::write(dir.join("config.json"), &file).unwrap();
+            let (config, notes) = load_config(&dir);
+            let kept = std::fs::read(dir.join("config.json.bad"));
+            std::fs::remove_dir_all(&dir).unwrap();
+            assert_eq!(config.logging.max_size_mb, 10, "{limit}");
+            assert_eq!(config.logging.max_files, 10, "{limit}");
+            assert!(!config.logging.enabled, "{limit}");
+            assert_eq!(kept.unwrap(), file.as_bytes(), "{limit}");
+            assert_eq!(texts(&notes, NoteLevel::Error).len(), 1, "{notes:?}");
+        }
+    }
+
+    /// What `logging_save_config` does with the limits the webview passes.
+    #[test]
+    fn limits_are_set_only_when_all_that_are_given_are_in_range() {
+        let mut logging = LoggingConfig::default();
+        assert_eq!(logging.set_limits(Some(25), Some(4)), Ok(()));
+        assert_eq!((logging.max_size_mb, logging.max_files), (25, 4));
+        // One that is not passed stays as it is.
+        assert_eq!(logging.set_limits(None, Some(7)), Ok(()));
+        assert_eq!((logging.max_size_mb, logging.max_files), (25, 7));
+        assert_eq!(logging.set_limits(Some(256), None), Ok(()));
+        assert_eq!((logging.max_size_mb, logging.max_files), (256, 7));
+        assert_eq!(logging.set_limits(None, None), Ok(()));
+        assert_eq!((logging.max_size_mb, logging.max_files), (256, 7));
+        // Neither limit can be switched off or put out of its range, and a
+        // value in range is not taken together with one that is not.
+        for (mb, count) in [
+            (Some(0), Some(5)),
+            (Some(5), Some(0)),
+            (Some(257), None),
+            (None, Some(51)),
+            (Some(u32::MAX), Some(u32::MAX)),
+        ] {
+            assert!(logging.set_limits(mb, count).is_err(), "{mb:?} {count:?}");
+            assert_eq!((logging.max_size_mb, logging.max_files), (256, 7));
+        }
+    }
+
+    #[test]
+    fn log_limits_are_checked_against_their_ranges() {
+        for mb in [1, 10, 256] {
+            assert_eq!(LoggingConfig::validate_max_size_mb(mb), Ok(()), "{mb}");
+        }
+        for mb in [0, 257, 1024, u32::MAX] {
+            assert!(LoggingConfig::validate_max_size_mb(mb).is_err(), "{mb}");
+        }
+        for count in [1, 10, 50] {
+            assert_eq!(LoggingConfig::validate_max_files(count), Ok(()), "{count}");
+        }
+        for count in [0, 51, 100, u32::MAX] {
+            assert!(LoggingConfig::validate_max_files(count).is_err(), "{count}");
+        }
     }
 
     /// The `ssl_mode` a config file with `json_value` for it loads as, and
