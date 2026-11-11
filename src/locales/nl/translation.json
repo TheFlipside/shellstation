@@ -498,7 +498,8 @@
     "edit": "Bewerken",
     "delete": "Verwijderen",
     "cancel": "Annuleren",
-    "save": "Opslaan"
+    "save": "Opslaan",
+    "closeAllNotifications": "Alles sluiten ({{count}})"
   },
   "userIdent": {
     "promptTitle": "Gebruikersidentiteit instellen",

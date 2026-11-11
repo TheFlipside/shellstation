@@ -498,7 +498,8 @@
     "edit": "Edytuj",
     "delete": "Usuń",
     "cancel": "Anuluj",
-    "save": "Zapisz"
+    "save": "Zapisz",
+    "closeAllNotifications": "Zamknij wszystkie ({{count}})"
   },
   "userIdent": {
     "promptTitle": "Ustaw tożsamość użytkownika",

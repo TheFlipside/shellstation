@@ -498,7 +498,8 @@
     "edit": "Редактировать",
     "delete": "Удалить",
     "cancel": "Отмена",
-    "save": "Сохранить"
+    "save": "Сохранить",
+    "closeAllNotifications": "Закрыть все ({{count}})"
   },
   "userIdent": {
     "promptTitle": "Установить идентификатор пользователя",

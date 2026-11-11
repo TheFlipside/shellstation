@@ -498,7 +498,8 @@
     "edit": "Redigera",
     "delete": "Ta bort",
     "cancel": "Avbryt",
-    "save": "Spara"
+    "save": "Spara",
+    "closeAllNotifications": "Stäng alla ({{count}})"
   },
   "userIdent": {
     "promptTitle": "Ställ in användaridentitet",

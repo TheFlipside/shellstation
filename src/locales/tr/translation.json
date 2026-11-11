@@ -498,7 +498,8 @@
     "edit": "Düzenle",
     "delete": "Sil",
     "cancel": "İptal",
-    "save": "Kaydet"
+    "save": "Kaydet",
+    "closeAllNotifications": "Tümünü kapat ({{count}})"
   },
   "userIdent": {
     "promptTitle": "Kullanıcı kimliğini ayarla",

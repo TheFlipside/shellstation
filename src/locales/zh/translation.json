@@ -498,7 +498,8 @@
     "edit": "编辑",
     "delete": "删除",
     "cancel": "取消",
-    "save": "保存"
+    "save": "保存",
+    "closeAllNotifications": "全部关闭 ({{count}})"
   },
   "userIdent": {
     "promptTitle": "设置用户身份",

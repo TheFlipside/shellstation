@@ -498,7 +498,8 @@
     "edit": "Modifica",
     "delete": "Elimina",
     "cancel": "Annulla",
-    "save": "Salva"
+    "save": "Salva",
+    "closeAllNotifications": "Chiudi tutte ({{count}})"
   },
   "userIdent": {
     "promptTitle": "Imposta identità utente",

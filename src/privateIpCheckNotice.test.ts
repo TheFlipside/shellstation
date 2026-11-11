@@ -31,7 +31,8 @@ describe("showPrivateIpCheckOffNotice", () => {
     showPrivateIpCheckOffNotice();
     const toasts = useToastStore.getState().toasts;
     expect(toasts).toHaveLength(1);
-    expect(toasts[0]).toMatchObject({ level: "error", sticky: true });
+    // Closed alone, so that it does not go with a pile of other notices.
+    expect(toasts[0]).toMatchObject({ level: "error", sticky: true, closeAlone: true });
     // The real English text, so the placeholders are checked as well.
     expect(toasts[0].message).toContain(
       "Connections to private and loopback addresses are not blocked.",

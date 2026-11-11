@@ -36,7 +36,7 @@ describe("showSessionNotLoggedNotice", () => {
     showSessionNotLoggedNotice("s1");
     const toasts = useToastStore.getState().toasts;
     expect(toasts).toHaveLength(1);
-    expect(toasts[0]).toMatchObject({ level: "warning", sticky: true });
+    expect(toasts[0]).toMatchObject({ level: "warning", sticky: true, closeAlone: false });
     // The real English text, so the placeholder is checked as well.
     expect(toasts[0].message).toBe(
       'Session "core-router" is not being logged: its log file could not be created or written to. The application log has the details.',

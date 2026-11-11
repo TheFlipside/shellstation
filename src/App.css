@@ -76,7 +76,8 @@ body,
 .dialog,
 .sidebar-tree,
 .custom-select-dropdown,
-.highlight-rules-list {
+.highlight-rules-list,
+.toast-list {
   scrollbar-width: thin;
   scrollbar-color: var(--color-surface2) transparent;
 }
@@ -85,7 +86,8 @@ body,
 .dialog::-webkit-scrollbar,
 .sidebar-tree::-webkit-scrollbar,
 .custom-select-dropdown::-webkit-scrollbar,
-.highlight-rules-list::-webkit-scrollbar {
+.highlight-rules-list::-webkit-scrollbar,
+.toast-list::-webkit-scrollbar {
   width: 8px;
   height: 8px;
 }
@@ -94,7 +96,8 @@ body,
 .dialog::-webkit-scrollbar-track,
 .sidebar-tree::-webkit-scrollbar-track,
 .custom-select-dropdown::-webkit-scrollbar-track,
-.highlight-rules-list::-webkit-scrollbar-track {
+.highlight-rules-list::-webkit-scrollbar-track,
+.toast-list::-webkit-scrollbar-track {
   background: transparent;
 }
 
@@ -102,7 +105,8 @@ body,
 .dialog::-webkit-scrollbar-thumb,
 .sidebar-tree::-webkit-scrollbar-thumb,
 .custom-select-dropdown::-webkit-scrollbar-thumb,
-.highlight-rules-list::-webkit-scrollbar-thumb {
+.highlight-rules-list::-webkit-scrollbar-thumb,
+.toast-list::-webkit-scrollbar-thumb {
   background-color: var(--color-surface2);
   border-radius: 4px;
 }
@@ -111,7 +115,8 @@ body,
 .dialog::-webkit-scrollbar-thumb:hover,
 .sidebar-tree::-webkit-scrollbar-thumb:hover,
 .custom-select-dropdown::-webkit-scrollbar-thumb:hover,
-.highlight-rules-list::-webkit-scrollbar-thumb:hover {
+.highlight-rules-list::-webkit-scrollbar-thumb:hover,
+.toast-list::-webkit-scrollbar-thumb:hover {
   background-color: var(--color-overlay0);
 }
 
@@ -1259,18 +1264,96 @@ body,
 
 /* ── Toast Notifications ──────────────────────────────────────── */
 
+/* The stack is never taller than the window: the lists in it scroll. It
+   reaches to the window's edges, and the lists keep the toasts 16px from
+   them by padding, since a list cuts off what leaves it and the toasts'
+   shadows need the room.
+
+   Only the toasts and the buttons take the pointer. The room around them is
+   the stack's as well, and lies over the tab bar and a terminal's scroll
+   bar, but a click there goes to what is under it. */
 .toast-container {
   position: fixed;
-  top: 16px;
-  right: 16px;
+  top: 0;
+  right: 0;
   z-index: 9999;
   display: flex;
   flex-direction: column;
+  max-width: 452px;
+  max-height: 100vh;
+  padding-top: 8px;
+  pointer-events: none;
+}
+
+/* The sticky toasts, or the others: a button that closes them, above a list
+   that scrolls. */
+.toast-group {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+/* The sticky toasts take up to half the window's height and keep it, however
+   many other toasts there are; those get the rest. With no other toasts, the
+   sticky ones have the whole height. */
+.toast-group-sticky {
+  flex: 0 0 auto;
+  max-height: 50vh;
+}
+
+.toast-group-sticky:last-child {
+  flex-shrink: 1;
+  max-height: none;
+}
+
+.toast-close-all {
+  flex: none;
+  align-self: flex-end;
+  margin: 8px 16px 0;
+  padding: 4px 10px;
+  border: 1px solid var(--color-surface2);
+  border-radius: 4px;
+  background: var(--color-surface1);
+  color: var(--color-text);
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
+  pointer-events: auto;
+  /* The stack lies over the tab bar, which drags the window. */
+  -webkit-app-region: no-drag;
+}
+
+.toast-close-all:hover,
+.toast-close-all:focus-visible {
+  background: var(--color-surface2);
+}
+
+.toast-list {
+  display: flex;
+  flex-direction: column;
   gap: 8px;
-  max-width: 420px;
+  min-height: 0;
+  padding: 8px 16px 16px;
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
+/* A list that is too tall for its room takes the pointer whole, the room
+   around its toasts included: its scroll bar could not be used otherwise. */
+.toast-list-scrolls {
+  pointer-events: auto;
+  /* Its scroll bar can lie over the tab bar as well. */
+  -webkit-app-region: no-drag;
 }
 
 .toast {
+  /* In a list that is too tall, a toast keeps its height and the list
+     scrolls. */
+  flex-shrink: 0;
+  pointer-events: auto;
+  /* As for the button: a toast can lie over the tab bar. */
+  -webkit-app-region: no-drag;
   display: flex;
   align-items: center;
   gap: 10px;

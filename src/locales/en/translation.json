@@ -499,7 +499,8 @@
     "edit": "Edit",
     "delete": "Delete",
     "cancel": "Cancel",
-    "save": "Save"
+    "save": "Save",
+    "closeAllNotifications": "Close all ({{count}})"
   },
   "userIdent": {
     "promptTitle": "Set User Identity",

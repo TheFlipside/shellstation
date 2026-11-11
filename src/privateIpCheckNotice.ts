@@ -8,6 +8,10 @@ import { useToastStore } from "./stores/toastStore";
  * dismissed, or until the check is switched on, when it would no longer be
  * true. Returns a function that takes the notice down. A second call while
  * the notice is up shows the same toast, which either function takes down.
+ *
+ * It is closed alone: the button that closes all sticky toasts, which is
+ * there for a pile of notices of another kind, such as one for every session
+ * that is not logged, leaves this one up.
  */
 export function showPrivateIpCheckOffNotice(): () => void {
   if (useSettingsStore.getState().restrictPrivateIps) return () => undefined;
@@ -18,7 +22,7 @@ export function showPrivateIpCheckOffNotice(): () => void {
       section: i18n.t("settings.security"),
     }),
     "error",
-    { sticky: true },
+    { sticky: true, closeAlone: true },
   );
   const unsubscribers: (() => void)[] = [];
   const stopWatching = (): void => {

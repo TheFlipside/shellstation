@@ -498,7 +498,8 @@
     "edit": "편집",
     "delete": "삭제",
     "cancel": "취소",
-    "save": "저장"
+    "save": "저장",
+    "closeAllNotifications": "모두 닫기 ({{count}})"
   },
   "userIdent": {
     "promptTitle": "사용자 ID 설정",
