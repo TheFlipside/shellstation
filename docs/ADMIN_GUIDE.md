@@ -98,8 +98,8 @@ The PostgreSQL role name becomes the `owner` value in RLS — each user sees the
 
 Two things to avoid:
 
-- **A role named `local`.** That is the placeholder owner of rows from before RLS was set up. A role with that name would own all such rows, personal ones included. Other users can only claim the shared ones. Per-user mappings from before they had an owner carry the same placeholder (section 5). There a role with that name gets no more than any other role, but it cannot save a mapping of its own.
-- **Granting `shellstation_admin` to regular users.** Members of the role that owns the tables may change the `owner` of any row they can see, which means their own rows and every shared one.
+- **A role named `local`.** That is the placeholder owner of rows from before RLS was set up. A role with that name would own all such rows, personal ones included. Nobody else can claim one once row-level security is on. Per-user mappings from before they had an owner carry the same placeholder (section 5). There a role with that name gets no more than any other role, but it cannot save a mapping of its own.
+- **Granting `shellstation_admin` to regular users.** Members of the role that owns the tables have its rights over them. They get past the triggers, so they can put their rows into anyone's folder, and they can change the row-level security itself.
 
 ### 2.2 Per-User Grants (Alternative)
 
@@ -175,7 +175,7 @@ For older PostgreSQL versions, set a short expiry and coordinate with the user t
 
 ## 4. Removing a User
 
-Run these as a superuser (e.g., `postgres`). Row-level security applies to `shellstation_admin` as well, so as the admin the `UPDATE`s would only reach the user's shared items. Once the triggers from section 5 are installed, only a superuser or the role that owns the tables (or a member of it) can change `owner`, apart from a user claiming a placeholder `'local'` row. If you leave a user's items orphaned instead, never create a role with that name again, because it would own them.
+Run these as a superuser (e.g., `postgres`). Row-level security applies to `shellstation_admin` as well, so as the admin the `UPDATE`s would reach none of the user's items. Once the triggers from section 5 are installed, only a superuser or the role that owns the tables (or a member of it) can change `owner`, apart from a user claiming a placeholder `'local'` row. If you leave a user's items orphaned instead, never create a role with that name again, because it would own them. Reassign a user's folders as whole trees. A user whose folder ends up below a folder of someone else's keeps what is in it and can rename it and move it out, but can put nothing new into it until then.
 
 ```sql
 \c shellstation
@@ -218,20 +218,38 @@ When a new ShellStation version includes database schema changes:
 
 **Row-level security changes (both options):** The RLS setup (policies, and the triggers that keep shared items with their owner) runs on every startup. Only the role that owns the tables can apply it, though. That is normally `shellstation_admin`, which created the schema in section 1. For any other role the setup ends at its check that the role owns the tables, and that failure is logged and skipped.
 
-So when a release's notes mention a change to the RLS setup, start one instance with the owning role's credentials once after updating. This applies under Option B too. Until you do, the change is not in effect for anyone. For the release that adds these triggers, that means any user can still take over, move or delete other users' shared items.
+So when a release's notes mention a change to the RLS setup, start one instance with the owning role's credentials once after updating. This applies under Option B too. Until you do, the change is not in effect for anyone. For the release that adds these triggers, that means any user can still take over, move or delete other users' shared items. For the release that leaves shared items to their owner (below), it means any user can still rewrite them.
 
 Under Option B, too, the triggers are installed by the owning role, as under Option A. They do not stop a user who holds `TRIGGER` or `TRUNCATE` on the tables, though, and Option B grants both ([DESIGN.md §4.5.1](DESIGN.md#451-how-rls-works)).
 
 To check that the triggers are installed and enabled, run the query below. It does not show whether the functions behind them are current; starting the owning role once after an update takes care of that.
 
 ```sql
--- All four should be listed, with tgenabled = 'O'
+-- All six should be listed, with tgenabled = 'O'
 SELECT tgrelid::regclass, tgname, tgenabled FROM pg_trigger
 WHERE tgname IN ('folders_keep_owner', 'sessions_keep_owner',
-                 'folders_keep_place', 'sessions_keep_place');
+                 'folders_keep_place', 'sessions_keep_place',
+                 'folders_own_folder', 'sessions_own_folder');
 ```
 
 If any is missing, start an instance with the owning role's credentials.
+
+**Shared items (the release that leaves them to their owner):** Until this release any user could change another user's shared folder or session with a statement of their own, such as the host a shared session connects to, and could put a session of their own into another user's folder. From this release on only its owner changes a shared item, and an item goes only into a folder of its owner's ([DESIGN.md §4.5.1](DESIGN.md#451-how-rls-works)). ShellStation itself never did either. What users can notice is at connecting: a credential profile or login sequence that a session's own row names (Bulk Edit writes a login sequence there) now counts for that session's owner only, and a jump host that is another user's session needs the user's own credential mapping. The start of the owning role applies the rest. To check:
+
+```sql
+-- No rows: the two policies that let anyone update a shared item are gone
+SELECT tablename, policyname FROM pg_policies
+WHERE policyname IN ('folders_shared_update', 'sessions_shared_update');
+```
+
+The triggers query above shows the two new triggers. What was changed or put somewhere before this release stays as it is. A change to a shared item cannot be told from its owner's own, so owners should look over the sessions they share, their hosts and jump hosts above all. Items in a folder of another user's can be listed, as a superuser:
+
+```sql
+SELECT s.id, s.name, s.owner, f.name AS folder, f.owner AS folder_owner
+FROM sessions s JOIN folders f ON f.id = s.folder_id WHERE s.owner <> f.owner;
+SELECT c.id, c.name, c.owner, p.name AS folder, p.owner AS folder_owner
+FROM folders c JOIN folders p ON p.id = c.parent_id WHERE c.owner <> p.owner;
+```
 
 **Per-user mappings (the release that gives them an owner):** Each user's mappings of sessions to their own credential profiles and login sequences (`session_credentials`, `session_login_sequences`) are protected by row-level security from this release on ([DESIGN.md §4.5.1](DESIGN.md#451-how-rls-works)). The release has a migration, so the owning role starts first, as above, and that start also applies the protection. To check it:
 
@@ -280,7 +298,7 @@ RLS policies, constraints, and the migration tracking table are included in the 
 
 ## 7. Locks Held by a User
 
-Every user of the database can hold a lock that other users' changes need, on purpose or not. A user can lock every shared item, or a whole table, with the same privileges ShellStation itself needs, so those cannot be taken away. A transaction left open in `psql` or another tool does the same without meaning to, and so does a client that has stopped responding in the middle of a change. See [DESIGN.md §4.5.3](DESIGN.md#453-locks) for what ShellStation does about it.
+Every user of the database can hold a lock that other users' changes need, on purpose or not. A user can lock a whole table with the same privileges ShellStation itself needs, so those cannot be taken away. Single items a user can lock only where they are the user's own, with one exception: a row of a user's own that refers to another user's session keeps that session from being deleted, though not from being changed, while the transaction that wrote it is open. Such a row is a session that names the other as its jump host, for which its ID is enough, shared or not, a mapping for it, or a row in the central `credentials` table, which the app does not use and which has no row-level security. A transaction left open in `psql` or another tool does the same without meaning to, and so does a client that has stopped responding in the middle of a change. See [DESIGN.md §4.5.3](DESIGN.md#453-locks) for what ShellStation does about it.
 
 **What users see.** A change that needs a lock someone else holds fails after 5 seconds with `canceling statement due to lock timeout`, and can be tried again. If a whole table is locked, the session tree does not load, for anyone and whoever owns the items, and ShellStation shows an error instead of waiting. Before this release it waited without end in both cases.
 

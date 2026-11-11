@@ -354,6 +354,22 @@ const MAPPING_TABLES: [&str; 2] = ["session_credentials", "session_login_sequenc
 /// other error is a setup that the owning role could not finish.
 const RLS_SETUP_NOT_OWNER: &str = "RLS setup: the current role does not own the tables";
 
+/// Policies of earlier versions that [`setup_postgres_rls`] drops, each with
+/// its table.
+///
+/// `*_shared_update` let every role update every shared row. The app never
+/// used that: its commands change only rows of the user's own. A role with
+/// its own statements could, and so rewrite another user's shared session:
+/// its host, port, user name and jump host, which decide where everyone who
+/// opens the session sends their credentials, or its switch for legacy
+/// algorithms. The same policy is what let any role take a row lock on a
+/// shared row, since `SELECT … FOR UPDATE` goes by the policies for
+/// `UPDATE`.
+const OBSOLETE_POLICIES: [(&str, &str); 2] = [
+    ("folders_shared_update", "folders"),
+    ("sessions_shared_update", "sessions"),
+];
+
 /// The tables under row-level security; see [`setup_postgres_rls`].
 const RLS_TABLES: [&str; 4] = ["folders", "sessions", MAPPING_TABLES[0], MAPPING_TABLES[1]];
 
@@ -435,63 +451,139 @@ async fn setup_postgres_rls(pool: &sqlx::PgPool) -> Result<(), String> {
     // would meet the same, so the setup ends there (`RlsStepEnds`).
     let mut failed: Vec<String> = Vec::new();
 
-    // Triggers keep a shared row with its owner and where its owner put it.
-    // Anyone may update a shared row, and PostgreSQL accepts the updated row
-    // if it passes any permissive policy. That leaves two ways around the
-    // owner-only rule of `*_shared_delete`:
+    // Triggers keep a row with its owner and in a folder of its owner's.
     //
-    // - `SET owner = current_user` passes `*_owner_all` and makes the row the
-    //   updater's. A policy cannot stop this, because a `WITH CHECK` sees
-    //   only the new row. Owner changes are left to superusers (who reassign
-    //   a removed user's rows, ADMIN_GUIDE.md §4) and the table owner, plus
-    //   claiming a placeholder `'local'` row for oneself, as the fix-up at
-    //   the top of this function does.
-    // - Moving the row under a folder of one's own (`folder_id`, `parent_id`)
-    //   hides it from everyone else, and deleting that folder deletes it
-    //   too: the foreign keys cascade, and a cascade is not subject to RLS.
-    //   Moves are left to the row's owner, which the app's own move commands
-    //   already require, and to the table owner and superusers.
+    // A shared row can be changed by its owner alone: the policies give no
+    // one else an UPDATE on it (see `OBSOLETE_POLICIES` for when they did).
+    // What the policies cannot say is left to three functions:
+    //
+    // - `shellstation_keep_owner`: an owner cannot hand a row to another
+    //   role. Owner changes are left to superusers (who reassign a removed
+    //   user's rows, ADMIN_GUIDE.md §4) and the table owner, plus claiming a
+    //   placeholder `'local'` row for oneself, as the fix-up at the top of
+    //   this function does. That fix-up finds such rows at the first setup
+    //   only, while row-level security is not yet on; once it is, the
+    //   policies let no role update a row that is not its own.
+    // - `shellstation_keep_place`: a row is moved (`folder_id`, `parent_id`)
+    //   by its owner, the table owner or a superuser.
+    // - `shellstation_own_folder`: a row is put only into a folder of the
+    //   role's own, when it is created and when it is moved. A new row has
+    //   only its `owner` checked by the policies, and the foreign key to its
+    //   folder is checked without RLS, so anyone could otherwise put a
+    //   session of their own into another user's shared folder, where it
+    //   shows among that user's. Top-level folders have no folder to check.
+    //   Every folder above must be the role's own as well, up to the top: a
+    //   folder of the role's that is in another user's, as one may be from
+    //   before this was refused, would otherwise stay a place to put things
+    //   into that user's tree. A folder above that the role cannot see is
+    //   not its own either. The same look up the tree finds a folder that
+    //   would be put into itself or below itself, which is refused as well:
+    //   the queries that go down a folder's tree would not come to an end
+    //   in such a ring. That is for folders only; a session has an id too,
+    //   but is no folder to be found above one.
+    //
+    // The first two were all that kept a shared row from being taken over
+    // or moved away while anyone could update it. They stay for a database
+    // whose owning role has not started this version yet, and as a second
+    // line behind the policies.
     //
     // The functions run as the updating user, so every name in them is
     // pinned: a temporary table is found before `pg_catalog` unless the path
     // says otherwise, and a temp table named `pg_class` would otherwise let
-    // any user claim to own the table. They are replaced on every run so
-    // that a fix to them reaches existing databases, which locks no table;
-    // only the table owner gets this far, the ownership check above stops
-    // everyone else. A failure to replace one (a function owned by another
-    // role) does not stop the steps after it, but its triggers are then
-    // left alone: a new one would call a function that is not this role's.
-    let functions = [
-        (
-            "shellstation_keep_owner",
-            "NEW.owner IS DISTINCT FROM OLD.owner \
-             AND NOT (OLD.owner = 'local' AND NEW.owner = current_user)",
-            "only the table owner can change the owner of a % row",
-        ),
-        (
-            "shellstation_keep_place",
-            "OLD.owner IS DISTINCT FROM current_user",
-            "only its owner can move a % row",
-        ),
-    ];
-    let mut replaced: Vec<&str> = Vec::new();
-    for (name, refuse_when, message) in functions {
-        let sql = format!(
-            "CREATE OR REPLACE FUNCTION {name}() RETURNS trigger \
-             LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp AS $fn$ \
-             BEGIN \
-                 IF {refuse_when} \
-                    AND NOT pg_catalog.pg_has_role(current_user, \
-                        (SELECT relowner FROM pg_catalog.pg_class WHERE oid = TG_RELID), 'MEMBER') \
-                 THEN \
+    // any user claim to own the table. `folders` is named with the schema of
+    // the table the trigger is on, for the same reason. They are replaced on
+    // every run so that a fix to them reaches existing databases, which
+    // locks no table; only the table owner gets this far, the ownership
+    // check above stops everyone else. A failure to replace one (a function
+    // owned by another role) does not stop the steps after it, but its
+    // triggers are then left alone: a new one would call a function that is
+    // not this role's.
+    let table_owner = "pg_catalog.pg_has_role(current_user, \
+         (SELECT relowner FROM pg_catalog.pg_class WHERE oid = TG_RELID), 'MEMBER')";
+    let refuse = |when: &str, message: &str| {
+        format!(
+            "BEGIN \
+                 IF {when} AND NOT {table_owner} THEN \
                      RAISE EXCEPTION '{message}', TG_TABLE_NAME \
                          USING ERRCODE = 'insufficient_privilege'; \
                  END IF; \
                  RETURN NEW; \
-             END $fn$"
+             END"
+        )
+    };
+    let functions = [
+        (
+            "shellstation_keep_owner",
+            refuse(
+                "NEW.owner IS DISTINCT FROM OLD.owner \
+                 AND NOT (OLD.owner = 'local' AND NEW.owner = current_user)",
+                "only the table owner can change the owner of a % row",
+            ),
+        ),
+        (
+            "shellstation_keep_place",
+            refuse(
+                "OLD.owner IS DISTINCT FROM current_user",
+                "only its owner can move a % row",
+            ),
+        ),
+        // The column that names the folder is the trigger's argument. An
+        // update that leaves it as it was is not a move, whatever else it
+        // changes.
+        (
+            "shellstation_own_folder",
+            format!(
+                "DECLARE folder text; was text; own boolean; ring boolean; \
+                 BEGIN \
+                     EXECUTE pg_catalog.format('SELECT ($1).%I', TG_ARGV[0]) USING NEW INTO folder; \
+                     IF TG_OP = 'UPDATE' THEN \
+                         EXECUTE pg_catalog.format('SELECT ($1).%I', TG_ARGV[0]) USING OLD INTO was; \
+                         IF folder IS NOT DISTINCT FROM was THEN \
+                             RETURN NEW; \
+                         END IF; \
+                     END IF; \
+                     IF folder IS NULL OR {table_owner} THEN \
+                         RETURN NEW; \
+                     END IF; \
+                     EXECUTE pg_catalog.format( \
+                         'WITH RECURSIVE up AS ( \
+                              SELECT f.id, f.parent_id, f.owner FROM %1$I.folders f \
+                              WHERE f.id = $1 \
+                              UNION \
+                              SELECT f.id, f.parent_id, f.owner FROM %1$I.folders f \
+                              JOIN up ON f.id = up.parent_id) \
+                          SELECT count(*) > 0 AND bool_and(up.owner = current_user) \
+                                 AND NOT EXISTS ( \
+                                     SELECT 1 FROM up below \
+                                     WHERE below.parent_id IS NOT NULL \
+                                       AND NOT EXISTS (SELECT 1 FROM up above \
+                                                       WHERE above.id = below.parent_id)), \
+                                 bool_or(up.id = $2) \
+                          FROM up', \
+                         TG_TABLE_SCHEMA) USING folder, NEW.id INTO own, ring; \
+                     IF ring AND TG_TABLE_NAME = 'folders' THEN \
+                         RAISE EXCEPTION \
+                             'a % row cannot be put into itself or below itself', \
+                             TG_TABLE_NAME USING ERRCODE = 'insufficient_privilege'; \
+                     END IF; \
+                     IF own IS NOT TRUE THEN \
+                         RAISE EXCEPTION \
+                             'a % row can only be put into one''s own folders, and not below another user''s', \
+                             TG_TABLE_NAME USING ERRCODE = 'insufficient_privilege'; \
+                     END IF; \
+                     RETURN NEW; \
+                 END"
+            ),
+        ),
+    ];
+    let mut replaced: Vec<&str> = Vec::new();
+    for (name, body) in &functions {
+        let sql = format!(
+            "CREATE OR REPLACE FUNCTION {name}() RETURNS trigger \
+             LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp AS $fn$ {body} $fn$"
         );
         match rls_setup_step(pool, &format!("function {name}"), &sql).await {
-            Ok(()) => replaced.push(name),
+            Ok(()) => replaced.push(*name),
             Err(failure) => {
                 failed.push(failure.message);
                 if failure.ends == RlsStepEnds::Setup {
@@ -500,30 +592,58 @@ async fn setup_postgres_rls(pool: &sqlx::PgPool) -> Result<(), String> {
             }
         }
     }
+    // Each trigger with its table, its function, and when it fires. The
+    // first two functions are for updates that change their column; the
+    // third is for new rows as well, and looks at the column itself.
+    let on_change = |column: &str, table: &str, function: &str| {
+        format!(
+            "BEFORE UPDATE OF {column} ON {table} FOR EACH ROW \
+             WHEN (OLD.{column} IS DISTINCT FROM NEW.{column}) \
+             EXECUTE FUNCTION {function}()"
+        )
+    };
+    let on_placing = |column: &str, table: &str| {
+        format!(
+            "BEFORE INSERT OR UPDATE OF {column} ON {table} FOR EACH ROW \
+             EXECUTE FUNCTION shellstation_own_folder('{column}')"
+        )
+    };
     let triggers = [
         (
             "folders_keep_owner",
             "folders",
-            "owner",
             "shellstation_keep_owner",
+            on_change("owner", "folders", "shellstation_keep_owner"),
         ),
         (
             "sessions_keep_owner",
             "sessions",
-            "owner",
             "shellstation_keep_owner",
+            on_change("owner", "sessions", "shellstation_keep_owner"),
         ),
         (
             "folders_keep_place",
             "folders",
-            "parent_id",
             "shellstation_keep_place",
+            on_change("parent_id", "folders", "shellstation_keep_place"),
         ),
         (
             "sessions_keep_place",
             "sessions",
-            "folder_id",
             "shellstation_keep_place",
+            on_change("folder_id", "sessions", "shellstation_keep_place"),
+        ),
+        (
+            "folders_own_folder",
+            "folders",
+            "shellstation_own_folder",
+            on_placing("parent_id", "folders"),
+        ),
+        (
+            "sessions_own_folder",
+            "sessions",
+            "shellstation_own_folder",
+            on_placing("folder_id", "sessions"),
         ),
     ];
 
@@ -533,10 +653,17 @@ async fn setup_postgres_rls(pool: &sqlx::PgPool) -> Result<(), String> {
     // refuses everything to everyone; with it off, its policies do nothing.
     // FORCE makes the policies apply to the table owner as well.
     //
-    // A policy that is there is left as it is. When something is missing,
-    // the block takes the table's lock and looks again, since two starts of
-    // the owning role at the same time would both find it missing, and the
-    // second would fail at a policy that is there by then.
+    // A policy that is there is left as it is, but for the ones in
+    // `OBSOLETE_POLICIES`, which are dropped in the same statement. When
+    // there is something to do, the block takes the table's lock and looks
+    // again, since two starts of the owning role at the same time would
+    // both find it to do, and the second would fail at a policy that is
+    // there, or gone, by then.
+    //
+    // A shared row has a policy for reading it and none for changing it:
+    // the owner's `*_owner_all` is the only one that lets a row be updated.
+    // `*_shared_delete` says nothing that `*_owner_all` does not, and is
+    // left as it is.
     let policies = [
         // Folders
         (
@@ -550,13 +677,6 @@ async fn setup_postgres_rls(pool: &sqlx::PgPool) -> Result<(), String> {
             "folders_shared_read",
             "folders",
             "SELECT",
-            "visibility = 'shared'",
-            None,
-        ),
-        (
-            "folders_shared_update",
-            "folders",
-            "UPDATE",
             "visibility = 'shared'",
             None,
         ),
@@ -579,13 +699,6 @@ async fn setup_postgres_rls(pool: &sqlx::PgPool) -> Result<(), String> {
             "sessions_shared_read",
             "sessions",
             "SELECT",
-            "visibility = 'shared'",
-            None,
-        ),
-        (
-            "sessions_shared_update",
-            "sessions",
-            "UPDATE",
             "visibility = 'shared'",
             None,
         ),
@@ -706,9 +819,9 @@ async fn setup_postgres_rls(pool: &sqlx::PgPool) -> Result<(), String> {
         }
 
         // The table's triggers, where their function is this run's.
-        for (name, _, column, function) in triggers
+        for (name, _, _, definition) in triggers
             .iter()
-            .filter(|trigger| trigger.1 == table && replaced.contains(&trigger.3))
+            .filter(|trigger| trigger.1 == table && replaced.contains(&trigger.2))
         {
             steps.push((
                 format!("trigger {name}"),
@@ -717,10 +830,7 @@ async fn setup_postgres_rls(pool: &sqlx::PgPool) -> Result<(), String> {
                          IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_trigger \
                                         WHERE tgrelid = '{table}'::pg_catalog.regclass \
                                           AND tgname = '{name}' AND NOT tgisinternal) THEN \
-                             CREATE TRIGGER {name} BEFORE UPDATE OF {column} ON {table} \
-                                 FOR EACH ROW \
-                                 WHEN (OLD.{column} IS DISTINCT FROM NEW.{column}) \
-                                 EXECUTE FUNCTION {function}(); \
+                             CREATE TRIGGER {name} {definition}; \
                          END IF; \
                      EXCEPTION WHEN duplicate_object THEN NULL; \
                      END $$"
@@ -736,6 +846,17 @@ async fn setup_postgres_rls(pool: &sqlx::PgPool) -> Result<(), String> {
         );
         let mut anything_missing = vec![rls_off.clone()];
         let mut create_missing = Vec::new();
+        for (name, _) in OBSOLETE_POLICIES.iter().filter(|policy| policy.1 == table) {
+            let present = format!(
+                "EXISTS (SELECT 1 FROM pg_catalog.pg_policy \
+                         WHERE polrelid = '{table}'::pg_catalog.regclass \
+                           AND polname = '{name}')"
+            );
+            create_missing.push(format!(
+                "IF {present} THEN DROP POLICY {name} ON {table}; END IF; "
+            ));
+            anything_missing.push(present);
+        }
         for (name, _, cmd, using_expr, check_expr) in
             policies.iter().filter(|policy| policy.1 == table)
         {
@@ -1578,8 +1699,20 @@ pub fn run() {
                                 sqlx::query_scalar::<_, String>("SELECT current_user")
                                     .fetch_one(&pool)
                                     .await
-                                    .ok()
                             });
+                            // Without it the app takes no item for the
+                            // user's own: the window shows none as theirs to
+                            // edit, and a connect goes by no session row's
+                            // own credential profile (`row_defaults_apply`).
+                            let pg_user = match pg_user {
+                                Ok(pg_user) => Some(pg_user),
+                                Err(e) => {
+                                    tracing::warn!(
+                                        "Could not ask PostgreSQL which role this is; no item counts as this user's own until the next start: {e:?}"
+                                    );
+                                    None
+                                }
+                            };
                             tracing::info!(pg_user = ?pg_user, "PostgreSQL current_user");
 
                             let provider: Arc<dyn db::DatabaseProvider> =
@@ -2118,9 +2251,11 @@ mod tests {
         sqlx::query(sqlx::AssertSqlSafe(sql)).execute(pool).await
     }
 
-    /// The refusals of the two triggers; RLS refuses with the same code.
+    /// The refusals of the three triggers; RLS refuses with the same code.
     const BY_OWNER_TRIGGER: &str = "only the table owner can change the owner";
     const BY_MOVE_TRIGGER: &str = "only its owner can move";
+    const BY_FOLDER_TRIGGER: &str = "can only be put into one's own folders";
+    const BY_RING: &str = "cannot be put into itself or below itself";
 
     fn refused(result: Result<sqlx::postgres::PgQueryResult, sqlx::Error>, by: &str) -> bool {
         matches!(result, Err(sqlx::Error::Database(e))
@@ -2308,34 +2443,59 @@ mod tests {
             .await
             .unwrap();
         prepare_rls_test_database(&pool, &admin, &alice, &bob).await;
+        let role = |role: &str| format!("SET ROLE {role}");
+        let affected = |sql: String| {
+            let pool = pool.clone();
+            async move { pg_exec(&pool, &sql).await.unwrap().rows_affected() }
+        };
+        let new_session = |folder: uuid::Uuid, visibility: &str| {
+            let id = uuid::Uuid::new_v4();
+            let sql = format!(
+                "INSERT INTO sessions (id, folder_id, name, hostname, username, owner, visibility) \
+                 VALUES ('{id}', '{folder}', 'session', 'host.example', '', current_user, \
+                         '{visibility}')"
+            );
+            (id, sql)
+        };
 
-        pg_exec(&pool, &format!("SET ROLE {alice}")).await.unwrap();
+        pg_exec(&pool, &role(&alice)).await.unwrap();
         let folder = insert_folder(&pool, None, "shared").await;
         let subfolder = insert_folder(&pool, Some(folder), "shared").await;
-        let session = uuid::Uuid::new_v4();
-        sqlx::query(
-            "INSERT INTO sessions (id, folder_id, name, hostname, username, owner, visibility) \
-             VALUES ($1, $2, 'shared', 'host.example', '', current_user, 'shared')",
-        )
-        .bind(session)
-        .bind(folder)
-        .execute(&pool)
-        .await
-        .unwrap();
-        let id = folder.to_string();
-        let take_folder = format!("UPDATE folders SET owner = current_user WHERE id = '{id}'");
+        let (session, sql) = new_session(folder, "shared");
+        pg_exec(&pool, &sql).await.unwrap();
+        let take_folder = format!("UPDATE folders SET owner = current_user WHERE id = '{folder}'");
+        let take_session =
+            format!("UPDATE sessions SET owner = current_user WHERE id = '{session}'");
+        let set_host =
+            |host: &str| format!("UPDATE sessions SET hostname = '{host}' WHERE id = '{session}'");
+        let host = format!("SELECT count(*) FROM sessions WHERE id = '{session}' AND hostname = ");
+        let rename = format!("UPDATE folders SET name = 'renamed' WHERE id = '{folder}'");
+        let delete = format!("DELETE FROM folders WHERE id = '{folder}'");
+        let obsolete = "SELECT count(*) FROM pg_policies \
+                        WHERE policyname IN ('folders_shared_update', 'sessions_shared_update')";
 
-        pg_exec(&pool, &format!("SET ROLE {bob}")).await.unwrap();
+        // A database whose owning role has not started this version yet: any
+        // role can still update a shared row. The setup has just dropped the
+        // two policies for that, so they are put back as they were.
+        pg_exec(&pool, &role(&admin)).await.unwrap();
+        assert_eq!(pg_count(&pool, obsolete).await, 0);
+        for table in ["folders", "sessions"] {
+            let sql = format!(
+                "CREATE POLICY {table}_shared_update ON {table} FOR UPDATE \
+                 USING (visibility = 'shared')"
+            );
+            pg_exec(&pool, &sql).await.unwrap();
+        }
+
+        // There the triggers are what keeps a shared row with its owner and
+        // where its owner put it.
+        pg_exec(&pool, &role(&bob)).await.unwrap();
         assert!(refused(
             pg_exec(&pool, &take_folder).await,
             BY_OWNER_TRIGGER
         ));
         assert!(refused(
-            pg_exec(
-                &pool,
-                &format!("UPDATE sessions SET owner = current_user WHERE id = '{session}'"),
-            )
-            .await,
+            pg_exec(&pool, &take_session).await,
             BY_OWNER_TRIGGER
         ));
         // A temporary table is found before pg_catalog for an unqualified
@@ -2354,63 +2514,215 @@ mod tests {
             pg_exec(&pool, &take_folder).await,
             BY_OWNER_TRIGGER
         ));
-        let rename = format!("UPDATE folders SET name = 'renamed' WHERE id = '{id}'");
-        assert_eq!(pg_exec(&pool, &rename).await.unwrap().rows_affected(), 1);
-        let delete = format!("DELETE FROM folders WHERE id = '{id}'");
-        assert_eq!(pg_exec(&pool, &delete).await.unwrap().rows_affected(), 0);
+        pg_exec(&pool, "DROP TABLE pg_class").await.unwrap();
+        assert_eq!(affected(delete.clone()).await, 0);
 
         // Moved under a folder of bob's, alice's rows would be hidden from
         // everyone else and deleted with it: the foreign keys cascade, and a
         // cascade is not subject to RLS.
         let own = insert_folder(&pool, None, "personal").await;
+        let move_session =
+            format!("UPDATE sessions SET folder_id = '{own}' WHERE id = '{session}'");
+        let move_folder =
+            format!("UPDATE folders SET parent_id = '{own}' WHERE id = '{subfolder}'");
         assert!(refused(
-            pg_exec(
-                &pool,
-                &format!("UPDATE sessions SET folder_id = '{own}' WHERE id = '{session}'"),
-            )
-            .await,
+            pg_exec(&pool, &move_session).await,
             BY_MOVE_TRIGGER
         ));
-        assert!(refused(
-            pg_exec(
-                &pool,
-                &format!("UPDATE folders SET parent_id = '{own}' WHERE id = '{subfolder}'"),
-            )
-            .await,
-            BY_MOVE_TRIGGER
-        ));
-        let delete_own = format!("DELETE FROM folders WHERE id = '{own}'");
+        assert!(refused(pg_exec(&pool, &move_folder).await, BY_MOVE_TRIGGER));
+
+        // But everything else a shared row says was anyone's to rewrite,
+        // such as where a session connects to. This is what the policies
+        // were dropped for.
+        assert_eq!(affected(rename.clone()).await, 1);
+        assert_eq!(affected(set_host("elsewhere.example")).await, 1);
         assert_eq!(
-            pg_exec(&pool, &delete_own).await.unwrap().rows_affected(),
+            pg_count(&pool, &format!("{host}'elsewhere.example'")).await,
             1
         );
-        let left: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
-            "SELECT count(*) FROM sessions WHERE id = '{session}'"
-        )))
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-        assert_eq!(left, 1);
 
-        // The owner cannot hand the row to someone else either, but can move
-        // it between folders of their own.
-        pg_exec(&pool, &format!("SET ROLE {alice}")).await.unwrap();
+        // The owning role starts this version, and the two policies go.
+        pg_exec(&pool, &role(&admin)).await.unwrap();
+        assert_eq!(pg_count(&pool, obsolete).await, 2);
+        setup_postgres_rls(&pool).await.unwrap();
+        assert_eq!(pg_count(&pool, obsolete).await, 0);
+
+        // Now a shared row is its owner's to change and no one else's. To
+        // bob it is a row he can read: his updates find nothing to update,
+        // whatever they set, and he cannot lock it.
+        pg_exec(&pool, &role(&bob)).await.unwrap();
+        for sql in [
+            set_host("again.example"),
+            rename.clone(),
+            take_folder.clone(),
+            take_session.clone(),
+            move_session.clone(),
+            move_folder.clone(),
+            format!("UPDATE sessions SET visibility = 'personal' WHERE id = '{session}'"),
+            format!("UPDATE sessions SET legacy_algorithms = 1 WHERE id = '{session}'"),
+            delete.clone(),
+        ] {
+            assert_eq!(affected(sql.clone()).await, 0, "{sql}");
+        }
+        assert_eq!(
+            pg_count(&pool, &format!("{host}'elsewhere.example'")).await,
+            1
+        );
+        for (lock, rows) in [
+            ("", 1),
+            ("FOR UPDATE", 0),
+            ("FOR SHARE", 0),
+            ("FOR KEY SHARE", 0),
+        ] {
+            let sql = format!("SELECT id FROM sessions WHERE id = '{session}' {lock}");
+            let found = sqlx::query(sqlx::AssertSqlSafe(sql))
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+            assert_eq!(found.len(), rows, "{lock}");
+        }
+
+        // Nor can he put something of his own into a folder of alice's,
+        // where it would show among hers: not a new session or folder, and
+        // not one of his that he moves there. In a folder of his own, and at
+        // the top level, he can.
+        let (in_own, sql) = new_session(own, "shared");
+        pg_exec(&pool, &sql).await.unwrap();
+        let below_own = insert_folder(&pool, Some(own), "shared").await;
+        let folder_into = |parent: uuid::Uuid| {
+            format!(
+                "INSERT INTO folders (id, name, parent_id, sort_order, owner, visibility) \
+                 VALUES ('{}', 'folder', '{parent}', 0, current_user, 'shared')",
+                uuid::Uuid::new_v4()
+            )
+        };
+        for sql in [
+            new_session(folder, "shared").1,
+            new_session(folder, "personal").1,
+            folder_into(folder),
+            format!("UPDATE sessions SET folder_id = '{folder}' WHERE id = '{in_own}'"),
+            format!("UPDATE folders SET parent_id = '{subfolder}' WHERE id = '{below_own}'"),
+        ] {
+            assert!(
+                refused(pg_exec(&pool, &sql).await, BY_FOLDER_TRIGGER),
+                "{sql}"
+            );
+        }
+        // Nor into a folder of his own that is itself in a folder of
+        // alice's, as one may be from before this was refused, or put there
+        // by a superuser, as here. One is in her shared folder, one in a
+        // personal folder of hers that he cannot even see.
+        pg_exec(&pool, "RESET ROLE").await.unwrap();
+        let (hers, planted, hidden) = (
+            uuid::Uuid::new_v4(),
+            uuid::Uuid::new_v4(),
+            uuid::Uuid::new_v4(),
+        );
+        for (id, parent, owner, visibility) in [
+            (hers, None, &alice, "personal"),
+            (planted, Some(subfolder), &bob, "shared"),
+            (hidden, Some(hers), &bob, "shared"),
+        ] {
+            sqlx::query(sqlx::AssertSqlSafe(format!(
+                "INSERT INTO folders (id, name, parent_id, sort_order, owner, visibility) \
+                 VALUES ('{id}', 'planted', $1, 0, '{owner}', '{visibility}')"
+            )))
+            .bind(parent.map(|parent: uuid::Uuid| parent.to_string()))
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+        pg_exec(&pool, &role(&bob)).await.unwrap();
+        for target in [planted, hidden] {
+            for sql in [new_session(target, "shared").1, folder_into(target)] {
+                assert!(
+                    refused(pg_exec(&pool, &sql).await, BY_FOLDER_TRIGGER),
+                    "{sql}"
+                );
+            }
+        }
+        // What he has there is still his to change where it is, and to take
+        // out of it, after which it is a folder like any other of his.
+        let keep_place = format!(
+            "UPDATE folders SET parent_id = parent_id, name = 'his' WHERE id = '{planted}'"
+        );
+        assert_eq!(affected(keep_place).await, 1);
+        let take_out = format!("UPDATE folders SET parent_id = NULL WHERE id = '{planted}'");
+        assert_eq!(affected(take_out).await, 1);
+        pg_exec(&pool, &new_session(planted, "shared").1)
+            .await
+            .unwrap();
+
+        // A folder does not go into itself, nor into one below it: the look
+        // up the tree comes to an end in a ring, and refuses to make one.
+        let top = insert_folder(&pool, None, "personal").await;
+        let below = insert_folder(&pool, Some(top), "personal").await;
+        for (folder, parent) in [(top, top), (top, below)] {
+            let sql = format!("UPDATE folders SET parent_id = '{parent}' WHERE id = '{folder}'");
+            assert!(refused(pg_exec(&pool, &sql).await, BY_RING), "{sql}");
+        }
+
+        // A ring that is there already, as one may be from before this was
+        // refused, and as a superuser makes here: the look up the tree still
+        // comes to an end in it, and what is in it can be taken out.
+        pg_exec(&pool, "RESET ROLE").await.unwrap();
+        let ring = format!("UPDATE folders SET parent_id = '{below}' WHERE id = '{top}'");
+        assert_eq!(affected(ring).await, 1);
+        pg_exec(&pool, &role(&bob)).await.unwrap();
+        pg_exec(&pool, &new_session(below, "personal").1)
+            .await
+            .unwrap();
+        let out = format!("UPDATE folders SET parent_id = NULL WHERE id = '{top}'");
+        assert_eq!(affected(out).await, 1);
+
+        // An update that leaves the folder as it is, is not a move.
+        let stay = format!(
+            "UPDATE sessions SET folder_id = folder_id, name = 'mine' WHERE id = '{in_own}'"
+        );
+        assert_eq!(affected(stay).await, 1);
+        let to_top = format!("UPDATE folders SET parent_id = NULL WHERE id = '{below_own}'");
+        assert_eq!(affected(to_top).await, 1);
+
+        // Deleting his folder deletes what is his, and nothing of alice's.
+        assert_eq!(
+            affected(format!("DELETE FROM folders WHERE id = '{own}'")).await,
+            1
+        );
+        let left = format!("SELECT count(*) FROM sessions WHERE id = '{session}'");
+        assert_eq!(pg_count(&pool, &left).await, 1);
+
+        // The owner still changes her row, and moves it between folders of
+        // her own. She cannot hand it to someone else, nor put it into a
+        // folder of someone else's.
+        pg_exec(&pool, &role(&alice)).await.unwrap();
+        assert_eq!(affected(set_host("host.example")).await, 1);
+        assert_eq!(affected(rename.clone()).await, 1);
         assert!(refused(
             pg_exec(
                 &pool,
-                &format!("UPDATE folders SET owner = '{bob}' WHERE id = '{id}'"),
+                &format!("UPDATE folders SET owner = '{bob}' WHERE id = '{folder}'"),
             )
             .await,
             BY_OWNER_TRIGGER
         ));
         let other = insert_folder(&pool, None, "personal").await;
         let move_own = format!("UPDATE sessions SET folder_id = '{other}' WHERE id = '{session}'");
-        assert_eq!(pg_exec(&pool, &move_own).await.unwrap().rows_affected(), 1);
+        assert_eq!(affected(move_own).await, 1);
+        let to_bob =
+            format!("UPDATE sessions SET folder_id = '{below_own}' WHERE id = '{session}'");
+        assert!(refused(pg_exec(&pool, &to_bob).await, BY_FOLDER_TRIGGER));
 
-        // The admin, as table owner, reassigns rows (admin guide §4).
-        pg_exec(&pool, &format!("SET ROLE {admin}")).await.unwrap();
-        let reassign = format!("UPDATE folders SET owner = '{admin}' WHERE id = '{id}'");
-        assert_eq!(pg_exec(&pool, &reassign).await.unwrap().rows_affected(), 1);
+        // The admin owns the tables, and row-level security is forced for it
+        // too: it reaches no row of alice's. Reassigning rows takes a
+        // superuser (admin guide §4), who also puts a row where it likes.
+        let reassign = format!("UPDATE folders SET owner = '{admin}' WHERE id = '{folder}'");
+        pg_exec(&pool, &role(&admin)).await.unwrap();
+        assert_eq!(affected(reassign.clone()).await, 0);
+        pg_exec(&pool, "RESET ROLE").await.unwrap();
+        assert_eq!(affected(reassign).await, 1);
+        let anywhere =
+            format!("UPDATE sessions SET folder_id = '{below_own}' WHERE id = '{session}'");
+        assert_eq!(affected(anywhere).await, 1);
 
         pool.close().await;
     }
@@ -2540,14 +2852,14 @@ mod tests {
             .await
             .unwrap();
         insert_folder(&bob_pool, None, "shared").await;
-        // And a shared session of his in alice's folder, which the app would
-        // not put there but a statement of his own can: a new row has only
-        // its owner checked, and the foreign key is checked without RLS.
+        // And a shared session of his in alice's folder. Neither the app nor
+        // a statement of his own puts one there; a superuser can, and one
+        // may be left from before the triggers refused it.
         pg_exec(
-            &bob_pool,
+            &server,
             &format!(
                 "INSERT INTO sessions (id, folder_id, name, hostname, username, owner, visibility) \
-                 VALUES ('{}', '{of_alice}', 'guest', 'host.example', '', current_user, 'shared')",
+                 VALUES ('{}', '{of_alice}', 'guest', 'host.example', '', '{bob}', 'shared')",
                 uuid::Uuid::new_v4()
             ),
         )
@@ -2597,30 +2909,38 @@ mod tests {
             .await
             .unwrap();
 
-        // Now he holds one on every folder he can see, alice's shared one
-        // included: RLS lets anyone lock a shared row. Her change to that
-        // folder gives up instead of waiting for him.
-        sqlx::query("SELECT id FROM folders FOR UPDATE")
+        // A row lock on everything he can lock is no more than that: only
+        // its owner can lock a shared row, so alice's shared folder is not
+        // his to hold, and she changes it while he waits.
+        let locked = sqlx::query("SELECT id FROM folders FOR UPDATE")
             .fetch_all(&mut *held)
             .await
             .unwrap();
-        let started = std::time::Instant::now();
-        let renamed = alice_db.rename_folder(of_alice, "renamed").await;
-        assert!(gave_up_on_lock(&renamed, started), "{renamed:?}");
-        // Her connection is as good as before, and reading needs no lock on
-        // a row.
-        assert_eq!(alice_db.list_folders().await.unwrap().len(), 3);
+        assert_eq!(locked.len(), 1);
+        alice_db.rename_folder(of_alice, "renamed").await.unwrap();
         // The owning role's start finds its setup in place and changes
         // nothing, so it does not wait for bob either. An `ALTER TABLE`
         // would: it wants the whole table, and with it waiting, so would
         // every reader after it.
         setup_postgres_rls(&admin_pool).await.unwrap();
         assert_eq!(alice_db.list_folders().await.unwrap().len(), 3);
-        held.rollback().await.unwrap();
-        alice_db.rename_folder(of_alice, "renamed").await.unwrap();
 
-        // Bob can lock a whole table as well: `LOCK TABLE` takes no more
-        // than the privileges the app needs. Then nothing gets through, but
+        // What he can hold against her is the table. Locked against
+        // writers, her change gives up instead of waiting for him. Her
+        // connection is as good as before, and reading is no writing.
+        sqlx::query("LOCK TABLE folders IN SHARE ROW EXCLUSIVE MODE")
+            .execute(&mut *held)
+            .await
+            .unwrap();
+        let started = std::time::Instant::now();
+        let renamed = alice_db.rename_folder(of_alice, "again").await;
+        assert!(gave_up_on_lock(&renamed, started), "{renamed:?}");
+        assert_eq!(alice_db.list_folders().await.unwrap().len(), 3);
+        held.rollback().await.unwrap();
+        alice_db.rename_folder(of_alice, "again").await.unwrap();
+
+        // Locked against everything, which takes no more than the
+        // privileges the app needs either, nothing gets through, but
         // everything gives up: a read, and the start of the owning role,
         // which fails at its first statement.
         let mut held = bob_pool.begin().await.unwrap();

@@ -81,9 +81,17 @@ pub async fn folder_move(
         }
         let all_folders = state.0.list_folders().await?;
         let mut current = Some(target_parent);
+        // A ring above the target that this folder is no part of, as a
+        // database may have from statements of someone's own, must not keep
+        // this from coming to an end. The database then decides about the
+        // move.
+        let mut seen = HashSet::new();
         while let Some(cur) = current {
             if cur == folder_uuid {
                 return Err("A folder cannot be moved into one of its descendants.".to_string());
+            }
+            if !seen.insert(cur) {
+                break;
             }
             current = all_folders
                 .iter()
@@ -587,6 +595,7 @@ pub async fn session_connect(
     ready_state: State<'_, TerminalReadyState>,
     logger_state: State<'_, SessionLogState>,
     pg: State<'_, crate::db::PgPoolState>,
+    pg_user: State<'_, crate::db::PgUserState>,
     config: State<'_, crate::config::ConfigState>,
     page: String,
     id: String,
@@ -603,6 +612,17 @@ pub async fn session_connect(
             .ok_or_else(|| format!("Session {id} not found"))?;
 
     let settings = connection::current(&config)?;
+
+    // What the session's own row names, where that is this user's to go by;
+    // see `row_defaults_apply`.
+    let row_defaults = row_defaults_apply(pg.0.is_some(), pg_user.0.as_deref(), &session);
+    let row_login_sequence = session.login_sequence_id.filter(|_| row_defaults);
+    let row_credential_profile = session.credential_profile_id.filter(|_| row_defaults);
+    if !row_defaults
+        && (session.login_sequence_id.is_some() || session.credential_profile_id.is_some())
+    {
+        debug!(session = %id, "Not this user's session — the profile and sequence its row names are left out");
+    }
 
     // Resolve login sequence (applies to both SSH and Telnet).
     let user_ident_for_ls = pg.0.as_ref().and_then(|_| {
@@ -622,10 +642,10 @@ pub async fn session_connect(
         .await?
         {
             Some(uuid) => Some(uuid),
-            None => session.login_sequence_id,
+            None => row_login_sequence,
         }
     } else {
-        session.login_sequence_id
+        row_login_sequence
     };
 
     let login_sequence = if let Some(ls_id) = effective_ls_id {
@@ -706,10 +726,10 @@ pub async fn session_connect(
         .await?
         {
             Some(uuid) => Some(uuid),
-            None => session.credential_profile_id,
+            None => row_credential_profile,
         }
     } else {
-        session.credential_profile_id
+        row_credential_profile
     };
 
     let (username, auth_method, auth_credential) = if let Some(profile_id) = effective_credential_id
@@ -731,11 +751,11 @@ pub async fn session_connect(
     } else {
         debug!(session = %id, user = %session.username, "No credential profile — falling back to keyboard-interactive");
         if session.username.is_empty() {
-            return Err(
+            return Err(format!(
                 "No credential profile assigned and no username configured. \
-                 Edit the session to set a username or assign a credential profile."
-                    .to_string(),
-            );
+                 Edit the session to set a username or assign a credential profile.{}",
+                not_own_session_hint(row_defaults)
+            ));
         }
         (
             session.username.clone(),
@@ -751,6 +771,7 @@ pub async fn session_connect(
         &session,
         pg.0.as_ref(),
         user_ident.as_deref(),
+        pg_user.0.as_deref(),
     )
     .await?;
     if jump_hops.len() > MAX_JUMP_HOPS {
@@ -858,6 +879,44 @@ fn profile_to_auth(
     }
 }
 
+/// Whether the credential profile and the login sequence that a session's
+/// own row names are this user's to connect with.
+///
+/// Both are IDs in the connecting user's local database, and decide which of
+/// that user's secrets the connection sends to the session's host. In
+/// `PostgreSQL` mode a session can be another user's, shared: then that user
+/// wrote the row, the host and these IDs alike, and an ID in it that happens
+/// to be, or was made to be, one of this user's own profiles would send that
+/// profile's secret to a host of the other user's choosing. So there the
+/// row's IDs count only for the session's owner, and anyone else connects by
+/// their own mapping of the session (`session_credentials`,
+/// `session_login_sequences`) or without a profile.
+///
+/// The app itself leaves both columns empty in `PostgreSQL` mode and keeps
+/// each user's choice in the mapping tables, so what a row names there was
+/// imported or written by a statement of someone's own. In `SQLite` mode
+/// every session is the user's own.
+///
+/// `pg_user` is the role the app connected as. Where that is not known, no
+/// row is taken for this user's, nor is one that still has the placeholder
+/// owner.
+fn row_defaults_apply(pg_mode: bool, pg_user: Option<&str>, session: &Session) -> bool {
+    // `'local'` is the placeholder owner of rows from before rows had one,
+    // and no role's own, also not that of a role with this name.
+    !pg_mode || (pg_user == Some(session.owner.as_str()) && session.owner != "local")
+}
+
+/// What to add to the message when a connect finds no credential profile to
+/// go by: for another user's session, that what its row names does not count.
+fn not_own_session_hint(row_defaults: bool) -> &'static str {
+    if row_defaults {
+        ""
+    } else {
+        " This is another user's shared session, so the credential profile and \
+         login sequence it names are not used for you."
+    }
+}
+
 /// Walk the `jump_host_id` chain in the database to build a list of `JumpHop`
 /// entries for the SSH connect call. Each hop pulls its own profile.
 async fn resolve_jump_chain(
@@ -866,6 +925,7 @@ async fn resolve_jump_chain(
     session: &Session,
     pg_pool: Option<&sqlx::PgPool>,
     user_ident: Option<&str>,
+    pg_user: Option<&str>,
 ) -> Result<Vec<crate::ssh::JumpHop>, String> {
     let mut hops = Vec::new();
     let mut visited = HashSet::new();
@@ -895,25 +955,30 @@ async fn resolve_jump_chain(
             "Resolving jump hop"
         );
 
-        // In PG mode, resolve per-user credential mapping for the hop.
+        // In PG mode, resolve per-user credential mapping for the hop. The
+        // profile the hop's own row names counts only where the hop is this
+        // user's own session; see `row_defaults_apply`.
+        let row_defaults = row_defaults_apply(pg_pool.is_some(), pg_user, &jump_session);
+        let row_credential_profile = jump_session.credential_profile_id.filter(|_| row_defaults);
         let effective_profile_id = if let (Some(pool), Some(ident)) = (pg_pool, user_ident) {
             let jump_id_str = jump_id.to_string();
             match super::session_credentials::query_user_credential(pool, &jump_id_str, ident)
                 .await?
             {
                 Some(uuid) => Some(uuid),
-                None => jump_session.credential_profile_id,
+                None => row_credential_profile,
             }
         } else {
-            jump_session.credential_profile_id
+            row_credential_profile
         };
 
         let profile_id = effective_profile_id.ok_or_else(|| {
             format!(
                 "No credential profile assigned to jump host \"{}\". \
                  Open the Credentials Manager to create one, then edit the \
-                 session to link it.",
-                jump_session.name
+                 session to link it.{}",
+                jump_session.name,
+                not_own_session_hint(row_defaults)
             )
         })?;
         let jump_profile = cred_db
@@ -944,4 +1009,63 @@ async fn resolve_jump_chain(
     hops.reverse();
     debug!(total_hops = hops.len(), "Jump chain resolved");
     Ok(hops)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn session_of(owner: &str) -> Session {
+        Session {
+            id: Uuid::new_v4(),
+            folder_id: Uuid::new_v4(),
+            name: "session".to_string(),
+            hostname: "host.example".to_string(),
+            port: 22,
+            protocol: "ssh".to_string(),
+            username: String::new(),
+            auth_method: "password".to_string(),
+            jump_host_id: None,
+            tags: "[]".to_string(),
+            icon: "desktop".to_string(),
+            sort_order: 0,
+            highlight_profile_id: None,
+            credential_profile_id: Some(Uuid::new_v4()),
+            legacy_algorithms: false,
+            login_sequence_id: Some(Uuid::new_v4()),
+            owner: owner.to_string(),
+            visibility: "shared".to_string(),
+        }
+    }
+
+    #[test]
+    fn a_row_names_a_profile_for_its_owner_only() {
+        // `SQLite`: every session is the user's own, whatever its owner says.
+        assert!(row_defaults_apply(false, None, &session_of("local")));
+        assert!(row_defaults_apply(false, Some("alice"), &session_of("bob")));
+        // `PostgreSQL`: the user's own session, but not another user's shared
+        // one, and no session at all while the role is not known.
+        assert!(row_defaults_apply(
+            true,
+            Some("alice"),
+            &session_of("alice")
+        ));
+        assert!(!row_defaults_apply(true, Some("alice"), &session_of("bob")));
+        assert!(!row_defaults_apply(
+            true,
+            Some("alice"),
+            &session_of("Alice")
+        ));
+        assert!(!row_defaults_apply(true, None, &session_of("alice")));
+        assert!(!row_defaults_apply(true, None, &session_of("")));
+        // The placeholder owner is no role's, also not that of a role named
+        // like it.
+        assert!(!row_defaults_apply(
+            true,
+            Some("local"),
+            &session_of("local")
+        ));
+        assert_eq!(not_own_session_hint(true), "");
+        assert!(not_own_session_hint(false).contains("another user's shared session"));
+    }
 }

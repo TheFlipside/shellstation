@@ -60,8 +60,8 @@ pub struct LoginSequenceDbState(pub Arc<dyn DatabaseProvider>);
 pub struct PgPoolState(pub Option<sqlx::PgPool>);
 
 /// The `PostgreSQL` `current_user` at connection time. Used by the frontend
-/// to determine item ownership. `None` in `SQLite` mode.
-#[allow(dead_code)]
+/// to determine item ownership, and by `session_connect` to tell the user's
+/// own sessions from other users' shared ones. `None` in `SQLite` mode.
 pub struct PgUserState(pub Option<String>);
 
 #[async_trait]
