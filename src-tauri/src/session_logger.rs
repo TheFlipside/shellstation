@@ -2,6 +2,8 @@ use std::collections::{HashMap, VecDeque};
 use std::fs::File;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+#[cfg(test)]
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::thread;
 use std::time::Duration;
@@ -68,8 +70,7 @@ const STALL_TIMEOUT: Duration = Duration::from_secs(5);
 /// writes rather than one for each output. After each write the session is
 /// told how far the writer has got, so that one waiting for it goes on as
 /// soon as there is room, and a write that is slow but gets somewhere is not
-/// taken for one that does not: this much in [`STALL_TIMEOUT`] is enough. A
-/// write that fails loses no more than this, or the one output.
+/// taken for one that does not: this much in [`STALL_TIMEOUT`] is enough.
 const WRITE_PIECE_BYTES: usize = 64 * 1024;
 
 /// How long a test waits for a log's writer before it fails.
@@ -353,7 +354,9 @@ impl Drop for RunningWriter {
 /// time (see [`WRITE_PIECE_BYTES`]), goes on in a new file when the one it
 /// writes is full and deletes the oldest (see [`LogLimits`]), and ends when
 /// the session has closed the log and nothing is left to write, or when it
-/// has to give the log up.
+/// has to give the log up: when the file cannot be created, at the first
+/// write that fails (see [`LogWriter::write`]), or when the log cannot go on
+/// in a new file.
 struct LogWriter {
     connection_id: String,
     shared: Arc<LogShared>,
@@ -366,6 +369,9 @@ struct LogWriter {
     /// Held by a test for as long as writing is to take.
     #[cfg(test)]
     write_gate: Arc<Mutex<()>>,
+    /// Set by a test for as long as writes to the file are to fail.
+    #[cfg(test)]
+    fail_writes: Arc<AtomicBool>,
 }
 
 /// A writer that ends in a panic gives its log up on the way out: nothing
@@ -437,15 +443,10 @@ impl LogWriter {
                 return;
             };
 
-            if let Err(e) = self.write(active, &text) {
-                // What the log holds so far stays. As above, the next
-                // output does not try again.
-                warn!(
-                    connection_id = %self.connection_id,
-                    error = %e,
-                    "The session log cannot go on in a new file; \
-                     this session is no longer logged"
-                );
+            if !self.write(active, &text) {
+                // What the log holds so far stays. As above, the reason is
+                // in the application log, and the next output does not try
+                // again.
                 self.give_up();
                 return;
             }
@@ -474,32 +475,60 @@ impl LogWriter {
 
     /// Write a piece of the session's text to the log: to the file that is
     /// being written as far as it has room, and the rest to a new one, or to
-    /// several (see [`LogLimits`]). Text that cannot be written is lost, and
-    /// said in the application log.
+    /// several (see [`LogLimits`]).
     ///
-    /// # Errors
-    /// The log cannot go on in a new file: see [`Self::start_next_part`].
-    /// The rest of the piece is not written then.
-    fn write(&self, log: &mut ActiveLog, piece: &str) -> io::Result<()> {
+    /// Returns whether the log goes on. It does not when a write fails, as
+    /// on a full disk or a share that went away, or when the log cannot go on
+    /// in a new file (see [`Self::start_next_part`]): the reason is in the
+    /// application log then, the rest of the piece is not written, and the
+    /// caller gives the log up.
+    ///
+    /// The first write that fails ends the log, and no later one is tried.
+    /// A log that went on would have a gap that nothing but the application
+    /// log told of, and a file that takes no writes would fail one for each
+    /// output of the session, with a warning each time, for as long as the
+    /// session lasts. Given up, the log is as its session's tab says: not
+    /// written any more.
+    fn write(&self, log: &mut ActiveLog, piece: &str) -> bool {
         #[cfg(test)]
         let _writing = lock(&self.write_gate);
         let mut rest = piece;
         while !rest.is_empty() {
             let (now, later) = log.split_for_room(rest, self.limits.max_file_bytes);
             if now.is_empty() {
-                self.start_next_part(log)?;
+                if let Err(e) = self.start_next_part(log) {
+                    warn!(
+                        connection_id = %self.connection_id,
+                        error = %e,
+                        "The session log cannot go on in a new file; \
+                         this session is no longer logged"
+                    );
+                    return false;
+                }
                 continue;
             }
-            if let Err(e) = write_text(&mut log.file, &mut log.after_failed_write, now) {
+            if let Err(e) = self.write_to_file(log, now) {
                 warn!(
                     connection_id = %self.connection_id,
                     error = %e,
-                    "Failed to write session log"
+                    "Failed to write session log; this session is no longer logged"
                 );
+                return false;
             }
             rest = later;
         }
-        Ok(())
+        true
+    }
+
+    /// Write `text` to the file that is being written: see [`write_text`].
+    // In a test build `self` is asked whether the write is to fail.
+    #[cfg_attr(not(test), allow(clippy::unused_self))]
+    fn write_to_file(&self, log: &mut ActiveLog, text: &str) -> io::Result<()> {
+        #[cfg(test)]
+        if self.fail_writes.load(Ordering::Relaxed) {
+            return Err(io::Error::other("no space left"));
+        }
+        write_text(&mut log.file, text)
     }
 
     /// Close the file that is being written, which is full, and go on in a
@@ -540,7 +569,6 @@ impl LogWriter {
         // The file that was written is closed here, before any is deleted:
         // with one file kept, it is the one to go.
         log.file = Counted::new(file);
-        log.after_failed_write = false;
         log.part = part;
         log.kept.push_back(path);
 
@@ -657,7 +685,8 @@ impl LogWriter {
 pub struct LogLimits {
     /// The size a log file may reach, in bytes. No file is larger, unless
     /// this is less than a single character takes. A write that fails does
-    /// not take a file over it either, but may leave part of its text there.
+    /// not take a file over it either, but may leave part of its text there,
+    /// and is the log's last.
     pub max_file_bytes: u64,
     /// How many files of one session's log are kept, the one being written
     /// included.
@@ -688,9 +717,8 @@ impl Default for LogLimits {
     }
 }
 
-/// Counts the bytes that a file has taken, whether the write they were part
-/// of then failed or not: a log file's size is held against its limit by
-/// what went into it, without asking the file system.
+/// Counts the bytes that a file has taken: a log file's size is held against
+/// its limit by what went into it, without asking the file system.
 struct Counted<W> {
     inner: W,
     written: u64,
@@ -720,8 +748,6 @@ impl<W: Write> Write for Counted<W> {
 struct ActiveLog {
     /// The file that is being written: the newest of the log.
     file: Counted<File>,
-    /// Whether the last write to the file failed: see [`write_text`].
-    after_failed_write: bool,
     /// The name the log's first file got, which the later ones are named
     /// after: see [`create_next_part`].
     first: PathBuf,
@@ -740,7 +766,6 @@ impl ActiveLog {
     fn new(file: File, path: PathBuf) -> Self {
         Self {
             file: Counted::new(file),
-            after_failed_write: false,
             first: path.clone(),
             part: 1,
             kept: VecDeque::from([path]),
@@ -756,17 +781,14 @@ impl ActiveLog {
     /// LF: a file that ended in a CR would have whatever a terminal shows
     /// after it written over its last line (see [`AnsiStripperState::emit`]).
     /// That is for what is written: a write that fails part of the way can
-    /// still leave a file ending there, as it can in a log of one file.
+    /// still leave a file ending there, as it can in a log of one file, and
+    /// nothing is written after it (see [`LogWriter::write`]).
     /// A file that holds nothing yet takes one character whatever the limit,
     /// so that a limit smaller than a character cannot keep a log from
     /// getting anywhere.
     fn split_for_room<'a>(&self, text: &'a str, max_file_bytes: u64) -> (&'a str, &'a str) {
-        // The write after a failed one starts with a line feed of its own.
-        let taken = self
-            .file
-            .written
-            .saturating_add(u64::from(self.after_failed_write));
-        let room = usize::try_from(max_file_bytes.saturating_sub(taken)).unwrap_or(usize::MAX);
+        let room =
+            usize::try_from(max_file_bytes.saturating_sub(self.file.written)).unwrap_or(usize::MAX);
         if text.len() <= room {
             return (text, "");
         }
@@ -1038,6 +1060,9 @@ pub struct SessionLogManager {
     /// Held by a test for as long as writing a log is to take.
     #[cfg(test)]
     write_gate: Arc<Mutex<()>>,
+    /// Set by a test for as long as writes to the log files are to fail.
+    #[cfg(test)]
+    fail_writes: Arc<AtomicBool>,
 }
 
 impl SessionLogManager {
@@ -1053,6 +1078,8 @@ impl SessionLogManager {
             stall_timeout: STALL_TIMEOUT,
             #[cfg(test)]
             write_gate: Arc::default(),
+            #[cfg(test)]
+            fail_writes: Arc::default(),
         }
     }
 
@@ -1066,7 +1093,8 @@ impl SessionLogManager {
     /// so. They give up waiting after a few seconds, though: a tab that is
     /// later than that can miss the notice, as it misses the output. For a
     /// log that is behind its session and gets no further, it is when the
-    /// session has waited for it in vain: see [`LogBehind`].
+    /// session has waited for it in vain: see [`LogBehind`]. For a log that
+    /// a write fails for, or that cannot go on in a new file, it is then.
     ///
     /// `notify` runs on the log's writer thread, where a session waits for
     /// its log, or inside [`write_log`], and so at times under the lock all
@@ -1129,6 +1157,8 @@ impl SessionLogManager {
             _running: running,
             #[cfg(test)]
             write_gate: Arc::clone(&self.write_gate),
+            #[cfg(test)]
+            fail_writes: Arc::clone(&self.fail_writes),
         };
         thread::Builder::new()
             .name("session-log".to_string())
@@ -1156,13 +1186,13 @@ impl SessionLogManager {
     /// its file takes writes more slowly than the session puts text out, or
     /// not at all. See [`LogBehind`].
     ///
-    /// A log whose file cannot be created is given up by its writer: the
-    /// session goes on without one, and the reason is logged once rather
-    /// than on every output. One that gets no further while its session
-    /// waits for it is given up there. And one is given up here, should a
-    /// caller hand on more without having waited: what waits to be written
-    /// has a limit whatever a caller does. Each time the window is told,
-    /// once: see [`Self::notify_when_given_up`].
+    /// A log whose file cannot be created, or takes a write no longer, is
+    /// given up by its writer: the session goes on without one, and the
+    /// reason is logged once rather than on every output. One that gets no
+    /// further while its session waits for it is given up there. And one is
+    /// given up here, should a caller hand on more without having waited:
+    /// what waits to be written has a limit whatever a caller does. Each
+    /// time the window is told, once: see [`Self::notify_when_given_up`].
     fn write_log(&mut self, connection_id: &str, data: &[u8]) -> Option<LogBehind> {
         let (entry, stripper) = self.entries.get_mut(connection_id)?;
 
@@ -1300,20 +1330,13 @@ impl SessionLogManager {
 ///
 /// A write that fails, as on a full disk, may have put part of its text into
 /// the file all the same: up to the CR of a CR LF, or up to the middle of a
-/// character. What the next write adds would then follow a CR without its
-/// LF, which a terminal writes over the line, or the first bytes of a
-/// character. So the write after a failed one starts with a line feed.
-/// `after_failed_write` says whether the last one failed, and is set here.
-fn write_text<W: Write>(log: &mut W, after_failed_write: &mut bool, text: &str) -> io::Result<()> {
-    let result = (|| {
-        if *after_failed_write {
-            log.write_all(b"\n")?;
-        }
-        log.write_all(text.as_bytes())?;
-        log.flush()
-    })();
-    *after_failed_write = result.is_err();
-    result
+/// character. The file can end that way, but nothing is written after it,
+/// since the log is given up there (see [`LogWriter::write`]): no text
+/// follows a CR without its LF, which a terminal would write over the line,
+/// or the first bytes of a character.
+fn write_text<W: Write>(log: &mut W, text: &str) -> io::Result<()> {
+    log.write_all(text.as_bytes())?;
+    log.flush()
 }
 
 /// Whether Windows takes `filename` for a device (`CON`, `NUL`, `COM1`, …)
@@ -2216,11 +2239,6 @@ mod tests {
 
         assert_eq!(log.split_for_room("abcd", 4), ("abcd", ""));
         assert_eq!(log.split_for_room("abcde", 4), ("abcd", "e"));
-        // The write after a failed one starts with a line feed, which takes
-        // room as well.
-        log.after_failed_write = true;
-        assert_eq!(log.split_for_room("abcd", 4), ("abc", "d"));
-        log.after_failed_write = false;
 
         log.file.write_all(b"ab").unwrap();
         assert_eq!(log.file.written, 2);
@@ -2234,31 +2252,6 @@ mod tests {
         assert_eq!(log.split_for_room("e", 2), ("", "e"));
         drop(log);
         std::fs::remove_dir_all(&dir).unwrap();
-    }
-
-    /// Bytes that went into the file count, also those of a write that then
-    /// failed: they take room in the file all the same.
-    #[test]
-    fn bytes_of_a_failed_write_are_counted() {
-        struct TakesThree(usize);
-        impl Write for TakesThree {
-            fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-                if self.0 == 3 {
-                    return Err(io::Error::other("full"));
-                }
-                let taken = buf.len().min(3 - self.0);
-                self.0 += taken;
-                Ok(taken)
-            }
-            fn flush(&mut self) -> io::Result<()> {
-                Ok(())
-            }
-        }
-        let mut counted = Counted::new(TakesThree(0));
-        assert!(counted.write_all(b"abcdef").is_err());
-        assert_eq!(counted.written, 3);
-        assert!(counted.write_all(b"g").is_err());
-        assert_eq!(counted.written, 3);
     }
 
     #[test]
@@ -2941,6 +2934,7 @@ mod tests {
             limits: LogLimits::default(),
             _running: writers.count().unwrap(),
             write_gate: Arc::default(),
+            fail_writes: Arc::default(),
         };
         let queue = LogQueue(Arc::clone(&shared));
         assert!(matches!(
@@ -3692,17 +3686,16 @@ mod tests {
         }
     }
 
-    /// A log that takes `room` more bytes and then fails once, as a disk
-    /// does that is full until something is removed.
-    struct FullOnce {
+    /// A log that takes `room` more bytes and then fails, as a disk does
+    /// that is full.
+    struct Full {
         written: Vec<u8>,
         room: usize,
     }
 
-    impl Write for FullOnce {
+    impl Write for Full {
         fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
             if self.room == 0 {
-                self.room = usize::MAX;
                 return Err(io::Error::other("no space left"));
             }
             let taken = buf.len().min(self.room);
@@ -3716,56 +3709,185 @@ mod tests {
         }
     }
 
+    /// What a write that fails part of the way leaves in the file. The log
+    /// ends there, so nothing follows it.
     #[test]
-    fn the_write_after_a_failed_one_starts_a_new_line() {
-        // Cut between the CR and the LF of a line break: what comes next
-        // would be written over the line.
-        let mut log = FullOnce {
+    fn a_write_that_fails_can_leave_part_of_its_text() {
+        // Cut between the CR and the LF of a line break.
+        let mut log = Full {
             written: Vec::new(),
             room: 3,
         };
-        let mut failed = false;
-        assert!(write_text(&mut log, &mut failed, "ab\r\ncd").is_err());
-        assert!(failed);
+        assert!(write_text(&mut log, "ab\r\ncd").is_err());
         assert_eq!(log.written, b"ab\r");
-        write_text(&mut log, &mut failed, "x").unwrap();
-        assert!(!failed);
-        write_text(&mut log, &mut failed, "y").unwrap();
-        assert_eq!(log.written, b"ab\r\nxy");
 
         // Cut in the middle of a character.
-        let mut log = FullOnce {
+        let mut log = Full {
             written: Vec::new(),
             room: 2,
         };
-        let mut failed = false;
-        assert!(write_text(&mut log, &mut failed, "a€b").is_err());
+        assert!(write_text(&mut log, "a€b").is_err());
         assert_eq!(log.written, b"a\xe2");
-        write_text(&mut log, &mut failed, "c").unwrap();
-        assert_eq!(log.written, b"a\xe2\nc");
-
-        // A write that fails twice gets one line feed for it.
-        let mut log = FullOnce {
-            written: Vec::new(),
-            room: 0,
-        };
-        let mut failed = false;
-        assert!(write_text(&mut log, &mut failed, "a").is_err());
-        log.room = 0;
-        assert!(write_text(&mut log, &mut failed, "b").is_err());
-        assert!(failed);
-        write_text(&mut log, &mut failed, "c").unwrap();
-        assert_eq!(log.written, b"\nc");
 
         // One that does not fail is written as it is.
-        let mut log = FullOnce {
+        let mut log = Full {
             written: Vec::new(),
             room: usize::MAX,
         };
-        let mut failed = false;
-        write_text(&mut log, &mut failed, "a\r\n").unwrap();
-        write_text(&mut log, &mut failed, "b").unwrap();
+        write_text(&mut log, "a\r\n").unwrap();
+        write_text(&mut log, "b").unwrap();
         assert_eq!(log.written, b"a\r\nb");
+    }
+
+    /// The known issue this replaces: a log that took no more writes had a
+    /// warning in the application log for every write that failed, and its
+    /// session's tab was not told. The first write that fails now ends the
+    /// log, and is reported once.
+    #[test]
+    fn a_log_that_a_write_fails_for_is_given_up() {
+        let (mut mgr, dir) = manager();
+        let reported = record_given_up(&mut mgr);
+        mgr.open_log("a", "router").unwrap();
+        mgr.open_log("b", "switch").unwrap();
+        mgr.write_log("a", b"one\n");
+        mgr.write_log("b", b"other\n");
+        mgr.settle("a");
+        mgr.settle("b");
+        assert!(reported.lock().unwrap().is_empty());
+
+        mgr.fail_writes.store(true, Ordering::Relaxed);
+        mgr.write_log("a", b"two\n");
+        mgr.settle("a");
+        assert!(!mgr.has_log("a"));
+        assert_eq!(*reported.lock().unwrap(), ["a"]);
+        // A log that nothing was written to meanwhile is not given up.
+        assert!(mgr.has_log("b"));
+
+        // No write is tried again, also once the file would take one, and
+        // nothing more is kept or said for the session.
+        mgr.fail_writes.store(false, Ordering::Relaxed);
+        assert!(mgr.write_log("a", b"three\n").is_none());
+        assert!(!mgr.entries.contains_key("a"));
+        mgr.write_log("a", b"four\n");
+        mgr.write_log("b", b"more\n");
+        mgr.close_log("a");
+        mgr.close_log("b");
+        mgr.wait_until_written();
+        assert_eq!(*reported.lock().unwrap(), ["a"]);
+        // What the log held stays.
+        assert_eq!(text_of(&dir.join("router.log")), "one\n");
+        assert_eq!(text_of(&dir.join("switch.log")), "other\nmore\n");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A first write that fails leaves the file that was created for it,
+    /// empty, and the log is given up as any other.
+    #[test]
+    fn a_log_whose_first_write_fails_is_given_up() {
+        let (mut mgr, dir) = manager();
+        let reported = record_given_up(&mut mgr);
+        mgr.fail_writes.store(true, Ordering::Relaxed);
+        mgr.open_log("a", "router").unwrap();
+        mgr.write_log("a", b"one\n");
+        mgr.settle("a");
+        assert!(!mgr.has_log("a"));
+        assert_eq!(*reported.lock().unwrap(), ["a"]);
+        mgr.write_log("a", b"two\n");
+        mgr.close_log("a");
+        mgr.wait_until_written();
+        assert_eq!(*reported.lock().unwrap(), ["a"]);
+        assert_eq!(text_of(&dir.join("router.log")), "");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// The text that waits for a log is dropped with it: the writer goes
+    /// through none of it, so one write fails, however much waited.
+    #[test]
+    fn what_waits_for_a_log_that_a_write_fails_for_is_dropped() {
+        let (mut mgr, dir) = manager();
+        let reported = record_given_up(&mut mgr);
+        let gate = Arc::clone(&mgr.write_gate);
+        let writing = gate.lock().unwrap();
+
+        mgr.open_log("a", "router").unwrap();
+        mgr.write_log("a", b"first\n");
+        // The writer has the text and is at the write.
+        wait_for_file(&dir.join("router.log"));
+        // More than fits in one write waits behind it.
+        let output = vec![b'x'; WRITE_PIECE_BYTES];
+        for _ in 0..4 {
+            assert!(mgr.write_log("a", &output).is_none());
+        }
+        let Some((LogEntry::Writing(queue), _)) = mgr.entries.get("a") else {
+            panic!("the log is being written");
+        };
+        let shared = Arc::clone(&queue.0);
+        assert_eq!(lock(&shared.state).queued, 4 * WRITE_PIECE_BYTES);
+
+        mgr.fail_writes.store(true, Ordering::Relaxed);
+        drop(writing);
+        mgr.settle("a");
+        assert!(!mgr.has_log("a"));
+        assert_eq!(lock(&shared.state).waiting(), 0);
+        // Writes would go through again, and none is made.
+        mgr.fail_writes.store(false, Ordering::Relaxed);
+        mgr.close_log("a");
+        mgr.wait_until_written();
+        assert_eq!(*reported.lock().unwrap(), ["a"]);
+        assert_eq!(text_of(&dir.join("router.log")), "");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A session that waits for its log goes on at once when a write fails:
+    /// it does not wait out the stall timeout, and is told once.
+    #[test]
+    fn a_session_that_waits_for_its_log_goes_on_when_a_write_fails() {
+        let (mut mgr, dir) = manager();
+        let reported = record_given_up(&mut mgr);
+        mgr.stall_timeout = TEST_WAIT;
+        let gate = Arc::clone(&mgr.write_gate);
+        let writing = gate.lock().unwrap();
+
+        let waited = wait_on_a_thread(log_that_is_behind(&mut mgr, &dir));
+        assert_eq!(
+            waited.recv_timeout(Duration::from_millis(100)),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+        );
+        mgr.fail_writes.store(true, Ordering::Relaxed);
+        drop(writing);
+        waited.recv_timeout(TEST_WAIT).unwrap();
+        assert!(!mgr.has_log("a"));
+        assert!(mgr.write_log("a", &half_the_limit()).is_none());
+        mgr.close_log("a");
+        mgr.wait_until_written();
+        assert_eq!(*reported.lock().unwrap(), ["a"]);
+        assert_eq!(text_of(&dir.join("router.log")), "");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A write that fails after a file's limit was reached: the files
+    /// before it stay as they are, and no further file is started.
+    #[test]
+    fn a_write_that_fails_in_a_later_file_ends_the_log_there() {
+        let (mut mgr, dir) = manager_with_limits(4, 10);
+        let reported = record_given_up(&mut mgr);
+        mgr.open_log("a", "router").unwrap();
+        mgr.write_log("a", b"aaaabb");
+        mgr.settle("a");
+        mgr.fail_writes.store(true, Ordering::Relaxed);
+        // Two bytes for the file being written, and the rest for new ones.
+        mgr.write_log("a", b"ccddddeeee");
+        mgr.settle("a");
+        assert!(!mgr.has_log("a"));
+        mgr.fail_writes.store(false, Ordering::Relaxed);
+        mgr.write_log("a", b"ffff");
+        mgr.close_log("a");
+        mgr.wait_until_written();
+        assert_eq!(*reported.lock().unwrap(), ["a"]);
+        assert_eq!(names_in(&dir), ["router.log", "router.part0002.log"]);
+        assert_eq!(text_of(&dir.join("router.log")), "aaaa");
+        assert_eq!(text_of(&dir.join("router.part0002.log")), "bb");
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     /// The log's bytes, and not only what the stripper returns: DEL and a C1
