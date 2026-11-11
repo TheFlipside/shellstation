@@ -614,7 +614,13 @@ pub async fn session_connect(
             .filter(|s| !s.is_empty())
     });
     let effective_ls_id = if let (Some(pool), Some(ref ident)) = (&pg.0, &user_ident_for_ls) {
-        match super::session_login_sequences::query_user_login_sequence(pool, &id, ident).await? {
+        match super::session_login_sequences::query_user_login_sequence(
+            pool,
+            &session_id.to_string(),
+            ident,
+        )
+        .await?
+        {
             Some(uuid) => Some(uuid),
             None => session.login_sequence_id,
         }
@@ -692,7 +698,13 @@ pub async fn session_connect(
             .filter(|s| !s.is_empty())
     });
     let effective_credential_id = if let (Some(pool), Some(ref ident)) = (&pg.0, &user_ident) {
-        match super::session_credentials::query_user_credential(pool, &id, ident).await? {
+        match super::session_credentials::query_user_credential(
+            pool,
+            &session_id.to_string(),
+            ident,
+        )
+        .await?
+        {
             Some(uuid) => Some(uuid),
             None => session.credential_profile_id,
         }

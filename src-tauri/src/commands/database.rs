@@ -74,9 +74,15 @@ pub async fn get_user_ident(state: State<'_, ConfigState>) -> Result<Option<Stri
 }
 
 /// Set the user identity and persist it to config.json.
+///
+/// The per-user mappings from before a mapping had an owner are claimed by
+/// this name (`claim_legacy_mappings` in `lib.rs`). Startup claims them for
+/// the name it finds configured, so a name set or changed here claims them
+/// too, and what the user connects with does not depend on a restart.
 #[tauri::command]
 pub async fn set_user_ident(
     state: State<'_, ConfigState>,
+    pg: State<'_, crate::db::PgPoolState>,
     user_ident: String,
 ) -> Result<(), String> {
     let trimmed = user_ident.trim().to_string();
@@ -91,12 +97,18 @@ pub async fn set_user_ident(
     if trimmed.chars().any(char::is_control) {
         return Err("User identity must not contain control characters".to_string());
     }
-    let mut config = state
-        .config
-        .lock()
-        .map_err(|e| format!("Config lock poisoned: {e}"))?;
-    config.user_ident = Some(trimmed);
-    config::save_config(&state.config_path, &config)
+    {
+        let mut config = state
+            .config
+            .lock()
+            .map_err(|e| format!("Config lock poisoned: {e}"))?;
+        config.user_ident = Some(trimmed.clone());
+        config::save_config(&state.config_path, &config)?;
+    }
+    if let Some(pool) = pg.0.as_ref() {
+        crate::claim_legacy_mappings_and_log(pool, &trimmed).await;
+    }
+    Ok(())
 }
 
 /// Return the current `OS` username for pre-filling the user identity prompt.

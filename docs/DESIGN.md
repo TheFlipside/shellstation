@@ -155,7 +155,7 @@ When using PostgreSQL as the backend, ShellStation enforces **Row-Level Security
 
 #### 4.5.1 How RLS Works
 
-Every `folders` and `sessions` row has two columns added by the RLS migration:
+The per-user mapping tables are protected too, by a rule of their own (see **Per-user mappings** below). Every `folders` and `sessions` row has two columns added by the RLS migration:
 
 | Column       | Type | Purpose                                                         |
 | ------------ | ---- | --------------------------------------------------------------- |
@@ -187,7 +187,13 @@ The two functions:
 
 Both functions run as the updating user. Their `search_path` is pinned to `pg_catalog, pg_temp`, with the temporary schema last, and their catalog lookups are schema-qualified, so a temporary table cannot stand in for `pg_class`. These guarantees hold under Option A (§4.5.2). Option B users hold `TRIGGER` and `TRUNCATE` on the tables, and both reach past row-level security anyway: such a user can add a trigger of their own that rewrites `owner`, or empty a table outright.
 
-**Per-user credential mapping:** The `session_credentials` table maps each user's credential profile to shared sessions. When user A shares a session with user B, each user connects with their own credentials — the session definition is shared, the authentication is not.
+**Per-user mappings:** The `session_credentials` and `session_login_sequences` tables map a session to a user's own credential profile and login sequence. When user A shares a session with user B, each user connects with their own credentials — the session definition is shared, the authentication is not.
+
+The profiles and sequences themselves stay in each user's local database, so a mapping holds only an ID. That ID still decides which of a user's secrets a connection sends. Someone able to write another user's mapping could have a session send that user's password for one host to another host. A mapping therefore belongs to the database role that wrote it, named in its `owner` column, and RLS, with `FORCE` as on the other tables, gives a role its own mappings and, of the others, only the placeholders described below. Each table has one policy for every command, `*_owner_all`. Its `WITH CHECK` accepts a row only if it is the role's own and for a session the role can see, and since it is the only policy, an updated row has no other to pass by. The session is part of the rule because the foreign key is checked without RLS: its answer alone would tell any role whether a session with a given ID exists. The app's own statements name `owner = current_user` as well. As on the other tables, this holds under Option A (§4.5.2): an Option B user holds `TRIGGER` and `TRUNCATE` here too, and a trigger of theirs on a mapping table would run when another user saves a mapping.
+
+Under its role, a mapping is keyed by the **user identity** from Settings. That is a name the client chooses for itself, so it protects nothing. It tells apart people who share one database account, between whom there is no isolation in any case. The primary key is `(session_id, owner, user_ident)`, so a row of one role never collides with a row of another, whatever names the two use. The migrations are shared with SQLite, which cannot drop a primary key, so the migration adds `owner` and a unique index, and `setup_postgres_rls` makes that index the primary key in place of the old `(session_id, user_ident)`.
+
+Mappings from before `owner` existed carry the placeholder `'local'`, and the app does not connect with a placeholder; only a version from before `owner` existed still does. Which role wrote such a row is not on record. Each client therefore claims the placeholders under its own user identity, at startup and when that identity is set, and deletes the placeholder of a session its user has mapped again since. The policy lets any role read, claim or delete a placeholder, but only for a session that role can see. The placeholders for a personal session are thus left to that session's owner. A placeholder cannot be changed and stay one, and none can be added. A placeholder is no role's own row: a role named `local` is held to the sessions it can see like any other, and can save no mapping of its own. A placeholder for a shared session is taken by its name alone, the name that protects nothing: before, any user could read and rewrite it, so whether the user it names wrote it cannot be known, and until that user's client has claimed it, another user can read, claim or delete it first. An admin who would rather not carry such rows over deletes them ([ADMIN_GUIDE.md §5](ADMIN_GUIDE.md#5-applying-application-updates)), and the users assign their profiles again.
 
 #### 4.5.2 Permission Model
 

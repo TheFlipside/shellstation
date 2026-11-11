@@ -332,6 +332,11 @@ fn sanitize_pg_error(raw: &str) -> String {
     "PostgreSQL initialization failed. See application logs for details.".to_string()
 }
 
+/// The tables that map a session to a user's own credential profile or login
+/// sequence. A row belongs to the database role in its `owner` column; see
+/// [`setup_postgres_rls`] and [`claim_legacy_mappings`].
+const MAPPING_TABLES: [&str; 2] = ["session_credentials", "session_login_sequences"];
+
 /// Idempotent `RLS` setup for `PostgreSQL` multi-user isolation.
 ///
 /// Called after `sqlx::migrate!()` succeeds. Statements are written so that
@@ -353,6 +358,10 @@ async fn setup_postgres_rls(pool: &sqlx::PgPool) -> Result<(), String> {
         "ALTER TABLE folders FORCE ROW LEVEL SECURITY",
         "ALTER TABLE sessions ENABLE ROW LEVEL SECURITY",
         "ALTER TABLE sessions FORCE ROW LEVEL SECURITY",
+        "ALTER TABLE session_credentials ENABLE ROW LEVEL SECURITY",
+        "ALTER TABLE session_credentials FORCE ROW LEVEL SECURITY",
+        "ALTER TABLE session_login_sequences ENABLE ROW LEVEL SECURITY",
+        "ALTER TABLE session_login_sequences FORCE ROW LEVEL SECURITY",
     ] {
         sqlx::query(stmt)
             .execute(pool)
@@ -369,24 +378,28 @@ async fn setup_postgres_rls(pool: &sqlx::PgPool) -> Result<(), String> {
             "folders",
             "ALL",
             "owner = current_user",
+            None,
         ),
         (
             "folders_shared_read",
             "folders",
             "SELECT",
             "visibility = 'shared'",
+            None,
         ),
         (
             "folders_shared_update",
             "folders",
             "UPDATE",
             "visibility = 'shared'",
+            None,
         ),
         (
             "folders_shared_delete",
             "folders",
             "DELETE",
             "visibility = 'shared' AND owner = current_user",
+            None,
         ),
         // Sessions
         (
@@ -394,31 +407,80 @@ async fn setup_postgres_rls(pool: &sqlx::PgPool) -> Result<(), String> {
             "sessions",
             "ALL",
             "owner = current_user",
+            None,
         ),
         (
             "sessions_shared_read",
             "sessions",
             "SELECT",
             "visibility = 'shared'",
+            None,
         ),
         (
             "sessions_shared_update",
             "sessions",
             "UPDATE",
             "visibility = 'shared'",
+            None,
         ),
         (
             "sessions_shared_delete",
             "sessions",
             "DELETE",
             "visibility = 'shared' AND owner = current_user",
+            None,
+        ),
+        // Per-user mappings. A role has its own rows, and of other rows only
+        // the placeholders below: there is no shared row here, and one policy
+        // for every command, so the new row of an insert or update has only
+        // this `WITH CHECK` to pass. It cannot be given to another role, and
+        // it cannot be a placeholder, also not for a role named `local`, to
+        // which every placeholder would otherwise look like a row of its
+        // own to write. It must also be for a session the role can see: the
+        // foreign key is checked without RLS, and its answer alone would say
+        // whether a session with some id exists.
+        //
+        // The placeholder rows are the ones from before a mapping had an
+        // owner. Which role wrote one is not on record, so any role may
+        // read, claim or delete it, as it could before, but only for a
+        // session it can see: the subquery runs as the role asking and so
+        // under the RLS of `sessions`. Mappings for a personal session are
+        // therefore left to that session's owner. See
+        // `claim_legacy_mappings`. A placeholder is no role's own row, also
+        // not that of a role named `local`, which is held to the sessions it
+        // can see like any other.
+        //
+        // An existing policy is left as it is (`duplicate_object` below), so
+        // a change to these two needs a new name.
+        (
+            "session_credentials_owner_all",
+            "session_credentials",
+            "ALL",
+            "(owner = current_user AND owner <> 'local') OR (owner = 'local' AND EXISTS \
+             (SELECT 1 FROM sessions s WHERE s.id = session_credentials.session_id))",
+            Some(
+                "owner = current_user AND owner <> 'local' AND EXISTS \
+                 (SELECT 1 FROM sessions s WHERE s.id = session_credentials.session_id)",
+            ),
+        ),
+        (
+            "session_login_sequences_owner_all",
+            "session_login_sequences",
+            "ALL",
+            "(owner = current_user AND owner <> 'local') OR (owner = 'local' AND EXISTS \
+             (SELECT 1 FROM sessions s WHERE s.id = session_login_sequences.session_id))",
+            Some(
+                "owner = current_user AND owner <> 'local' AND EXISTS \
+                 (SELECT 1 FROM sessions s WHERE s.id = session_login_sequences.session_id)",
+            ),
         ),
     ];
 
-    for (name, table, cmd, using_expr) in &policies {
+    for (name, table, cmd, using_expr, check_expr) in &policies {
+        let with_check = check_expr.map_or_else(String::new, |e| format!(" WITH CHECK ({e})"));
         let sql = format!(
             "DO $$ BEGIN \
-                 CREATE POLICY {name} ON {table} FOR {cmd} USING ({using_expr}); \
+                 CREATE POLICY {name} ON {table} FOR {cmd} USING ({using_expr}){with_check}; \
              EXCEPTION WHEN duplicate_object THEN NULL; \
              END $$"
         );
@@ -441,6 +503,47 @@ async fn setup_postgres_rls(pool: &sqlx::PgPool) -> Result<(), String> {
             .execute(pool)
             .await
             .map_err(|e| format!("RLS setup (constraint {table}_vis_ck): {e}"))?;
+    }
+
+    // A mapping's key includes its owner. The tables came with a primary key
+    // of (session_id, user_ident): with it, a role that wrote a row under
+    // someone else's `user_ident` would keep that user from mapping the
+    // session, since their own row would collide with one they cannot see.
+    // The migration that added `owner` also added a unique index with it,
+    // which the app's upserts go by; here it becomes the primary key, and
+    // the old one goes. A migration cannot do this: the migrations are
+    // shared with SQLite, which cannot drop a primary key.
+    //
+    // The index can be the primary key because it is unique, covers whole
+    // columns, and all three are NOT NULL. Once the swap is done, a start
+    // only looks. A start that finds it to do takes the table's lock and
+    // looks again, since two starts of the owning role at the same time
+    // would both find it to do, and the second would fail at a primary key
+    // that is no longer there.
+    for table in MAPPING_TABLES {
+        let sql = format!(
+            "DO $$ DECLARE pk name; BEGIN \
+                 SELECT conname INTO pk FROM pg_catalog.pg_constraint \
+                     WHERE conrelid = '{table}'::pg_catalog.regclass AND contype = 'p'; \
+                 IF pk IS DISTINCT FROM '{table}_owner_key' THEN \
+                     LOCK TABLE {table} IN ACCESS EXCLUSIVE MODE; \
+                     SELECT conname INTO pk FROM pg_catalog.pg_constraint \
+                         WHERE conrelid = '{table}'::pg_catalog.regclass AND contype = 'p'; \
+                     IF pk IS DISTINCT FROM '{table}_owner_key' THEN \
+                         IF pk IS NOT NULL THEN \
+                             EXECUTE pg_catalog.format( \
+                                 'ALTER TABLE {table} DROP CONSTRAINT %I', pk); \
+                         END IF; \
+                         ALTER TABLE {table} ADD CONSTRAINT {table}_owner_key \
+                             PRIMARY KEY USING INDEX {table}_owner_key; \
+                     END IF; \
+                 END IF; \
+             END $$"
+        );
+        sqlx::query(sqlx::AssertSqlSafe(sql.as_str()))
+            .execute(pool)
+            .await
+            .map_err(|e| format!("RLS setup (primary key of {table}): {e}"))?;
     }
 
     // Triggers keep a shared row with its owner and where its owner put it.
@@ -544,6 +647,73 @@ async fn setup_postgres_rls(pool: &sqlx::PgPool) -> Result<(), String> {
 
     tracing::info!("PostgreSQL RLS setup complete");
     Ok(())
+}
+
+/// Claim the per-user mappings written under `user_ident` before a mapping
+/// had an owner, and return how many there were.
+///
+/// The migration that added `owner` left those rows with the placeholder
+/// `'local'`, and nothing connects with a row that is still a placeholder.
+/// Each client takes the ones under its own `user_ident`, at startup and
+/// when that name is set ([`claim_legacy_mappings_and_log`]), as
+/// `setup_postgres_rls` does for placeholder folders and sessions. Unlike
+/// that setup, this needs no more than a regular user's privileges.
+///
+/// A placeholder row was written when any role could write any row, so
+/// whether its user wrote it cannot be known: this takes it by its name.
+/// It is limited to sessions the role can see, like the policy that allows
+/// it. A session the user has mapped again since keeps that mapping, and
+/// its placeholder is deleted, so that it does not stay behind for others
+/// to read.
+async fn claim_legacy_mappings(pool: &sqlx::PgPool, user_ident: &str) -> Result<u64, String> {
+    // A row of this role's own for the same session and name.
+    let mapped_again = |table: &str| {
+        format!(
+            "EXISTS (SELECT 1 FROM {table} AS own \
+                 WHERE own.session_id = legacy.session_id \
+                   AND own.owner = current_user \
+                   AND own.user_ident = legacy.user_ident)"
+        )
+    };
+    let mut claimed = 0;
+    for table in MAPPING_TABLES {
+        let mapped_again = mapped_again(table);
+        let placeholder = "legacy.owner = 'local' AND legacy.user_ident = $1 \
+             AND EXISTS (SELECT 1 FROM sessions s WHERE s.id = legacy.session_id)";
+        let claim = format!(
+            "UPDATE {table} AS legacy SET owner = current_user \
+             WHERE {placeholder} AND NOT {mapped_again}"
+        );
+        claimed += sqlx::query(sqlx::AssertSqlSafe(claim.as_str()))
+            .bind(user_ident)
+            .execute(pool)
+            .await
+            .map_err(|e| format!("Claiming legacy rows of {table}: {e}"))?
+            .rows_affected();
+        let clear = format!("DELETE FROM {table} AS legacy WHERE {placeholder} AND {mapped_again}");
+        sqlx::query(sqlx::AssertSqlSafe(clear.as_str()))
+            .bind(user_ident)
+            .execute(pool)
+            .await
+            .map_err(|e| format!("Clearing legacy rows of {table}: {e}"))?;
+    }
+    Ok(claimed)
+}
+
+/// [`claim_legacy_mappings`], with its outcome in the application log. A
+/// claim that fails is not fatal: the mappings stay placeholders, and the
+/// next start tries again.
+pub(crate) async fn claim_legacy_mappings_and_log(pool: &sqlx::PgPool, user_ident: &str) {
+    match claim_legacy_mappings(pool, user_ident).await {
+        Ok(0) => {}
+        Ok(claimed) => tracing::info!(
+            claimed,
+            "Claimed per-user session mappings from before they had an owner"
+        ),
+        Err(e) => tracing::warn!(
+            "Per-user session mappings from before they had an owner were not claimed: {e}"
+        ),
+    }
 }
 
 /// Menu `ID` of the app's own quit item; see [`build_app_menu`].
@@ -1184,6 +1354,21 @@ pub fn run() {
                             {
                                 tracing::warn!("PostgreSQL RLS setup skipped; only the role that owns the tables can apply it (ADMIN_GUIDE.md §5): {e}");
                             }
+                            // Mappings from before a mapping had an owner
+                            // (see `claim_legacy_mappings`). After the setup
+                            // above, since the table owner's first start
+                            // makes the policy that allows the claim, but
+                            // whether or not that setup was this role's to
+                            // apply.
+                            if let Some(ident) = app_config
+                                .user_ident
+                                .as_deref()
+                                .filter(|s| !s.is_empty())
+                            {
+                                tauri::async_runtime::block_on(
+                                    claim_legacy_mappings_and_log(&pool, ident),
+                                );
+                            }
                             // Query current_user for ownership tracking.
                             let pg_user = tauri::async_runtime::block_on(async {
                                 sqlx::query_scalar::<_, String>("SELECT current_user")
@@ -1746,6 +1931,27 @@ mod tests {
     #[tokio::test]
     #[ignore = "needs a throwaway PostgreSQL server in SHELLSTATION_TEST_PG_URL"]
     async fn shared_rows_keep_their_owner() {
+        with_rls_test_database(check_shared_rows_keep_their_owner).await;
+    }
+
+    /// The per-user mappings against a real server: `setup_postgres_rls`,
+    /// `claim_legacy_mappings` and the statements of the mapping commands.
+    /// Same server as for `shared_rows_keep_their_owner`; run with
+    /// `--ignored per_user_mappings`.
+    #[tokio::test]
+    #[ignore = "needs a throwaway PostgreSQL server in SHELLSTATION_TEST_PG_URL"]
+    async fn per_user_mappings_are_private() {
+        with_rls_test_database(check_per_user_mappings_are_private).await;
+    }
+
+    /// Run `checks` with a database of its own on the throwaway server and
+    /// the names of three roles made for it: an admin and two users. All
+    /// four are dropped again afterwards.
+    async fn with_rls_test_database<F, Fut>(checks: F)
+    where
+        F: FnOnce(sqlx::postgres::PgConnectOptions, String, String, String) -> Fut,
+        Fut: std::future::Future<Output = ()> + Send + 'static,
+    {
         let url = std::env::var("SHELLSTATION_TEST_PG_URL")
             .expect("SHELLSTATION_TEST_PG_URL must name a throwaway PostgreSQL server");
         let server = PgPoolOptions::new()
@@ -1772,7 +1978,7 @@ mod tests {
         // In a task of their own, so that a failing check still gets the
         // database and roles dropped before its panic is passed on.
         let opts: sqlx::postgres::PgConnectOptions = url.parse().unwrap();
-        let checks = tokio::spawn(check_shared_rows_keep_their_owner(
+        let checks = tokio::spawn(checks(
             opts.database(&db),
             admin.clone(),
             alice.clone(),
@@ -1994,6 +2200,407 @@ mod tests {
         pg_exec(&pool, &format!("SET ROLE {admin}")).await.unwrap();
         let reassign = format!("UPDATE folders SET owner = '{admin}' WHERE id = '{id}'");
         assert_eq!(pg_exec(&pool, &reassign).await.unwrap().rows_affected(), 1);
+
+        pool.close().await;
+    }
+
+    /// What row-level security says when it refuses a new row.
+    const BY_ROW_SECURITY: &str = "row-level security policy";
+
+    async fn pg_count(pool: &sqlx::PgPool, sql: &str) -> i64 {
+        sqlx::query_scalar(sqlx::AssertSqlSafe(sql))
+            .fetch_one(pool)
+            .await
+            .unwrap()
+    }
+
+    async fn check_per_user_mappings_are_private(
+        opts: sqlx::postgres::PgConnectOptions,
+        admin: String,
+        alice: String,
+        bob: String,
+    ) {
+        use commands::{
+            bulk_set_user_credentials, bulk_set_user_login_sequences, query_user_credential,
+            query_user_login_sequence, set_user_credential, set_user_login_sequence,
+        };
+
+        // One connection, so each SET ROLE holds for the statements after it.
+        let pool = PgPoolOptions::new()
+            .max_connections(1)
+            .connect_with(opts)
+            .await
+            .unwrap();
+        pg_exec(&pool, &format!("GRANT ALL ON SCHEMA public TO {admin}"))
+            .await
+            .unwrap();
+        pg_exec(
+            &pool,
+            &format!("GRANT USAGE ON SCHEMA public TO {alice}, {bob}"),
+        )
+        .await
+        .unwrap();
+        pg_exec(&pool, &format!("SET ROLE {admin}")).await.unwrap();
+        sqlx::migrate!().run(&pool).await.unwrap();
+
+        // A database from before a mapping had an owner, written while row-
+        // level security is not yet on: alice has a shared and a personal
+        // session, and there are mappings under her name for both and under
+        // bob's for the shared one. Written without `owner`, as the previous
+        // version wrote them.
+        let (shared, personal) = (uuid::Uuid::new_v4(), uuid::Uuid::new_v4());
+        let folder = uuid::Uuid::new_v4();
+        pg_exec(
+            &pool,
+            &format!(
+                "INSERT INTO folders (id, name, sort_order, owner, visibility) \
+                 VALUES ('{folder}', 'folder', 0, '{alice}', 'shared')"
+            ),
+        )
+        .await
+        .unwrap();
+        for (id, visibility) in [(shared, "shared"), (personal, "personal")] {
+            pg_exec(
+                &pool,
+                &format!(
+                    "INSERT INTO sessions (id, folder_id, name, hostname, username, owner, visibility) \
+                     VALUES ('{id}', '{folder}', '{visibility}', 'host.example', '', '{alice}', '{visibility}')"
+                ),
+            )
+            .await
+            .unwrap();
+        }
+        let tables = [
+            ("session_credentials", "credential_profile_id"),
+            ("session_login_sequences", "login_sequence_id"),
+        ];
+        assert_eq!(tables.map(|(table, _)| table), MAPPING_TABLES);
+        let (of_alice, of_bob) = (uuid::Uuid::new_v4(), uuid::Uuid::new_v4());
+        for (table, column) in tables {
+            pg_exec(
+                &pool,
+                &format!(
+                    "INSERT INTO {table} (session_id, user_ident, {column}) VALUES \
+                     ('{shared}', 'alice', '{of_alice}'), ('{personal}', 'alice', '{of_alice}'), \
+                     ('{shared}', 'bob', '{of_bob}')"
+                ),
+            )
+            .await
+            .unwrap();
+        }
+
+        // RLS setup, twice to show it is idempotent, then DML for the users
+        // (admin guide, Option A).
+        setup_postgres_rls(&pool).await.unwrap();
+        setup_postgres_rls(&pool).await.unwrap();
+        pg_exec(
+            &pool,
+            &format!(
+                "GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public \
+                 TO {alice}, {bob}"
+            ),
+        )
+        .await
+        .unwrap();
+        for (table, _) in tables {
+            // The owner is in the primary key now, and nothing else is one.
+            assert_eq!(
+                pg_count(
+                    &pool,
+                    &format!(
+                        "SELECT count(*) FROM pg_constraint WHERE conrelid = '{table}'::regclass \
+                         AND contype = 'p' AND conname = '{table}_owner_key'"
+                    ),
+                )
+                .await,
+                1
+            );
+            assert_eq!(
+                pg_count(
+                    &pool,
+                    &format!(
+                        "SELECT count(*) FROM pg_constraint WHERE conrelid = '{table}'::regclass \
+                         AND contype IN ('p', 'u')"
+                    ),
+                )
+                .await,
+                1
+            );
+            // FORCE: the table owner sees the placeholders of the session it
+            // can see, and no more.
+            assert_eq!(
+                pg_count(&pool, &format!("SELECT count(*) FROM {table}")).await,
+                2
+            );
+        }
+        let (shared, personal) = (shared.to_string(), personal.to_string());
+
+        // Bob, before anyone has claimed anything. The setup is not his to
+        // apply, as at every start of a regular user.
+        pg_exec(&pool, &format!("SET ROLE {bob}")).await.unwrap();
+        let not_bobs = setup_postgres_rls(&pool).await.unwrap_err();
+        assert!(not_bobs.contains("must be owner of table"), "{not_bobs}");
+        for (table, column) in tables {
+            // The placeholders of the shared session can be read, as before;
+            // the one of alice's personal session cannot.
+            assert_eq!(
+                pg_count(&pool, &format!("SELECT count(*) FROM {table}")).await,
+                2
+            );
+            // A placeholder cannot be rewritten in place, and none added.
+            let mine = uuid::Uuid::new_v4();
+            for sql in [
+                format!("UPDATE {table} SET {column} = '{mine}' WHERE user_ident = 'alice'"),
+                format!(
+                    "INSERT INTO {table} (session_id, user_ident, {column}) \
+                     VALUES ('{shared}', 'carol', '{mine}')"
+                ),
+                // Nor a row for another role.
+                format!(
+                    "INSERT INTO {table} (session_id, owner, user_ident, {column}) \
+                     VALUES ('{shared}', '{alice}', 'alice', '{mine}')"
+                ),
+                // Nor a row of his own for a session he cannot see, or for
+                // none: both are refused alike, so the answer does not say
+                // which ids are sessions.
+                format!(
+                    "INSERT INTO {table} (session_id, owner, user_ident, {column}) \
+                     VALUES ('{personal}', current_user, 'bob', '{mine}')"
+                ),
+                format!(
+                    "INSERT INTO {table} (session_id, owner, user_ident, {column}) \
+                     VALUES ('{mine}', current_user, 'bob', '{mine}')"
+                ),
+            ] {
+                assert!(
+                    refused(pg_exec(&pool, &sql).await, BY_ROW_SECURITY),
+                    "{sql}"
+                );
+            }
+        }
+        // The commands refuse the same, and say the same for both.
+        let unseen = [personal.clone(), uuid::Uuid::new_v4().to_string()];
+        for session in &unseen {
+            let expected = Err(format!("Session {session} not found"));
+            assert_eq!(
+                set_user_credential(&pool, session, "bob", Some(&shared)).await,
+                expected
+            );
+            assert_eq!(
+                set_user_login_sequence(&pool, session, "bob", Some(&shared)).await,
+                expected
+            );
+        }
+        // Nothing connects with a placeholder.
+        assert_eq!(
+            query_user_credential(&pool, &shared, "bob").await.unwrap(),
+            None
+        );
+        assert_eq!(
+            query_user_login_sequence(&pool, &shared, "bob")
+                .await
+                .unwrap(),
+            None
+        );
+        // Bob claims his own, one in each table, and a second claim finds
+        // nothing left.
+        assert_eq!(claim_legacy_mappings(&pool, "bob").await.unwrap(), 2);
+        assert_eq!(claim_legacy_mappings(&pool, "bob").await.unwrap(), 0);
+        assert_eq!(
+            query_user_credential(&pool, &shared, "bob").await.unwrap(),
+            Some(of_bob)
+        );
+        assert_eq!(
+            query_user_login_sequence(&pool, &shared, "bob")
+                .await
+                .unwrap(),
+            Some(of_bob)
+        );
+        // Bob maps the shared session under alice's name as well. With the
+        // old primary key this row would have kept alice from mapping it.
+        let planted = uuid::Uuid::new_v4();
+        let planted_text = planted.to_string();
+        set_user_credential(&pool, &shared, "alice", Some(&planted_text))
+            .await
+            .unwrap();
+        set_user_login_sequence(&pool, &shared, "alice", Some(&planted_text))
+            .await
+            .unwrap();
+        // Setting it again updates the row instead of adding one.
+        set_user_credential(&pool, &shared, "alice", Some(&planted_text))
+            .await
+            .unwrap();
+        for (table, _) in tables {
+            assert_eq!(
+                pg_count(
+                    &pool,
+                    &format!("SELECT count(*) FROM {table} WHERE owner = current_user"),
+                )
+                .await,
+                2
+            );
+        }
+
+        // Alice has mapped her personal session's credential again since.
+        // She claims the rest: three of her four placeholders, though bob
+        // has a row for the shared session under her name. The fourth is
+        // deleted, and her new mapping stays.
+        pg_exec(&pool, &format!("SET ROLE {alice}")).await.unwrap();
+        let again = uuid::Uuid::new_v4();
+        set_user_credential(&pool, &personal, "alice", Some(&again.to_string()))
+            .await
+            .unwrap();
+        assert_eq!(claim_legacy_mappings(&pool, "alice").await.unwrap(), 3);
+        for (session, credential) in [(&shared, of_alice), (&personal, again)] {
+            assert_eq!(
+                query_user_credential(&pool, session, "alice")
+                    .await
+                    .unwrap(),
+                Some(credential)
+            );
+            assert_eq!(
+                query_user_login_sequence(&pool, session, "alice")
+                    .await
+                    .unwrap(),
+                Some(of_alice)
+            );
+        }
+        for (table, _) in tables {
+            // She sees her own rows, no placeholder and nothing of bob's,
+            // and can neither hand a row to him nor make it a placeholder
+            // again.
+            assert_eq!(
+                pg_count(&pool, &format!("SELECT count(*) FROM {table}")).await,
+                2
+            );
+            assert_eq!(
+                pg_count(
+                    &pool,
+                    &format!("SELECT count(*) FROM {table} WHERE owner <> current_user"),
+                )
+                .await,
+                0
+            );
+            for owner in [bob.as_str(), "local"] {
+                let sql = format!("UPDATE {table} SET owner = '{owner}'");
+                assert!(
+                    refused(pg_exec(&pool, &sql).await, BY_ROW_SECURITY),
+                    "{sql}"
+                );
+            }
+        }
+        // The statements of the commands, as alice: for one session, for a
+        // folder, and clearing both.
+        let other = uuid::Uuid::new_v4();
+        let other_text = other.to_string();
+        let folder = folder.to_string();
+        set_user_credential(&pool, &shared, "alice", Some(&other_text))
+            .await
+            .unwrap();
+        assert_eq!(
+            query_user_credential(&pool, &shared, "alice")
+                .await
+                .unwrap(),
+            Some(other)
+        );
+        set_user_credential(&pool, &shared, "alice", None)
+            .await
+            .unwrap();
+        assert_eq!(
+            query_user_credential(&pool, &shared, "alice")
+                .await
+                .unwrap(),
+            None
+        );
+        assert_eq!(
+            bulk_set_user_credentials(&pool, &folder, "alice", Some(&other_text))
+                .await
+                .unwrap(),
+            2
+        );
+        assert_eq!(
+            bulk_set_user_login_sequences(&pool, &folder, "alice", Some(&other_text))
+                .await
+                .unwrap(),
+            2
+        );
+        for session in [&shared, &personal] {
+            assert_eq!(
+                query_user_credential(&pool, session, "alice")
+                    .await
+                    .unwrap(),
+                Some(other)
+            );
+            assert_eq!(
+                query_user_login_sequence(&pool, session, "alice")
+                    .await
+                    .unwrap(),
+                Some(other)
+            );
+        }
+        assert_eq!(
+            bulk_set_user_login_sequences(&pool, &folder, "alice", None)
+                .await
+                .unwrap(),
+            2
+        );
+        set_user_login_sequence(&pool, &shared, "alice", Some(&other_text))
+            .await
+            .unwrap();
+        set_user_login_sequence(&pool, &shared, "alice", None)
+            .await
+            .unwrap();
+        assert_eq!(
+            pg_count(&pool, "SELECT count(*) FROM session_login_sequences").await,
+            0
+        );
+
+        // Bob again: his rows are as he left them, alice's are out of reach,
+        // and a folder-wide change of his reaches the one session he can see.
+        pg_exec(&pool, &format!("SET ROLE {bob}")).await.unwrap();
+        assert_eq!(
+            query_user_credential(&pool, &shared, "alice")
+                .await
+                .unwrap(),
+            Some(planted)
+        );
+        for (table, column) in tables {
+            assert_eq!(
+                pg_count(
+                    &pool,
+                    &format!("SELECT count(*) FROM {table} WHERE owner <> current_user"),
+                )
+                .await,
+                0
+            );
+            for sql in [
+                format!("UPDATE {table} SET {column} = '{planted}' WHERE owner = '{alice}'"),
+                format!("DELETE FROM {table} WHERE owner = '{alice}'"),
+            ] {
+                assert_eq!(
+                    pg_exec(&pool, &sql).await.unwrap().rows_affected(),
+                    0,
+                    "{sql}"
+                );
+            }
+        }
+        assert_eq!(
+            bulk_set_user_credentials(&pool, &folder, "bob", None)
+                .await
+                .unwrap(),
+            1
+        );
+
+        // And alice's are untouched by all of that.
+        pg_exec(&pool, &format!("SET ROLE {alice}")).await.unwrap();
+        for session in [&shared, &personal] {
+            assert_eq!(
+                query_user_credential(&pool, session, "alice")
+                    .await
+                    .unwrap(),
+                Some(other)
+            );
+        }
 
         pool.close().await;
     }

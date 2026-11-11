@@ -97,7 +97,7 @@ The PostgreSQL role name becomes the `owner` value in RLS — each user sees the
 
 Two things to avoid:
 
-- **A role named `local`.** That is the placeholder owner of rows from before RLS was set up. A role with that name would own all such rows, personal ones included. Other users can only claim the shared ones.
+- **A role named `local`.** That is the placeholder owner of rows from before RLS was set up. A role with that name would own all such rows, personal ones included. Other users can only claim the shared ones. Per-user mappings from before they had an owner carry the same placeholder (section 5). There a role with that name gets no more than any other role, but it cannot save a mapping of its own.
 - **Granting `shellstation_admin` to regular users.** Members of the role that owns the tables may change the `owner` of any row they can see, which means their own rows and every shared one.
 
 ### 2.2 Per-User Grants (Alternative)
@@ -181,7 +181,11 @@ Run these as a superuser (e.g., `postgres`). Row-level security applies to `shel
 -- Reassign their personal items to the admin (optional — or let them be orphaned)
 UPDATE folders SET owner = 'shellstation_admin' WHERE owner = 'jdoe';
 UPDATE sessions SET owner = 'shellstation_admin' WHERE owner = 'jdoe';
-DELETE FROM session_credentials WHERE user_ident = 'jdoe';
+
+-- Their mappings of sessions to their own credential profiles and login sequences.
+-- Mappings they never claimed are placeholders; see the end of section 5.
+DELETE FROM session_credentials WHERE owner = 'jdoe';
+DELETE FROM session_login_sequences WHERE owner = 'jdoe';
 
 -- If you reassigned them, check that nothing still names them (both return 0)
 SELECT count(*) FROM folders WHERE owner = 'jdoe';
@@ -228,13 +232,41 @@ WHERE tgname IN ('folders_keep_owner', 'sessions_keep_owner',
 
 If any is missing, start an instance with the owning role's credentials.
 
+**Per-user mappings (the release that gives them an owner):** Each user's mappings of sessions to their own credential profiles and login sequences (`session_credentials`, `session_login_sequences`) are protected by row-level security from this release on ([DESIGN.md §4.5.1](DESIGN.md#451-how-rls-works)). The release has a migration, so the owning role starts first, as above, and that start also applies the protection. To check it:
+
+```sql
+-- Both policies should be listed
+SELECT tablename, policyname FROM pg_policies
+WHERE policyname IN ('session_credentials_owner_all',
+                     'session_login_sequences_owner_all');
+
+-- Both tables should be listed, with a primary key that starts (session_id, owner, …).
+-- No rows: the owning role has not started this release yet, or its setup failed.
+SELECT conrelid::regclass, pg_get_constraintdef(oid) FROM pg_constraint
+WHERE conname IN ('session_credentials_owner_key',
+                  'session_login_sequences_owner_key');
+```
+
+Every user needs this release afterwards. An older version still connects with the mappings it has and can clear one, but can no longer save one. It also still connects with a placeholder (see below) that has not been claimed or deleted.
+
+Mappings saved before this release stay in the tables with the placeholder owner `'local'`. Each user's ShellStation claims the ones under its own user identity at its next start, so users keep their assignments. Before this release any user could read and rewrite any mapping, so a mapping for a shared session cannot be checked for who wrote it. Until its user has claimed it, any user who can see that session can also still read the placeholder, and claim or delete it first. If you would rather not carry those over, delete the placeholders as a superuser. Do so after the owning role's first start of this release, which adds the `owner` column, and before the users start it. The owning role's own start claims the placeholders under its own user identity before you get to this; those are then its rows, not placeholders. The users then assign their credential profiles and login sequences again, which **Apply Credential Profile** and **Apply Login Sequence** on a folder do for all its sessions.
+
+```sql
+-- Optional: drop the mappings from before this release
+DELETE FROM session_credentials WHERE owner = 'local';
+DELETE FROM session_login_sequences WHERE owner = 'local';
+```
+
+Placeholders that nobody claims, such as those of a user who has left, can be deleted the same way at any later time.
+
 ---
 
 ## 6. Backup and Restore
 
 ```bash
-# Backup (as a user with read access, or the admin)
-pg_dump -h localhost -U shellstation_admin -d shellstation -F c -f shellstation_backup.dump
+# Backup (as a superuser: row-level security applies to shellstation_admin
+# too, and pg_dump stops with an error rather than leave rows out)
+pg_dump -h localhost -U postgres -d shellstation -F c -f shellstation_backup.dump
 
 # Restore to a new database
 createdb -h localhost -U postgres shellstation_restored
