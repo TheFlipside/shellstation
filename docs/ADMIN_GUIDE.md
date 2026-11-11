@@ -32,9 +32,15 @@ CREATE DATABASE shellstation;
 CREATE ROLE shellstation_admin WITH LOGIN PASSWORD 'strong-random-password';
 GRANT ALL PRIVILEGES ON DATABASE shellstation TO shellstation_admin;
 
--- On PostgreSQL 15+, grant schema permissions explicitly
+-- Grant schema permissions explicitly (PostgreSQL 15+ gives none by default)
 \c shellstation
 GRANT ALL ON SCHEMA public TO shellstation_admin;
+
+-- Before PostgreSQL 15 every role may create objects in the schema public,
+-- and a database that was upgraded from such a version still lets them.
+-- Take that away: an operator or function that a user puts there can be run
+-- by other users' statements in place of the built-in one.
+REVOKE CREATE ON SCHEMA public FROM PUBLIC;
 ```
 
 Configure one ShellStation instance with the `shellstation_admin` credentials and start it once. This runs all migrations and sets up RLS policies.
@@ -46,7 +52,7 @@ Configure one ShellStation instance with the `shellstation_admin` credentials an
 After the admin has initialized the schema, create roles for each team member. There are two permission models to choose from (see [DESIGN.md §4.5.2](DESIGN.md#452-permission-model) for the trade-offs):
 
 - **Option A — Separated roles (recommended for larger teams):** Regular users get DML only. The admin must connect first after each ShellStation upgrade that includes schema changes.
-- **Option B — All users can migrate (simpler for small teams):** Every user gets schema modification rights. Any user can apply migrations automatically — no admin coordination needed. Their table privileges include `TRIGGER` and `TRUNCATE`, which reach past row-level security. Choose this only for a team whose members you trust with each other's items.
+- **Option B — All users can migrate (simpler for small teams):** Every user gets schema modification rights. Any user can apply migrations automatically — no admin coordination needed. Their table privileges include `TRIGGER` and `TRUNCATE`, which reach past row-level security, and with `CREATE` on the schema they can put operators and functions into it that other users' statements may run. Choose this only for a team whose members you trust with each other's items.
 
 ### 2.1 Group Role (Recommended)
 
@@ -222,17 +228,43 @@ So when a release's notes mention a change to the RLS setup, start one instance 
 
 Under Option B, too, the triggers are installed by the owning role, as under Option A. They do not stop a user who holds `TRIGGER` or `TRUNCATE` on the tables, though, and Option B grants both ([DESIGN.md §4.5.1](DESIGN.md#451-how-rls-works)).
 
-To check that the triggers are installed and enabled, run the query below. It does not show whether the functions behind them are current; starting the owning role once after an update takes care of that.
+To check that the triggers are installed and enabled and call the functions of the setup, run the query below. It does not show whether the functions are current; starting the owning role once after an update takes care of that.
 
 ```sql
--- All six should be listed, with tgenabled = 'O'
-SELECT tgrelid::regclass, tgname, tgenabled FROM pg_trigger
-WHERE tgname IN ('folders_keep_owner', 'sessions_keep_owner',
-                 'folders_keep_place', 'sessions_keep_place',
-                 'folders_own_folder', 'sessions_own_folder');
+-- All six should be listed, with tgenabled = 'O', a function in the schema
+-- shellstation_rls, and the owning role as that function's owner
+SELECT t.tgrelid::regclass, t.tgname, t.tgenabled,
+       t.tgfoid::regprocedure AS function, f.proowner::regrole AS function_owner
+FROM pg_trigger t JOIN pg_proc f ON f.oid = t.tgfoid
+WHERE t.tgname IN ('folders_keep_owner', 'sessions_keep_owner',
+                   'folders_keep_place', 'sessions_keep_place',
+                   'folders_own_folder', 'sessions_own_folder');
 ```
 
-If any is missing, start an instance with the owning role's credentials.
+If any is missing or differs, start an instance with the owning role's credentials.
+
+**The schema of the trigger functions (from the release that adds it):** The functions the triggers call are kept in a schema of their own, `shellstation_rls`, which the owning role's start creates and which belongs to that role ([DESIGN.md §4.5.1](DESIGN.md#451-how-rls-works)). Regular users need no privilege on it, and should be given none: what anyone but the owning role has been granted on it is revoked at each start of the owning role. Creating it takes `CREATE` on the database, which section 1 grants the admin role. If the admin role does not have it, the application log of its start says `permission denied for database`, and the triggers stay as they were; create the schema once as a superuser, and start the admin role again:
+
+```sql
+CREATE SCHEMA shellstation_rls AUTHORIZATION shellstation_admin;
+```
+
+Earlier releases kept the functions in `public`. The start that moves the triggers to the new functions drops an old one with the last trigger that called it, if it is the starting role's to drop. One can be left there: one that no trigger of the setup's called at that start, and one that belongs to another role, such as a member of the owning role that ran an earlier release, or someone who created it under the setup's name on purpose. Nothing of the setup's calls either any more. To list and remove what is left, as a superuser:
+
+```sql
+SELECT oid::regprocedure AS function, proowner::regrole AS owner FROM pg_proc
+WHERE pronamespace = 'public'::regnamespace::oid AND proname LIKE 'shellstation\_%';
+-- then, for each one listed:
+-- DROP FUNCTION public.shellstation_own_folder();
+```
+
+**Objects in `public` (existing databases):** A database that was set up before PostgreSQL 15, or by an earlier version of section 1, still lets every role create objects in the schema `public`. An operator or function a user puts there can be run by other users' statements in place of the built-in one, as those users. Under Option A, take that away once, as a superuser; ShellStation creates nothing there as a regular user:
+
+```sql
+REVOKE CREATE ON SCHEMA public FROM PUBLIC;
+```
+
+In a query you run yourself as a superuser, compare an `oid` column with a name only after casting the name on to `oid`, as the queries in this guide do (`'public'::regnamespace::oid`).
 
 **Shared items (the release that leaves them to their owner):** Until this release any user could change another user's shared folder or session with a statement of their own, such as the host a shared session connects to, and could put a session of their own into another user's folder. From this release on only its owner changes a shared item, and an item goes only into a folder of its owner's ([DESIGN.md §4.5.1](DESIGN.md#451-how-rls-works)). ShellStation itself never did either. What users can notice is at connecting: a credential profile or login sequence that a session's own row names (Bulk Edit writes a login sequence there) now counts for that session's owner only, and a jump host that is another user's session needs the user's own credential mapping. The start of the owning role applies the rest. To check:
 

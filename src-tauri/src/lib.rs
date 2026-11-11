@@ -370,10 +370,48 @@ const OBSOLETE_POLICIES: [(&str, &str); 2] = [
     ("sessions_shared_update", "sessions"),
 ];
 
+/// The schema the trigger functions of [`setup_postgres_rls`] live in.
+///
+/// It belongs to the role that owns the tables, and no one else can create
+/// anything in it: a new schema grants nothing to anyone, and making one
+/// takes `CREATE` on the database, which regular users do not have. The
+/// functions used to be created without a schema, which put them into
+/// `public`. There a role that may create functions (every role before
+/// `PostgreSQL` 15, and the users of Option B) could create one under the
+/// setup's name before the owning role's first start. `CREATE OR REPLACE`
+/// keeps a function's owner: an owning role that is no superuser then failed
+/// at that step and got no triggers, and one that is replaced the body of a
+/// function that stayed the other role's to change again, with the triggers
+/// calling it.
+///
+/// Whoever fires a trigger needs no privilege on the schema or the function.
+/// Naming a function takes `USAGE` on its schema, though, so a trigger that
+/// calls one of these was made by a role with the owning role's privileges.
+const RLS_SCHEMA: &str = "shellstation_rls";
+
+/// When the triggers of [`setup_postgres_rls`] fire, as `pg_trigger.tgtype`
+/// has it: a row trigger (1) that fires before (2) an update (16), and for
+/// the one that looks at where a row is put, an insert (4) as well.
+const ON_CHANGE: i16 = 1 | 2 | 16;
+const ON_PLACING: i16 = ON_CHANGE | 4;
+
 /// The tables under row-level security; see [`setup_postgres_rls`].
 const RLS_TABLES: [&str; 4] = ["folders", "sessions", MAPPING_TABLES[0], MAPPING_TABLES[1]];
 
 /// Idempotent `RLS` setup for `PostgreSQL` multi-user isolation.
+///
+/// Its statements run with the session's `search_path`, which has `public`
+/// in it, where other roles may be able to create things (every role before
+/// `PostgreSQL` 15, and the users of Option B). `pg_catalog` is searched
+/// first, but an operator or function elsewhere on the path whose argument
+/// types match exactly is preferred to one in `pg_catalog` that needs a
+/// cast. An `=` for `oid` and `regclass` in `public` would thus be what
+/// `tgrelid = 'folders'::regclass` runs, as the owning role, and it could
+/// answer as it liked. So wherever the statements here compare, both sides
+/// have the same type, for which `pg_catalog` has the operator: the name of
+/// a table, function or schema is cast on to `oid`, and a number that is
+/// compared with an `oid` is written as one. Functions are named with
+/// `pg_catalog`.
 ///
 /// Called after `sqlx::migrate!()` succeeds, at every start. Only the role
 /// that owns the tables can apply it, and for any other role it ends at the
@@ -416,7 +454,7 @@ async fn setup_postgres_rls(pool: &sqlx::PgPool) -> Result<(), String> {
     // as far as the trigger functions below on a database that does not have
     // them yet, and the triggers would then call functions of that role's.
     let tables = RLS_TABLES
-        .map(|table| format!("'{table}'::pg_catalog.regclass"))
+        .map(|table| format!("'{table}'::pg_catalog.regclass::pg_catalog.oid"))
         .join(", ");
     let owns_tables: bool = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
         "SELECT count(*) = {} AND bool_and(pg_catalog.pg_has_role(c.relowner, 'USAGE')) \
@@ -432,7 +470,8 @@ async fn setup_postgres_rls(pool: &sqlx::PgPool) -> Result<(), String> {
 
     // From here on, a step that fails does not stop the ones after it, with
     // the two exceptions below. The steps do not depend on each other (but
-    // for the triggers, which need their functions), so one that cannot be
+    // for the functions, which need their schema, and the triggers, which
+    // need their functions), so one that cannot be
     // applied to this database, such as a constraint that existing rows
     // break, must not keep the others from it at every start. Whatever
     // failed is reported together at the end.
@@ -491,13 +530,13 @@ async fn setup_postgres_rls(pool: &sqlx::PgPool) -> Result<(), String> {
     // pinned: a temporary table is found before `pg_catalog` unless the path
     // says otherwise, and a temp table named `pg_class` would otherwise let
     // any user claim to own the table. `folders` is named with the schema of
-    // the table the trigger is on, for the same reason. They are replaced on
-    // every run so that a fix to them reaches existing databases, which
-    // locks no table; only the table owner gets this far, the ownership
-    // check above stops everyone else. A failure to replace one (a function
-    // owned by another role) does not stop the steps after it, but its
-    // triggers are then left alone: a new one would call a function that is
-    // not this role's.
+    // the table the trigger is on, for the same reason. The functions
+    // themselves are in a schema of the owning role's (`RLS_SCHEMA`), where
+    // no one else can have put one. They are replaced on every run so that
+    // a fix to them reaches existing databases, which locks no table; only
+    // the table owner gets this far, the ownership check above stops
+    // everyone else. A failure to replace one does not stop the steps after
+    // it, but its triggers are then left alone.
     let table_owner = "pg_catalog.pg_has_role(current_user, \
          (SELECT relowner FROM pg_catalog.pg_class WHERE oid = TG_RELID), 'MEMBER')";
     let refuse = |when: &str, message: &str| {
@@ -576,11 +615,88 @@ async fn setup_postgres_rls(pool: &sqlx::PgPool) -> Result<(), String> {
             ),
         ),
     ];
+    // The schema for them (`RLS_SCHEMA`) is made for the role that owns the
+    // tables, also when a member of that role or a superuser runs this. One
+    // that is there and is another role's is given to it, which only a
+    // superuser can do, or the role it belongs to if it is a member of the
+    // owning role. Where that fails, the schema is not to be trusted with
+    // the functions: none is created, and the triggers are left alone.
+    let owning_role = "(SELECT c.relowner FROM pg_catalog.pg_class c \
+         WHERE c.oid = 'folders'::pg_catalog.regclass::pg_catalog.oid)";
+    let owning_role_name =
+        format!("(SELECT r.rolname FROM pg_catalog.pg_roles r WHERE r.oid = {owning_role})");
+    //
+    // A schema that changes hands keeps what its earlier owner granted on
+    // it, and one of the owning role's may have been granted on since.
+    // `USAGE` would let a role name the functions in a trigger of its own,
+    // and `CREATE` put things beside them, so whatever anyone but the owning
+    // role holds on the schema is revoked, at every start, together with
+    // what a role that could pass its grant on has passed on.
+    let schema = format!(
+        "DO $$ DECLARE schema_owner oid; grantee oid; BEGIN \
+             SELECT n.nspowner INTO schema_owner FROM pg_catalog.pg_namespace n \
+                 WHERE n.nspname = '{RLS_SCHEMA}'; \
+             IF schema_owner IS NULL THEN \
+                 BEGIN \
+                     EXECUTE pg_catalog.format( \
+                         'CREATE SCHEMA {RLS_SCHEMA} AUTHORIZATION %I', {owning_role_name}); \
+                 EXCEPTION WHEN duplicate_schema OR unique_violation THEN NULL; \
+                 END; \
+                 SELECT n.nspowner INTO schema_owner FROM pg_catalog.pg_namespace n \
+                     WHERE n.nspname = '{RLS_SCHEMA}'; \
+             END IF; \
+             IF schema_owner IS DISTINCT FROM {owning_role} THEN \
+                 EXECUTE pg_catalog.format( \
+                     'ALTER SCHEMA {RLS_SCHEMA} OWNER TO %I', {owning_role_name}); \
+             END IF; \
+             FOR grantee IN \
+                 SELECT DISTINCT a.grantee FROM pg_catalog.pg_namespace n, \
+                     pg_catalog.aclexplode(n.nspacl) a \
+                 WHERE n.nspname = '{RLS_SCHEMA}' AND a.grantee <> {owning_role} \
+             LOOP \
+                 IF grantee = 0::pg_catalog.oid THEN \
+                     EXECUTE 'REVOKE ALL ON SCHEMA {RLS_SCHEMA} FROM PUBLIC CASCADE'; \
+                 ELSE \
+                     EXECUTE pg_catalog.format( \
+                         'REVOKE ALL ON SCHEMA {RLS_SCHEMA} FROM %I CASCADE', \
+                         (SELECT r.rolname FROM pg_catalog.pg_roles r WHERE r.oid = grantee)); \
+                 END IF; \
+             END LOOP; \
+         END $$"
+    );
+    let schema_is_owners =
+        match rls_setup_step(pool, &format!("schema {RLS_SCHEMA}"), &schema).await {
+            Ok(()) => true,
+            Err(failure) => {
+                failed.push(failure.message);
+                if failure.ends == RlsStepEnds::Setup {
+                    return Err(failed.join("; "));
+                }
+                false
+            }
+        };
+
+    // Each function is replaced and made the owning role's in one statement,
+    // so that one a member of that role creates is not left as the member's.
+    // `CREATE OR REPLACE` fails for a function that is there and is not this
+    // role's to replace, and with it the statement.
     let mut replaced: Vec<&str> = Vec::new();
     for (name, body) in &functions {
+        if !schema_is_owners {
+            break;
+        }
         let sql = format!(
-            "CREATE OR REPLACE FUNCTION {name}() RETURNS trigger \
-             LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp AS $fn$ {body} $fn$"
+            "DO $do$ BEGIN \
+                 CREATE OR REPLACE FUNCTION {RLS_SCHEMA}.{name}() RETURNS trigger \
+                 LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp AS $fn$ {body} $fn$; \
+                 IF (SELECT f.proowner FROM pg_catalog.pg_proc f \
+                     WHERE f.oid = '{RLS_SCHEMA}.{name}()'::pg_catalog.regprocedure::pg_catalog.oid) \
+                    IS DISTINCT FROM {owning_role} THEN \
+                     EXECUTE pg_catalog.format( \
+                         'ALTER FUNCTION {RLS_SCHEMA}.{name}() OWNER TO %I', \
+                         {owning_role_name}); \
+                 END IF; \
+             END $do$"
         );
         match rls_setup_step(pool, &format!("function {name}"), &sql).await {
             Ok(()) => replaced.push(*name),
@@ -592,20 +708,22 @@ async fn setup_postgres_rls(pool: &sqlx::PgPool) -> Result<(), String> {
             }
         }
     }
-    // Each trigger with its table, its function, and when it fires. The
-    // first two functions are for updates that change their column; the
-    // third is for new rows as well, and looks at the column itself.
+    // Each trigger with its table, its function, when it fires, that last
+    // as `pg_trigger.tgtype` has it (`ON_CHANGE`, `ON_PLACING`), and its
+    // column. The first two functions are for updates that change their
+    // column; the third is for new rows as well, and looks at the column
+    // itself, which it is told as its argument.
     let on_change = |column: &str, table: &str, function: &str| {
         format!(
             "BEFORE UPDATE OF {column} ON {table} FOR EACH ROW \
              WHEN (OLD.{column} IS DISTINCT FROM NEW.{column}) \
-             EXECUTE FUNCTION {function}()"
+             EXECUTE FUNCTION {RLS_SCHEMA}.{function}()"
         )
     };
     let on_placing = |column: &str, table: &str| {
         format!(
             "BEFORE INSERT OR UPDATE OF {column} ON {table} FOR EACH ROW \
-             EXECUTE FUNCTION shellstation_own_folder('{column}')"
+             EXECUTE FUNCTION {RLS_SCHEMA}.shellstation_own_folder('{column}')"
         )
     };
     let triggers = [
@@ -614,36 +732,48 @@ async fn setup_postgres_rls(pool: &sqlx::PgPool) -> Result<(), String> {
             "folders",
             "shellstation_keep_owner",
             on_change("owner", "folders", "shellstation_keep_owner"),
+            ON_CHANGE,
+            "owner",
         ),
         (
             "sessions_keep_owner",
             "sessions",
             "shellstation_keep_owner",
             on_change("owner", "sessions", "shellstation_keep_owner"),
+            ON_CHANGE,
+            "owner",
         ),
         (
             "folders_keep_place",
             "folders",
             "shellstation_keep_place",
             on_change("parent_id", "folders", "shellstation_keep_place"),
+            ON_CHANGE,
+            "parent_id",
         ),
         (
             "sessions_keep_place",
             "sessions",
             "shellstation_keep_place",
             on_change("folder_id", "sessions", "shellstation_keep_place"),
+            ON_CHANGE,
+            "folder_id",
         ),
         (
             "folders_own_folder",
             "folders",
             "shellstation_own_folder",
             on_placing("parent_id", "folders"),
+            ON_PLACING,
+            "parent_id",
         ),
         (
             "sessions_own_folder",
             "sessions",
             "shellstation_own_folder",
             on_placing("folder_id", "sessions"),
+            ON_PLACING,
+            "folder_id",
         ),
     ];
 
@@ -780,7 +910,7 @@ async fn setup_postgres_rls(pool: &sqlx::PgPool) -> Result<(), String> {
                 format!(
                     "DO $$ BEGIN \
                          IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_constraint \
-                                        WHERE conrelid = '{table}'::pg_catalog.regclass \
+                                        WHERE conrelid = '{table}'::pg_catalog.regclass::pg_catalog.oid \
                                           AND conname = '{table}_vis_ck') THEN \
                              ALTER TABLE {table} ADD CONSTRAINT {table}_vis_ck \
                                  CHECK (visibility IN ('personal', 'shared')); \
@@ -798,11 +928,11 @@ async fn setup_postgres_rls(pool: &sqlx::PgPool) -> Result<(), String> {
                 format!(
                     "DO $$ DECLARE pk name; BEGIN \
                          SELECT conname INTO pk FROM pg_catalog.pg_constraint \
-                             WHERE conrelid = '{table}'::pg_catalog.regclass AND contype = 'p'; \
+                             WHERE conrelid = '{table}'::pg_catalog.regclass::pg_catalog.oid AND contype = 'p'; \
                          IF pk IS DISTINCT FROM '{table}_owner_key' THEN \
                              LOCK TABLE {table} IN ACCESS EXCLUSIVE MODE; \
                              SELECT conname INTO pk FROM pg_catalog.pg_constraint \
-                                 WHERE conrelid = '{table}'::pg_catalog.regclass \
+                                 WHERE conrelid = '{table}'::pg_catalog.regclass::pg_catalog.oid \
                                    AND contype = 'p'; \
                              IF pk IS DISTINCT FROM '{table}_owner_key' THEN \
                                  IF pk IS NOT NULL THEN \
@@ -818,21 +948,82 @@ async fn setup_postgres_rls(pool: &sqlx::PgPool) -> Result<(), String> {
             ));
         }
 
-        // The table's triggers, where their function is this run's.
-        for (name, _, _, definition) in triggers
+        // The table's triggers, where their function is this run's. A
+        // trigger of the name that is there is left alone only if it calls
+        // that function, is enabled, fires on the events and for the column
+        // it should, and has the argument and a condition, or none, as it
+        // should. What the condition says is not compared. Any other is
+        // replaced: one of an earlier version, which called a function in
+        // `public`, and one that someone with `TRIGGER` on the table (the
+        // users of Option B) made under the name, who cannot have it call
+        // the setup's function (`RLS_SCHEMA`). Only when there is something
+        // to do does the block take the table's lock, and it then looks
+        // again, for two starts of the owning role at the same time.
+        //
+        // The function a replaced trigger called is dropped if it is one of
+        // an earlier version, which goes by its name, and is this role's to
+        // drop. While another trigger still calls it, it stays for that
+        // trigger's turn. A function under the name that is someone else's
+        // stays where it is, with nothing calling it.
+        for (name, _, function, definition, tgtype, column) in triggers
             .iter()
             .filter(|trigger| trigger.1 == table && replaced.contains(&trigger.2))
         {
+            // The argument is kept as its bytes with a zero byte after it,
+            // which `encode` writes as a backslash and three zeros. The text
+            // to compare it with is an `E''` string, in which a backslash is
+            // written twice whatever `standard_conforming_strings` says.
+            let argument_and_condition = if *tgtype == ON_PLACING {
+                format!(
+                    "t.tgnargs = 1 \
+                     AND pg_catalog.encode(t.tgargs, 'escape') = E'{column}\\\\000' \
+                     AND t.tgqual IS NULL"
+                )
+            } else {
+                "t.tgnargs = 0 AND t.tgqual IS NOT NULL".to_string()
+            };
+            let look = format!(
+                "SELECT t.oid, t.tgfoid, \
+                        t.tgfoid = '{RLS_SCHEMA}.{function}()'::pg_catalog.regprocedure::pg_catalog.oid \
+                            AND t.tgenabled = 'O' AND t.tgtype = {tgtype} \
+                            AND t.tgattr::pg_catalog.text = ( \
+                                SELECT a.attnum::pg_catalog.text FROM pg_catalog.pg_attribute a \
+                                WHERE a.attrelid = t.tgrelid AND a.attname = '{column}') \
+                            AND {argument_and_condition} \
+                 INTO have, calls, fits \
+                 FROM pg_catalog.pg_trigger t \
+                 WHERE t.tgrelid = '{table}'::pg_catalog.regclass::pg_catalog.oid \
+                   AND t.tgname = '{name}' AND NOT t.tgisinternal;"
+            );
             steps.push((
                 format!("trigger {name}"),
                 format!(
-                    "DO $$ BEGIN \
-                         IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_trigger \
-                                        WHERE tgrelid = '{table}'::pg_catalog.regclass \
-                                          AND tgname = '{name}' AND NOT tgisinternal) THEN \
-                             CREATE TRIGGER {name} {definition}; \
+                    "DO $$ DECLARE have oid; calls oid; fits boolean; BEGIN \
+                         {look} \
+                         IF fits THEN \
+                             RETURN; \
                          END IF; \
-                     EXCEPTION WHEN duplicate_object THEN NULL; \
+                         LOCK TABLE {table} IN ACCESS EXCLUSIVE MODE; \
+                         {look} \
+                         IF fits THEN \
+                             RETURN; \
+                         END IF; \
+                         IF have IS NOT NULL THEN \
+                             DROP TRIGGER {name} ON {table}; \
+                         END IF; \
+                         CREATE TRIGGER {name} {definition}; \
+                         IF EXISTS (SELECT 1 FROM pg_catalog.pg_proc f \
+                                    WHERE f.oid = calls AND f.proname = '{function}' \
+                                      AND f.pronamespace <> '{RLS_SCHEMA}'::pg_catalog.regnamespace::pg_catalog.oid) \
+                         THEN \
+                             BEGIN \
+                                 EXECUTE pg_catalog.format('DROP FUNCTION %s', \
+                                     calls::pg_catalog.regprocedure); \
+                             EXCEPTION \
+                                 WHEN insufficient_privilege OR dependent_objects_still_exist \
+                                     OR undefined_function THEN NULL; \
+                             END; \
+                         END IF; \
                      END $$"
                 ),
             ));
@@ -842,14 +1033,14 @@ async fn setup_postgres_rls(pool: &sqlx::PgPool) -> Result<(), String> {
         let rls_off = format!(
             "NOT (SELECT c.relrowsecurity AND c.relforcerowsecurity \
                   FROM pg_catalog.pg_class c \
-                  WHERE c.oid = '{table}'::pg_catalog.regclass)"
+                  WHERE c.oid = '{table}'::pg_catalog.regclass::pg_catalog.oid)"
         );
         let mut anything_missing = vec![rls_off.clone()];
         let mut create_missing = Vec::new();
         for (name, _) in OBSOLETE_POLICIES.iter().filter(|policy| policy.1 == table) {
             let present = format!(
                 "EXISTS (SELECT 1 FROM pg_catalog.pg_policy \
-                         WHERE polrelid = '{table}'::pg_catalog.regclass \
+                         WHERE polrelid = '{table}'::pg_catalog.regclass::pg_catalog.oid \
                            AND polname = '{name}')"
             );
             create_missing.push(format!(
@@ -862,7 +1053,7 @@ async fn setup_postgres_rls(pool: &sqlx::PgPool) -> Result<(), String> {
         {
             let missing = format!(
                 "NOT EXISTS (SELECT 1 FROM pg_catalog.pg_policy \
-                             WHERE polrelid = '{table}'::pg_catalog.regclass \
+                             WHERE polrelid = '{table}'::pg_catalog.regclass::pg_catalog.oid \
                                AND polname = '{name}')"
             );
             let with_check = check_expr.map_or_else(String::new, |e| format!(" WITH CHECK ({e})"));
@@ -2314,6 +2505,16 @@ mod tests {
         with_rls_test_database(check_held_locks_do_not_hang_others).await;
     }
 
+    /// Where the trigger functions are, whose they are, and what the setup
+    /// does about a trigger that calls something else, against a real
+    /// server. Same server as for `shared_rows_keep_their_owner`; run with
+    /// `--ignored trigger_functions`.
+    #[tokio::test]
+    #[ignore = "needs a throwaway PostgreSQL server in SHELLSTATION_TEST_PG_URL"]
+    async fn trigger_functions_are_the_owning_roles() {
+        with_rls_test_database(check_trigger_functions_are_the_owning_roles).await;
+    }
+
     /// Run `checks` with a database of its own on the throwaway server and
     /// the names of three roles made for it: an admin and two users. All
     /// four are dropped again afterwards.
@@ -2732,16 +2933,18 @@ mod tests {
     /// and applies the RLS setup, twice to show it is idempotent, and the two
     /// users get DML.
     async fn prepare_rls_test_database(pool: &sqlx::PgPool, admin: &str, alice: &str, bob: &str) {
-        pg_exec(pool, &format!("GRANT ALL ON SCHEMA public TO {admin}"))
+        let database: String = sqlx::query_scalar("SELECT current_database()")
+            .fetch_one(pool)
             .await
             .unwrap();
-        pg_exec(
-            pool,
-            &format!("GRANT USAGE ON SCHEMA public TO {alice}, {bob}"),
-        )
-        .await
-        .unwrap();
-        pg_exec(pool, &format!("SET ROLE {admin}")).await.unwrap();
+        for sql in [
+            format!("GRANT ALL PRIVILEGES ON DATABASE {database} TO {admin}"),
+            format!("GRANT ALL ON SCHEMA public TO {admin}"),
+            format!("GRANT USAGE ON SCHEMA public TO {alice}, {bob}"),
+            format!("SET ROLE {admin}"),
+        ] {
+            pg_exec(pool, &sql).await.unwrap();
+        }
         sqlx::migrate!().run(pool).await.unwrap();
         setup_postgres_rls(pool).await.unwrap();
         setup_postgres_rls(pool).await.unwrap();
@@ -3080,6 +3283,324 @@ mod tests {
         }
     }
 
+    async fn check_trigger_functions_are_the_owning_roles(
+        opts: sqlx::postgres::PgConnectOptions,
+        admin: String,
+        alice: String,
+        bob: String,
+    ) {
+        // One connection, so each SET ROLE holds for the statements after it.
+        let pool = PgPoolOptions::new()
+            .max_connections(1)
+            .connect_with(opts)
+            .await
+            .unwrap();
+        prepare_rls_test_database(&pool, &admin, &alice, &bob).await;
+        let role = |role: &str| format!("SET ROLE {role}");
+        let run = |sql: String| {
+            let pool = pool.clone();
+            async move { pg_exec(&pool, &sql).await.unwrap() }
+        };
+
+        // The schema and the three functions in it are the owning role's,
+        // and the six triggers call them and are enabled.
+        let schema_owner = format!(
+            "SELECT count(*) FROM pg_namespace n JOIN pg_roles r ON r.oid = n.nspowner \
+             WHERE n.nspname = '{RLS_SCHEMA}' AND r.rolname = '{admin}'"
+        );
+        let functions_owner = format!(
+            "SELECT count(*) FROM pg_proc f JOIN pg_roles r ON r.oid = f.proowner \
+             WHERE f.pronamespace = '{RLS_SCHEMA}'::regnamespace AND r.rolname = '{admin}'"
+        );
+        let triggers = format!(
+            "SELECT count(*) FROM pg_trigger t JOIN pg_proc f ON f.oid = t.tgfoid \
+             WHERE NOT t.tgisinternal AND t.tgenabled = 'O' \
+               AND f.pronamespace = '{RLS_SCHEMA}'::regnamespace \
+               AND t.tgrelid IN ('folders'::regclass, 'sessions'::regclass)"
+        );
+        let in_public = "SELECT count(*) FROM pg_proc \
+                         WHERE pronamespace = 'public'::regnamespace \
+                           AND proname LIKE 'shellstation\\_%'";
+        assert_eq!(pg_count(&pool, &schema_owner).await, 1);
+        assert_eq!(pg_count(&pool, &functions_owner).await, 3);
+        assert_eq!(pg_count(&pool, &triggers).await, 6);
+        assert_eq!(pg_count(&pool, in_public).await, 0);
+
+        // A start that finds the triggers as they should be leaves them: a
+        // trigger that is replaced is a new one, with a new oid, and
+        // replacing takes the table's lock.
+        let trigger_oids = "SELECT string_agg(oid::text, ',' ORDER BY oid) FROM pg_trigger \
+                            WHERE NOT tgisinternal";
+        let oids = |pool: sqlx::PgPool| async move {
+            sqlx::query_scalar::<_, String>(trigger_oids)
+                .fetch_one(&pool)
+                .await
+                .unwrap()
+        };
+        let before = oids(pool.clone()).await;
+        setup_postgres_rls(&pool).await.unwrap();
+        assert_eq!(oids(pool.clone()).await, before);
+
+        // A database of an earlier version: the function is in `public`, and
+        // two triggers call it. The setup has them call its own, and drops
+        // the old one once neither calls it any more.
+        let does_nothing = |name: &str| {
+            format!(
+                "CREATE FUNCTION public.{name}() RETURNS trigger LANGUAGE plpgsql \
+                 AS 'BEGIN RETURN NEW; END'"
+            )
+        };
+        run(does_nothing("shellstation_keep_owner")).await;
+        for table in ["folders", "sessions"] {
+            run(format!("DROP TRIGGER {table}_keep_owner ON {table}")).await;
+            run(format!(
+                "CREATE TRIGGER {table}_keep_owner BEFORE UPDATE OF owner ON {table} \
+                 FOR EACH ROW WHEN (OLD.owner IS DISTINCT FROM NEW.owner) \
+                 EXECUTE FUNCTION public.shellstation_keep_owner()"
+            ))
+            .await;
+        }
+        assert_eq!(pg_count(&pool, &triggers).await, 4);
+        setup_postgres_rls(&pool).await.unwrap();
+        assert_eq!(pg_count(&pool, &triggers).await, 6);
+        assert_eq!(pg_count(&pool, in_public).await, 0);
+
+        // While something else still calls the old function, it stays.
+        run(does_nothing("shellstation_keep_place")).await;
+        run("DROP TRIGGER folders_keep_place ON folders".to_string()).await;
+        for (name, table, column) in [
+            ("folders_keep_place", "folders", "parent_id"),
+            ("another", "sessions", "name"),
+        ] {
+            run(format!(
+                "CREATE TRIGGER {name} BEFORE UPDATE OF {column} ON {table} \
+                 FOR EACH ROW WHEN (OLD.{column} IS DISTINCT FROM NEW.{column}) \
+                 EXECUTE FUNCTION public.shellstation_keep_place()"
+            ))
+            .await;
+        }
+        setup_postgres_rls(&pool).await.unwrap();
+        assert_eq!(pg_count(&pool, &triggers).await, 6);
+        assert_eq!(pg_count(&pool, in_public).await, 1);
+        run("DROP TRIGGER another ON sessions".to_string()).await;
+        run("DROP FUNCTION public.shellstation_keep_place()".to_string()).await;
+
+        // A trigger that calls the right function for the wrong column is
+        // replaced too.
+        let right_column = "SELECT count(*) FROM pg_trigger t JOIN pg_attribute a \
+                                ON a.attrelid = t.tgrelid AND a.attnum::text = t.tgattr::text \
+                            WHERE t.tgname = 'sessions_keep_place' AND a.attname = 'folder_id'";
+        run("DROP TRIGGER sessions_keep_place ON sessions".to_string()).await;
+        run(format!(
+            "CREATE TRIGGER sessions_keep_place BEFORE UPDATE OF name ON sessions \
+             FOR EACH ROW WHEN (OLD.name IS DISTINCT FROM NEW.name) \
+             EXECUTE FUNCTION {RLS_SCHEMA}.shellstation_keep_place()"
+        ))
+        .await;
+        assert_eq!(pg_count(&pool, right_column).await, 0);
+        setup_postgres_rls(&pool).await.unwrap();
+        assert_eq!(pg_count(&pool, right_column).await, 1);
+
+        // So is one with the wrong argument, which tells the function which
+        // column to look at, and one that has lost its condition.
+        let argument = "SELECT count(*) FROM pg_trigger \
+                        WHERE tgname = 'sessions_own_folder' \
+                          AND encode(tgargs, 'escape') = E'folder_id\\\\000'";
+        let condition = "SELECT count(*) FROM pg_trigger \
+                         WHERE tgname = 'folders_keep_owner' AND tgqual IS NOT NULL";
+        run("DROP TRIGGER sessions_own_folder ON sessions".to_string()).await;
+        run(format!(
+            "CREATE TRIGGER sessions_own_folder BEFORE INSERT OR UPDATE OF folder_id \
+             ON sessions FOR EACH ROW \
+             EXECUTE FUNCTION {RLS_SCHEMA}.shellstation_own_folder('jump_host_id')"
+        ))
+        .await;
+        run("DROP TRIGGER folders_keep_owner ON folders".to_string()).await;
+        run(format!(
+            "CREATE TRIGGER folders_keep_owner BEFORE UPDATE OF owner ON folders \
+             FOR EACH ROW EXECUTE FUNCTION {RLS_SCHEMA}.shellstation_keep_owner()"
+        ))
+        .await;
+        assert_eq!(pg_count(&pool, argument).await, 0);
+        assert_eq!(pg_count(&pool, condition).await, 0);
+        setup_postgres_rls(&pool).await.unwrap();
+        assert_eq!(pg_count(&pool, argument).await, 1);
+        assert_eq!(pg_count(&pool, condition).await, 1);
+
+        // A trigger that is switched off is put back as well.
+        run("ALTER TABLE folders DISABLE TRIGGER folders_keep_place".to_string()).await;
+        assert_eq!(pg_count(&pool, &triggers).await, 5);
+        setup_postgres_rls(&pool).await.unwrap();
+        assert_eq!(pg_count(&pool, &triggers).await, 6);
+
+        // Bob may create functions in `public`, as every role could before
+        // PostgreSQL 15, and triggers on `sessions`, as under Option B. He
+        // gets there first: a function under the setup's name that lets
+        // everything through, and the trigger of the setup's name calling
+        // it, on a database that does not have that trigger yet.
+        pg_exec(&pool, &role(&alice)).await.unwrap();
+        let of_alice = insert_folder(&pool, None, "shared").await;
+        pg_exec(&pool, "RESET ROLE").await.unwrap();
+        run(format!("GRANT CREATE ON SCHEMA public TO {bob}")).await;
+        run(format!("GRANT TRIGGER ON sessions TO {bob}")).await;
+        run("DROP TRIGGER sessions_own_folder ON sessions".to_string()).await;
+        pg_exec(&pool, &role(&bob)).await.unwrap();
+        run(does_nothing("shellstation_own_folder")).await;
+        run(
+            "CREATE TRIGGER sessions_own_folder BEFORE INSERT OR UPDATE OF folder_id \
+             ON sessions FOR EACH ROW \
+             EXECUTE FUNCTION public.shellstation_own_folder('folder_id')"
+                .to_string(),
+        )
+        .await;
+        let into_alices = || {
+            format!(
+                "INSERT INTO sessions (id, folder_id, name, hostname, username, owner, visibility) \
+                 VALUES ('{}', '{of_alice}', 'planted', 'host.example', '', current_user, 'shared')",
+                uuid::Uuid::new_v4()
+            )
+        };
+        assert_eq!(run(into_alices()).await.rows_affected(), 1);
+        // In the owning role's schema he can create nothing.
+        let in_schema = format!(
+            "CREATE FUNCTION {RLS_SCHEMA}.shellstation_own_folder() RETURNS trigger \
+             LANGUAGE plpgsql AS 'BEGIN RETURN NEW; END'"
+        );
+        assert!(refused(
+            pg_exec(&pool, &in_schema).await,
+            "permission denied for schema"
+        ));
+        // Nor can a trigger of his call a function that is there, which is
+        // why a trigger that does call one is taken for the owning role's.
+        let calls_it = format!(
+            "CREATE TRIGGER his BEFORE UPDATE ON sessions FOR EACH ROW \
+             EXECUTE FUNCTION {RLS_SCHEMA}.shellstation_keep_owner()"
+        );
+        assert!(refused(
+            pg_exec(&pool, &calls_it).await,
+            "permission denied for schema"
+        ));
+
+        // The owning role's start replaces his trigger by one that calls its
+        // own function. His function stays, with nothing calling it.
+        pg_exec(&pool, &role(&admin)).await.unwrap();
+        assert_eq!(pg_count(&pool, &triggers).await, 5);
+        setup_postgres_rls(&pool).await.unwrap();
+        assert_eq!(pg_count(&pool, &triggers).await, 6);
+        assert_eq!(pg_count(&pool, in_public).await, 1);
+        pg_exec(&pool, &role(&bob)).await.unwrap();
+        assert!(refused(
+            pg_exec(&pool, &into_alices()).await,
+            BY_FOLDER_TRIGGER
+        ));
+
+        // A member of the owning role that inherits its privileges can apply
+        // the setup. The schema and the functions it creates are the owning
+        // role's all the same, not the member's.
+        pg_exec(&pool, "RESET ROLE").await.unwrap();
+        let heir = format!("ss_heir_{}", admin.trim_start_matches("ss_admin_"));
+        run(format!("CREATE ROLE {heir} NOLOGIN INHERIT")).await;
+        run(format!("GRANT {admin} TO {heir}")).await;
+        run(format!("DROP SCHEMA {RLS_SCHEMA} CASCADE")).await;
+        let any_trigger = "SELECT count(*) FROM pg_trigger WHERE NOT tgisinternal";
+        assert_eq!(pg_count(&pool, any_trigger).await, 0);
+        pg_exec(&pool, &role(&heir)).await.unwrap();
+        setup_postgres_rls(&pool).await.unwrap();
+        assert_eq!(pg_count(&pool, &schema_owner).await, 1);
+        assert_eq!(pg_count(&pool, &functions_owner).await, 3);
+        assert_eq!(pg_count(&pool, &triggers).await, 6);
+        pg_exec(&pool, "RESET ROLE").await.unwrap();
+        run(format!("DROP ROLE {heir}")).await;
+
+        // A schema of the name that is someone else's is not used: the
+        // owning role's setup says so and leaves functions and triggers as
+        // they are. A superuser's start gives the schema to the owning role.
+        run(format!("ALTER SCHEMA {RLS_SCHEMA} OWNER TO {bob}")).await;
+        pg_exec(&pool, &role(&admin)).await.unwrap();
+        let failure = setup_postgres_rls(&pool).await.unwrap_err();
+        assert!(
+            failure.contains(&format!("schema {RLS_SCHEMA}")),
+            "{failure}"
+        );
+        assert!(!failure.contains("function "), "{failure}");
+        assert_eq!(pg_count(&pool, &schema_owner).await, 0);
+        assert_eq!(pg_count(&pool, &triggers).await, 6);
+        pg_exec(&pool, "RESET ROLE").await.unwrap();
+        setup_postgres_rls(&pool).await.unwrap();
+        assert_eq!(pg_count(&pool, &schema_owner).await, 1);
+        assert_eq!(pg_count(&pool, &functions_owner).await, 3);
+        assert_eq!(pg_count(&pool, &triggers).await, 6);
+
+        // What anyone else was granted on the schema is taken back.
+        let granted = format!(
+            "SELECT count(*) FROM pg_namespace n, aclexplode(n.nspacl) a \
+             WHERE n.nspname = '{RLS_SCHEMA}' AND a.grantee <> n.nspowner"
+        );
+        run(format!(
+            "GRANT USAGE, CREATE ON SCHEMA {RLS_SCHEMA} TO PUBLIC, {bob}"
+        ))
+        .await;
+        assert_eq!(pg_count(&pool, &granted).await, 4);
+        pg_exec(&pool, &role(&admin)).await.unwrap();
+        setup_postgres_rls(&pool).await.unwrap();
+        assert_eq!(pg_count(&pool, &granted).await, 0);
+
+        // Bob puts operators into `public` for what the setup compares: an
+        // oid with the name of a table, a function or a schema, and with a
+        // number. An operator whose types match exactly is found before one
+        // in `pg_catalog` that takes a cast, and would run as the owning
+        // role. These fail whatever calls them. The setup has something to
+        // do on every kind of step, and gets through: it compares oids with
+        // oids.
+        pg_exec(&pool, &role(&bob)).await.unwrap();
+        for (name, right) in [
+            ("class", "regclass"),
+            ("procedure", "regprocedure"),
+            ("namespace", "regnamespace"),
+            ("number", "integer"),
+        ] {
+            run(format!(
+                "CREATE FUNCTION public.planted_{name}(oid, {right}) RETURNS boolean \
+                 LANGUAGE plpgsql AS 'BEGIN RAISE EXCEPTION ''planted operator''; END'"
+            ))
+            .await;
+            for operator in ["=", "<>"] {
+                run(format!(
+                    "CREATE OPERATOR public.{operator} (LEFTARG = oid, RIGHTARG = {right}, \
+                     FUNCTION = public.planted_{name})"
+                ))
+                .await;
+            }
+        }
+        pg_exec(&pool, &role(&admin)).await.unwrap();
+        for sql in [
+            "DROP TRIGGER folders_keep_place ON folders",
+            "DROP POLICY folders_shared_read ON folders",
+            "ALTER TABLE folders DROP CONSTRAINT folders_vis_ck",
+            "ALTER TABLE sessions NO FORCE ROW LEVEL SECURITY",
+        ] {
+            pg_exec(&pool, sql).await.unwrap();
+        }
+        pg_exec(&pool, "RESET ROLE").await.unwrap();
+        run(format!("GRANT USAGE ON SCHEMA {RLS_SCHEMA} TO PUBLIC")).await;
+        pg_exec(&pool, &role(&admin)).await.unwrap();
+        setup_postgres_rls(&pool).await.unwrap();
+        pg_exec(&pool, "RESET ROLE").await.unwrap();
+        for name in ["class", "procedure", "namespace", "number"] {
+            run(format!("DROP FUNCTION public.planted_{name} CASCADE")).await;
+        }
+        assert_eq!(pg_count(&pool, &triggers).await, 6);
+        assert_eq!(pg_count(&pool, &granted).await, 0);
+        let restored = "SELECT (SELECT count(*) FROM pg_policies \
+                                WHERE policyname = 'folders_shared_read') \
+                             + (SELECT count(*) FROM pg_constraint WHERE conname = 'folders_vis_ck') \
+                             + (SELECT count(*) FROM pg_class WHERE oid = 'sessions'::regclass \
+                                AND relforcerowsecurity)";
+        assert_eq!(pg_count(&pool, restored).await, 3);
+
+        pool.close().await;
+    }
+
     /// What row-level security says when it refuses a new row.
     const BY_ROW_SECURITY: &str = "row-level security policy";
 
@@ -3107,16 +3628,18 @@ mod tests {
             .connect_with(opts)
             .await
             .unwrap();
-        pg_exec(&pool, &format!("GRANT ALL ON SCHEMA public TO {admin}"))
+        let database: String = sqlx::query_scalar("SELECT current_database()")
+            .fetch_one(&pool)
             .await
             .unwrap();
-        pg_exec(
-            &pool,
-            &format!("GRANT USAGE ON SCHEMA public TO {alice}, {bob}"),
-        )
-        .await
-        .unwrap();
-        pg_exec(&pool, &format!("SET ROLE {admin}")).await.unwrap();
+        for sql in [
+            format!("GRANT ALL PRIVILEGES ON DATABASE {database} TO {admin}"),
+            format!("GRANT ALL ON SCHEMA public TO {admin}"),
+            format!("GRANT USAGE ON SCHEMA public TO {alice}, {bob}"),
+            format!("SET ROLE {admin}"),
+        ] {
+            pg_exec(&pool, &sql).await.unwrap();
+        }
         sqlx::migrate!().run(&pool).await.unwrap();
 
         // A database from before a mapping had an owner, written while row-
