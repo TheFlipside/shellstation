@@ -28,7 +28,8 @@
     "applyLoginSequence": "应用登录序列…",
     "bulkEdit": "批量编辑会话…",
     "makeShared": "设为共享",
-    "makePersonal": "设为个人"
+    "makePersonal": "设为个人",
+    "myLogin": "我的登录设置…"
   },
   "bulkEdit": {
     "title": "批量编辑 — {{name}}",
@@ -61,6 +62,14 @@
     "profileLabel": "凭据配置文件",
     "profileNone": "(清除分配)",
     "success": "已更新 {{count}} 个会话"
+  },
+  "sessionLogin": {
+    "title": "我的登录设置 — {{name}}",
+    "info": "此会话由 {{owner}} 共享，连接到哪台主机也由其决定。您在此处分配的内容仅属于您，其他用户看不到。分配的内容仅用于保存时此处显示的连接目标：如果会话之后被更改，您需要先在此处重新确认。",
+    "jumpHostProfileLabel": "跳板机 {{name}} 的凭据配置文件",
+    "jumpHostNeedsProfile": "没有凭据配置文件，就不会连接跳板机。",
+    "jumpHostUnavailable": "此会话经过一台您无法使用的跳板机：其所有者未共享，或它不属于会话的所有者。在所有者更改之前无法连接。",
+    "notConfirmed": "您已为此会话分配了内容，但尚未确认它现在连接到哪里。在您于此处保存之前，分配的内容不会被使用。请先检查此处显示的全部内容：自您确认以来发生变化的项目以红色标出，之前的值（如有）以删除线显示。"
   },
   "credentialProfiles": {
     "title": "凭据管理器",

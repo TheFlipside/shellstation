@@ -28,7 +28,8 @@
     "applyLoginSequence": "Applica sequenza di login…",
     "bulkEdit": "Modifica sessioni in blocco…",
     "makeShared": "Condividi",
-    "makePersonal": "Rendi personale"
+    "makePersonal": "Rendi personale",
+    "myLogin": "Le mie credenziali…"
   },
   "bulkEdit": {
     "title": "Modifica in blocco — {{name}}",
@@ -61,6 +62,14 @@
     "profileLabel": "Profilo credenziali",
     "profileNone": "(Rimuovi assegnazione)",
     "success": "{{count}} sessione(i) aggiornate"
+  },
+  "sessionLogin": {
+    "title": "Le mie credenziali — {{name}}",
+    "info": "{{owner}} condivide questa sessione e decide a quale host si connette. Ciò che assegni qui vale solo per te, e gli altri utenti non lo vedono. Viene usato solo per ciò che è mostrato qui al momento del salvataggio: se la sessione viene modificata in seguito, devi prima confermarla di nuovo qui.",
+    "jumpHostProfileLabel": "Profilo credenziali per l'host di salto {{name}}",
+    "jumpHostNeedsProfile": "Senza un profilo di credenziali non ci si connette a un host di salto.",
+    "jumpHostUnavailable": "Questa sessione passa per un host di salto che non puoi usare: uno che il proprietario non ha condiviso, o uno che non appartiene al proprietario della sessione. Non è possibile connettersi finché il proprietario non lo cambia.",
+    "notConfirmed": "Hai assegnato qualcosa a questa sessione, ma non hai confermato a cosa si connette ora. Non viene usato finché non salvi qui. Controlla prima tutto ciò che è mostrato qui: ciò che è cambiato da quando l'hai confermato è evidenziato in rosso, e il valore precedente, se c'era, è barrato."
   },
   "credentialProfiles": {
     "title": "Gestore credenziali",

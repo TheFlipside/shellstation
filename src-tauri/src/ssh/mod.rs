@@ -1156,7 +1156,7 @@ fn read_remembered(path: &std::path::Path) -> std::io::Result<Option<Vec<u8>>> {
 /// `&`, `<`, `>` and brackets), and invisible ones (bidi controls,
 /// zero-width and filler characters, soft hyphens, variation selectors,
 /// tags), with which a name could pass for another.
-fn validate_host_name(host: &str) -> Result<(), String> {
+pub(crate) fn validate_host_name(host: &str) -> Result<(), String> {
     // Windows resolves an IPv6 address in brackets, and in known_hosts
     // `[::1]` (or `[[::1]]:2222`) names no other host.
     let unbracketed = host

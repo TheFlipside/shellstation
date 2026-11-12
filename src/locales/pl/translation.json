@@ -28,7 +28,8 @@
     "applyLoginSequence": "Zastosuj sekwencję logowania…",
     "bulkEdit": "Edycja zbiorcza sesji…",
     "makeShared": "Udostępnij",
-    "makePersonal": "Ustaw jako osobiste"
+    "makePersonal": "Ustaw jako osobiste",
+    "myLogin": "Moje logowanie…"
   },
   "bulkEdit": {
     "title": "Edycja zbiorcza — {{name}}",
@@ -61,6 +62,14 @@
     "profileLabel": "Profil poświadczeń",
     "profileNone": "(Usuń przypisanie)",
     "success": "Zaktualizowano {{count}} sesji"
+  },
+  "sessionLogin": {
+    "title": "Moje logowanie — {{name}}",
+    "info": "{{owner}} udostępnia tę sesję i decyduje, z którym hostem się ona łączy. To, co tu przypiszesz, dotyczy tylko ciebie, a inni użytkownicy tego nie widzą. Jest to używane tylko dla tego, co jest tu pokazane w chwili zapisu: jeśli sesja zostanie później zmieniona, najpierw potwierdzisz ją tutaj ponownie.",
+    "jumpHostProfileLabel": "Profil poświadczeń dla hosta pośredniczącego {{name}}",
+    "jumpHostNeedsProfile": "Bez profilu poświadczeń połączenie z hostem pośredniczącym nie jest nawiązywane.",
+    "jumpHostUnavailable": "Ta sesja prowadzi przez host pośredniczący, którego nie możesz użyć: taki, którego właściciel nie udostępnił, albo taki, który nie należy do właściciela sesji. Połączenie nie jest możliwe, dopóki właściciel tego nie zmieni.",
+    "notConfirmed": "Przypisano coś do tej sesji, ale nie potwierdzono jeszcze, z czym łączy się ona teraz. Nie jest to używane, dopóki nie zapiszesz tutaj. Najpierw sprawdź wszystko, co jest tu pokazane: to, co zmieniło się od potwierdzenia, jest zaznaczone na czerwono, a wcześniejsza wartość, jeśli była, jest przekreślona."
   },
   "credentialProfiles": {
     "title": "Menedżer poświadczeń",

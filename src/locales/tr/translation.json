@@ -28,7 +28,8 @@
     "applyLoginSequence": "Oturum açma sırasını uygula…",
     "bulkEdit": "Oturumları toplu düzenle…",
     "makeShared": "Paylaş",
-    "makePersonal": "Kişisel yap"
+    "makePersonal": "Kişisel yap",
+    "myLogin": "Oturum açma bilgilerim…"
   },
   "bulkEdit": {
     "title": "Toplu Düzenleme — {{name}}",
@@ -61,6 +62,14 @@
     "profileLabel": "Kimlik profili",
     "profileNone": "(Atamayı kaldır)",
     "success": "{{count}} oturum güncellendi"
+  },
+  "sessionLogin": {
+    "title": "Oturum açma bilgilerim — {{name}}",
+    "info": "{{owner}} bu oturumu paylaşıyor ve hangi sunucuya bağlanacağına o karar veriyor. Burada atadıklarınız yalnızca size aittir ve diğer kullanıcılar bunları görmez. Bu, yalnızca kaydettiğinizde burada gösterilen hedef için kullanılır: oturum daha sonra değiştirilirse önce burada yeniden onaylamanız gerekir.",
+    "jumpHostProfileLabel": "{{name}} atlama sunucusu için kimlik profili",
+    "jumpHostNeedsProfile": "Kimlik profili olmadan bir atlama sunucusuna bağlanılmaz.",
+    "jumpHostUnavailable": "Bu oturum, kullanamayacağınız bir atlama sunucusu üzerinden geçiyor: sahibinin paylaşmadığı veya oturumun sahibine ait olmayan bir sunucu. Sahibi bunu değiştirene kadar bağlanılamaz.",
+    "notConfirmed": "Bu oturuma bir atama yaptınız, ancak şu anda nereye bağlandığını onaylamadınız. Burada kaydedene kadar kullanılmaz. Önce burada gösterilen her şeyi denetleyin: onayınızdan sonra değişenler kırmızıyla işaretlenir ve varsa önceki değerin üstü çizilir."
   },
   "credentialProfiles": {
     "title": "Kimlik Yöneticisi",

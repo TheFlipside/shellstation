@@ -28,7 +28,8 @@
     "applyLoginSequence": "Aplicar sequência de login…",
     "bulkEdit": "Editar sessões em massa…",
     "makeShared": "Compartilhar",
-    "makePersonal": "Tornar pessoal"
+    "makePersonal": "Tornar pessoal",
+    "myLogin": "Minhas credenciais…"
   },
   "bulkEdit": {
     "title": "Edição em massa — {{name}}",
@@ -61,6 +62,14 @@
     "profileLabel": "Perfil de credenciais",
     "profileNone": "(Limpar atribuição)",
     "success": "{{count}} sessão(ões) atualizada(s)"
+  },
+  "sessionLogin": {
+    "title": "Minhas credenciais — {{name}}",
+    "info": "{{owner}} compartilha esta sessão e decide a qual host ela se conecta. O que você atribui aqui é só seu, e os outros usuários não veem. Isso é usado apenas para o que é mostrado aqui ao salvar: se a sessão for alterada depois, você primeiro a confirma aqui novamente.",
+    "jumpHostProfileLabel": "Perfil de credenciais para o host de salto {{name}}",
+    "jumpHostNeedsProfile": "Não há conexão a um host de salto sem um perfil de credenciais.",
+    "jumpHostUnavailable": "Esta sessão passa por um host de salto que você não pode usar: um que o proprietário não compartilhou, ou um que não é do proprietário da sessão. Não é possível conectar até que o proprietário mude isso.",
+    "notConfirmed": "Você atribuiu algo a esta sessão, mas não confirmou a que ela se conecta agora. Isso não é usado até você salvar aqui. Verifique primeiro tudo o que é mostrado aqui: o que mudou desde que você confirmou está marcado em vermelho, e o valor anterior, se havia, aparece riscado."
   },
   "credentialProfiles": {
     "title": "Gerenciador de credenciais",

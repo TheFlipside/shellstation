@@ -1,4 +1,5 @@
 import i18n from "./i18n";
+import { DISPLAY_CONTROL_RE } from "./displayText";
 import { useTerminalStore } from "./stores/terminalStore";
 import { useToastStore } from "./stores/toastStore";
 
@@ -15,31 +16,14 @@ export function sessionNotLoggedEvent(sessionId: string): string {
   return `terminal-log-failed-${sessionId}`;
 }
 
-/**
- * Characters that change how a name displays rather than what it says:
- * control characters, the bidi embedding, override and isolate controls,
- * which can make the text around a name read as something else, the line
- * and paragraph separators, and the invisible characters that make a name
- * look blank or like another one (zero-width space, BOM, soft hyphen, word
- * joiner and invisible operators, interlinear annotation marks, the
- * standalone Hangul fillers).
- *
- * It is the set the import drops from a name for this reason, code point for
- * code point: `is_display_spoofing_char` in `src-tauri/src/import/mod.rs`,
- * and control characters. Keep the two in step; the test lists them as well.
- * Directional marks and joiners stay, as they do there, since right-to-left
- * names and emoji sequences need them.
- */
-const DISPLAY_CONTROL_RE =
-  /[\p{Cc}\u202a-\u202e\u2066-\u2069\u2028\u2029\u200b\ufeff\u00ad\u2060-\u2064\ufff9-\ufffb\u3164\uffa0]/gu;
-
 /** How much of a session name the notice quotes, in characters. */
 const MAX_NAME_CHARS = 64;
 
 /**
  * A tab title as the notice quotes it. A title is a session name, which can
  * come from a shared database or be typed with anything in it, and can be
- * 255 characters long: the notice quotes it without the characters above,
+ * 255 characters long: the notice quotes it without the characters that
+ * change how a name displays (`DISPLAY_CONTROL_RE`),
  * and cut short, so that a name can neither reorder the warning nor bury
  * it. A name can still hold a quotation mark and words of its own, as it
  * can in its tab; the warning itself always follows it.

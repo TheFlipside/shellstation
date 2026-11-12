@@ -209,6 +209,40 @@ pub(crate) async fn bulk_set_user_credentials(
     }
 }
 
+/// Where a connect finds the credential profile the user assigned to a
+/// session: the user's own mappings, where there are any.
+///
+/// A connect asks through this, and not the pool itself, so that the walk
+/// along a session's jump hosts can be tested with a mapping in place and
+/// without a server.
+pub(crate) enum CredentialMappings<'a> {
+    /// None are kept: `SQLite` mode, or no user identity is set.
+    None,
+    /// The mappings the current role has under `user_ident` in the shared
+    /// database.
+    Postgres {
+        pool: &'a sqlx::PgPool,
+        user_ident: &'a str,
+    },
+    /// The mappings a test says there are, by session.
+    #[cfg(test)]
+    Fixed(std::collections::HashMap<uuid::Uuid, uuid::Uuid>),
+}
+
+impl CredentialMappings<'_> {
+    /// The credential profile the user assigned to the session, if any.
+    pub(crate) async fn of(&self, session_id: uuid::Uuid) -> Result<Option<uuid::Uuid>, String> {
+        match self {
+            Self::None => Ok(None),
+            Self::Postgres { pool, user_ident } => {
+                query_user_credential(pool, &session_id.to_string(), user_ident).await
+            }
+            #[cfg(test)]
+            Self::Fixed(mappings) => Ok(mappings.get(&session_id).copied()),
+        }
+    }
+}
+
 /// Query the current user's credential profile `ID` for a session.
 /// Used internally by `session_connect` for `PG`-mode credential resolution.
 pub(crate) async fn query_user_credential(

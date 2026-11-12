@@ -110,6 +110,55 @@ export function jumpHostForCopy(
   return jumpHost?.owner === pgUser ? session.jump_host_id : null;
 }
 
+/** As many jump hosts as the backend connects through (`MAX_JUMP_HOPS`). */
+const MAX_JUMP_HOPS = 10;
+
+export interface JumpHostChain {
+  /** The jump hosts of a session, the one it names first. */
+  hops: Session[];
+  /**
+   * Whether that is the whole chain. It is not where the chain goes on to a
+   * session that is not among those the user can see, to one of another
+   * owner than the session naming it, back to a session it has been through,
+   * or beyond what the backend connects through. A connect is refused at such
+   * a link.
+   */
+  complete: boolean;
+}
+
+/**
+ * The jump hosts that connecting to `session` goes through, as far as the
+ * user can connect through them.
+ *
+ * This is for another user's shared session in PostgreSQL mode, whose jump
+ * hosts are that user's sessions too, link by link. The connecting user needs
+ * a credential profile of their own for each, so the dialog that assigns them
+ * lists these. It follows the rule the backend connects by
+ * (`jump_host_is_its_owners`), and stops where the backend refuses.
+ */
+export function jumpHostChain(session: Session, sessions: Session[]): JumpHostChain {
+  const hops: Session[] = [];
+  // As the backend has it: only a Telnet session goes through none.
+  if (session.protocol === "telnet") return { hops, complete: true };
+  // The session itself counts as been through: a chain that comes back to it
+  // is refused, and it is not listed as its own jump host. (The backend lists
+  // it once more before it refuses; the refusal is the same.)
+  const seen = new Set<string>([session.id]);
+  let current = session;
+  while (current.jump_host_id !== null) {
+    const jumpHostId = current.jump_host_id;
+    const next = sessions.find((s) => s.id === jumpHostId);
+    // No session of that ID among them counts as one of another owner.
+    if (next?.owner !== current.owner || seen.has(next.id) || hops.length >= MAX_JUMP_HOPS) {
+      return { hops, complete: false };
+    }
+    seen.add(next.id);
+    hops.push(next);
+    current = next;
+  }
+  return { hops, complete: true };
+}
+
 interface SessionState {
   folders: Folder[];
   sessions: Session[];

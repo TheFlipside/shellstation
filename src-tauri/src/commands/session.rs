@@ -11,10 +11,12 @@ use crate::db::models::{
     CredentialProfile, DataFingerprint, Folder, NewFolder, NewSession, Session, UpdateSession,
 };
 use crate::db::{CredentialDbState, DatabaseProvider, DbState};
+use crate::login_pins::{needs_confirmation, LoginPinState, UsedAs};
 use crate::session_logger::SessionLogState;
 use crate::ssh::{establish_ssh_connection, SshConnectParams, SshState};
 use crate::telnet::{establish_telnet_connection, TelnetConnectParams, TelnetState};
 
+use super::session_credentials::CredentialMappings;
 use super::{
     connection, validate_dimensions, validate_port, validate_session_fields, ConnectSetup,
     TerminalReadyState, MAX_JUMP_HOPS,
@@ -597,6 +599,7 @@ pub async fn session_connect(
     pg: State<'_, crate::db::PgPoolState>,
     pg_user: State<'_, crate::db::PgUserState>,
     config: State<'_, crate::config::ConfigState>,
+    pins: State<'_, LoginPinState>,
     page: String,
     id: String,
     cols: u16,
@@ -610,6 +613,10 @@ pub async fn session_connect(
         db.0.get_session(session_id)
             .await?
             .ok_or_else(|| format!("Session {id} not found"))?;
+    // The commands that save a session take no other port, but a row can be
+    // written past them, and a port outside the range would be cut down to
+    // another one than the row shows.
+    validate_port(session.port)?;
 
     let settings = connection::current(&config)?;
 
@@ -633,20 +640,25 @@ pub async fn session_connect(
             .and_then(|c| c.user_ident.clone())
             .filter(|s| !s.is_empty())
     });
-    let effective_ls_id = if let (Some(pool), Some(ref ident)) = (&pg.0, &user_ident_for_ls) {
-        match super::session_login_sequences::query_user_login_sequence(
+    let mapped_ls_id = if let (Some(pool), Some(ref ident)) = (&pg.0, &user_ident_for_ls) {
+        super::session_login_sequences::query_user_login_sequence(
             pool,
             &session_id.to_string(),
             ident,
         )
         .await?
-        {
-            Some(uuid) => Some(uuid),
-            None => row_login_sequence,
-        }
     } else {
-        row_login_sequence
+        None
     };
+    // A login sequence the user assigned to a session that is not theirs is
+    // run only for what they confirmed the session names; see
+    // `login_pins.rs`. This comes before the sequence is read and before
+    // anything is connected to, for Telnet as for SSH: `session` is the row
+    // as read above, and it is what the rest of this function goes by.
+    if needs_confirmation(pg.0.is_some(), row_defaults, mapped_ls_id.is_some()) {
+        pins.check(&session, UsedAs::Target, pg_user.0.is_some())?;
+    }
+    let effective_ls_id = mapped_ls_id.or(row_login_sequence);
 
     let login_sequence = if let Some(ls_id) = effective_ls_id {
         login_seq_db.0.get_login_sequence(ls_id).await?
@@ -717,20 +729,20 @@ pub async fn session_connect(
             .and_then(|c| c.user_ident.clone())
             .filter(|s| !s.is_empty())
     });
-    let effective_credential_id = if let (Some(pool), Some(ref ident)) = (&pg.0, &user_ident) {
-        match super::session_credentials::query_user_credential(
+    let mappings = match (&pg.0, &user_ident) {
+        (Some(pool), Some(ident)) => CredentialMappings::Postgres {
             pool,
-            &session_id.to_string(),
-            ident,
-        )
-        .await?
-        {
-            Some(uuid) => Some(uuid),
-            None => row_credential_profile,
-        }
-    } else {
-        row_credential_profile
+            user_ident: ident,
+        },
+        _ => CredentialMappings::None,
     };
+    let mapped_credential_id = mappings.of(session_id).await?;
+    // The same for a credential profile the user assigned, before the
+    // profile is read.
+    if needs_confirmation(pg.0.is_some(), row_defaults, mapped_credential_id.is_some()) {
+        pins.check(&session, UsedAs::Target, pg_user.0.is_some())?;
+    }
+    let effective_credential_id = mapped_credential_id.or(row_credential_profile);
 
     let (username, auth_method, auth_credential) = if let Some(profile_id) = effective_credential_id
     {
@@ -741,9 +753,9 @@ pub async fn session_connect(
             .await?
             .ok_or_else(|| {
                 format!(
-                    "Credential profile for session \"{}\" no longer exists. \
-                     Edit the session and pick a different profile.",
-                    session.name
+                    "Credential profile for session \"{}\" no longer exists. {}",
+                    session.name,
+                    other_profile_advice(row_defaults)
                 )
             })?;
         debug!(session = %id, auth_type = %profile.auth_type, user = %profile.username, "Credential profile resolved");
@@ -752,9 +764,11 @@ pub async fn session_connect(
         debug!(session = %id, user = %session.username, "No credential profile — falling back to keyboard-interactive");
         if session.username.is_empty() {
             return Err(format!(
-                "No credential profile assigned and no username configured. \
-                 Edit the session to set a username or assign a credential profile.{}",
-                not_own_session_hint(row_defaults)
+                "No credential profile assigned and no username configured. {}",
+                no_profile_advice(
+                    row_defaults,
+                    "Edit the session to set a username or assign a credential profile."
+                )
             ));
         }
         (
@@ -770,8 +784,9 @@ pub async fn session_connect(
         cred_db.0.as_ref(),
         &session,
         pg.0.as_ref(),
-        user_ident.as_deref(),
+        &mappings,
         pg_user.0.as_deref(),
+        &pins,
     )
     .await?;
     if jump_hops.len() > MAX_JUMP_HOPS {
@@ -798,7 +813,7 @@ pub async fn session_connect(
         Some(crate::login_sequence::resolve_login_sequence(
             seq,
             &username,
-            &auth_credential,
+            sequence_password(&auth_method, &auth_credential),
         )?)
     } else {
         None
@@ -906,14 +921,55 @@ fn row_defaults_apply(pg_mode: bool, pg_user: Option<&str>, session: &Session) -
     !pg_mode || (pg_user == Some(session.owner.as_str()) && session.owner != "local")
 }
 
-/// What to add to the message when a connect finds no credential profile to
-/// go by: for another user's session, that what its row names does not count.
-fn not_own_session_hint(row_defaults: bool) -> &'static str {
+/// What a connect that finds no credential profile to go by tells the user to
+/// do about it. `own` is the advice for a session that is the user's to edit.
+/// For any other it is that what its row names does not count, and where the
+/// user assigns their own: the session's context menu, which has **My Login**
+/// for another user's session in place of **Edit**.
+///
+/// "Any other" is as [`row_defaults_apply`] has it: another user's shared
+/// session, but also a row that still has the placeholder owner, and every
+/// session while the role the app connected as is not known. The text
+/// therefore does not say whose the session is. It does say who chooses the
+/// host, since a profile assigned to a session is used for whatever host its
+/// owner has it name, and that the User Identity has to be set, without
+/// which no mapping is saved or looked up. While the role is not known the
+/// menu has no **My Login**; that state is the database's status not having
+/// been read, and passes with it.
+fn no_profile_advice(row_defaults: bool, own: &'static str) -> &'static str {
     if row_defaults {
-        ""
+        own
     } else {
-        " This is another user's shared session, so the credential profile and \
-         login sequence it names are not used for you."
+        "The credential profile and login sequence this session names are \
+         used only for its owner, and you are not on record as that. Assign \
+         a credential profile of your own to it from its context menu (My \
+         Login), with your User Identity set in Settings. Its owner chooses \
+         the host your profile is then used for."
+    }
+}
+
+/// What a connect tells the user to do when the credential profile assigned
+/// to a session or jump host is gone: where another one is picked, which is
+/// the session dialog for a session that is the user's to edit and **My
+/// Login** for any other; see [`no_profile_advice`].
+fn other_profile_advice(row_defaults: bool) -> &'static str {
+    if row_defaults {
+        "Edit that session and pick a different profile."
+    } else {
+        "Pick a different profile for it from its context menu (My Login)."
+    }
+}
+
+/// What `\w` in a login sequence stands for on an SSH connection: the
+/// password of a password profile, and nothing with any other way of
+/// authenticating. With a key profile the credential is the path of the key
+/// file, which is no password, and nothing to type at a remote host's prompt:
+/// it would tell that host where the key is kept and under which user name.
+fn sequence_password<'a>(auth_method: &str, auth_credential: &'a str) -> &'a str {
+    if auth_method == "password" {
+        auth_credential
+    } else {
+        ""
     }
 }
 
@@ -950,16 +1006,25 @@ fn jump_host_is_its_owners(pg_mode: bool, named_by_owner: &str, jump_host_owner:
 /// entries for the SSH connect call. Each hop pulls its own profile. In
 /// `PostgreSQL` mode the walk fails at a hop that is not a session of the
 /// same owner as the session that names it, before that hop's profile is
-/// looked up, and no hop is returned; see [`jump_host_is_its_owners`]. The
-/// caller has resolved the target's own profile by then, and has connected
-/// to nothing.
+/// looked up, and no hop is returned; see [`jump_host_is_its_owners`]. It
+/// fails likewise at a hop that is not the user's own session and no longer
+/// names what the user confirmed of it (`pins`, see `login_pins.rs`). Where
+/// a profile the user assigned is used for such a hop, the session connected
+/// to is held to what the user confirmed of it as well, also where nothing
+/// is assigned to that session itself: its switch for legacy algorithms is
+/// what the connection to every hop is made with, so a session of the same
+/// owner that the user never confirmed, or one whose switch has been turned
+/// since, would carry the hop's profile over weaker algorithms than the
+/// user agreed to. The caller has resolved the target's own profile by
+/// then, and has connected to nothing.
 async fn resolve_jump_chain(
     db: &dyn DatabaseProvider,
     cred_db: &dyn DatabaseProvider,
     session: &Session,
     pg_pool: Option<&sqlx::PgPool>,
-    user_ident: Option<&str>,
+    mappings: &CredentialMappings<'_>,
     pg_user: Option<&str>,
+    pins: &LoginPinState,
 ) -> Result<Vec<crate::ssh::JumpHop>, String> {
     let mut hops = Vec::new();
     let mut visited = HashSet::new();
@@ -967,6 +1032,10 @@ async fn resolve_jump_chain(
     // The session whose row names the hop being looked at: the target first,
     // then each hop for the one before it.
     let mut named_by = (session.name.clone(), session.owner.clone());
+    // Whether the session connected to has been held to what the user
+    // confirmed of it, which the first hop with a profile of the user's
+    // asks for.
+    let mut target_confirmed = false;
 
     while let Some(jump_id) = current_jump_id {
         if !visited.insert(jump_id) {
@@ -982,6 +1051,15 @@ async fn resolve_jump_chain(
             "Jump host session not found. It may be a personal session belonging \
              to another user — ask the owner to share it."
                 .to_string()
+        })?;
+
+        // As for the session connected to: no port that would be cut down
+        // to another one.
+        validate_port(jump_session.port).map_err(|e| {
+            format!(
+                "Jump host \"{}\": {e}",
+                crate::login_pins::name_for_message(&jump_session.name)
+            )
         })?;
 
         if !jump_host_is_its_owners(pg_pool.is_some(), &named_by.1, &jump_session.owner) {
@@ -1008,25 +1086,28 @@ async fn resolve_jump_chain(
         // user's own session; see `row_defaults_apply`.
         let row_defaults = row_defaults_apply(pg_pool.is_some(), pg_user, &jump_session);
         let row_credential_profile = jump_session.credential_profile_id.filter(|_| row_defaults);
-        let effective_profile_id = if let (Some(pool), Some(ident)) = (pg_pool, user_ident) {
-            let jump_id_str = jump_id.to_string();
-            match super::session_credentials::query_user_credential(pool, &jump_id_str, ident)
-                .await?
-            {
-                Some(uuid) => Some(uuid),
-                None => row_credential_profile,
+        let mapped_profile_id = mappings.of(jump_id).await?;
+        // A profile the user assigned to a jump host that is not their own
+        // session is used only for what they confirmed that session names,
+        // before the profile is read; see `login_pins.rs`.
+        if needs_confirmation(pg_pool.is_some(), row_defaults, mapped_profile_id.is_some()) {
+            if !target_confirmed {
+                pins.check(session, UsedAs::Target, pg_user.is_some())?;
+                target_confirmed = true;
             }
-        } else {
-            row_credential_profile
-        };
+            pins.check(&jump_session, UsedAs::JumpHost, pg_user.is_some())?;
+        }
+        let effective_profile_id = mapped_profile_id.or(row_credential_profile);
 
         let profile_id = effective_profile_id.ok_or_else(|| {
             format!(
-                "No credential profile assigned to jump host \"{}\". \
-                 Open the Credentials Manager to create one, then edit the \
-                 session to link it.{}",
+                "No credential profile assigned to jump host \"{}\". {}",
                 jump_session.name,
-                not_own_session_hint(row_defaults)
+                no_profile_advice(
+                    row_defaults,
+                    "Open the Credentials Manager to create one, then edit the \
+                     session to link it."
+                )
             )
         })?;
         let jump_profile = cred_db
@@ -1034,9 +1115,9 @@ async fn resolve_jump_chain(
             .await?
             .ok_or_else(|| {
                 format!(
-                    "Credential profile for jump host \"{}\" no longer exists. \
-                     Edit the session and pick a different profile.",
-                    jump_session.name
+                    "Credential profile for jump host \"{}\" no longer exists. {}",
+                    jump_session.name,
+                    other_profile_advice(row_defaults)
                 )
             })?;
         let (username, auth_method, auth_credential) = profile_to_auth(&jump_profile)?;
@@ -1116,8 +1197,35 @@ mod tests {
             Some("local"),
             &session_of("local")
         ));
-        assert_eq!(not_own_session_hint(true), "");
-        assert!(not_own_session_hint(false).contains("another user's shared session"));
+        // The advice to edit a session is for its owner; anyone else is
+        // told where their own profile is assigned.
+        assert_eq!(
+            no_profile_advice(true, "Edit the session."),
+            "Edit the session."
+        );
+        let advice = no_profile_advice(false, "Edit the session.");
+        assert!(advice.contains("only for its owner"));
+        assert!(advice.contains("My Login"));
+        assert!(advice.contains("owner chooses the host"));
+        assert!(!advice.contains("Edit the session"));
+        // It is also what a row with the placeholder owner gets, so it does
+        // not call the session another user's.
+        assert!(!advice.contains("another user"));
+        // The same goes for a profile that is gone.
+        assert!(other_profile_advice(true).contains("Edit that session"));
+        assert!(other_profile_advice(false).contains("My Login"));
+        assert!(!other_profile_advice(false).contains("Edit"));
+    }
+
+    #[test]
+    fn a_login_sequence_types_a_password_and_no_key_path() {
+        assert_eq!(sequence_password("password", "hunter2"), "hunter2");
+        assert_eq!(
+            sequence_password("publickey", "/home/a/.ssh/id_ed25519"),
+            ""
+        );
+        assert_eq!(sequence_password("keyboard-interactive", ""), "");
+        assert_eq!(sequence_password("", "x"), "");
     }
 
     #[test]
@@ -1137,6 +1245,12 @@ mod tests {
         assert!(!jump_host_is_its_owners(true, "local", "alice"));
     }
 
+    /// Nothing confirmed, and a file that is never written: these chains
+    /// are of the user's own sessions, which need no confirming.
+    fn no_pins() -> LoginPinState {
+        LoginPinState::new(std::env::temp_dir().join(format!("ss-no-pins-{}", Uuid::new_v4())))
+    }
+
     /// The error of a chain that does not resolve.
     async fn chain_error(
         db: &SqliteProvider,
@@ -1144,10 +1258,18 @@ mod tests {
         pg_pool: Option<&sqlx::PgPool>,
     ) -> String {
         let target = db.get_session(target).await.unwrap().unwrap();
-        resolve_jump_chain(db, db, &target, pg_pool, None, Some("alice"))
-            .await
-            .err()
-            .expect("the chain resolved")
+        resolve_jump_chain(
+            db,
+            db,
+            &target,
+            pg_pool,
+            &CredentialMappings::None,
+            Some("alice"),
+            &no_pins(),
+        )
+        .await
+        .err()
+        .expect("the chain resolved")
     }
 
     #[tokio::test]
@@ -1253,10 +1375,152 @@ mod tests {
         let near = session("near2", "alice", Some(far), Some(profile)).await;
         let target = session("target2", "alice", Some(near), None).await;
         let target = db.get_session(target).await.unwrap().unwrap();
-        let hops = resolve_jump_chain(&db, &db, &target, Some(&pg), None, Some("alice"))
-            .await
-            .expect("a chain of one owner did not resolve");
+        let hops = resolve_jump_chain(
+            &db,
+            &db,
+            &target,
+            Some(&pg),
+            &CredentialMappings::None,
+            Some("alice"),
+            &no_pins(),
+        )
+        .await
+        .expect("a chain of one owner did not resolve");
         let hosts: Vec<&str> = hops.iter().map(|hop| hop.host.as_str()).collect();
         assert_eq!(hosts, ["far2.example", "near2.example"]);
+
+        // Another user's shared session and its jump host, which `alice`
+        // connects to with a profile of her own assigned to the jump host.
+        // The profile is used only for what she confirmed the jump host
+        // names; see `login_pins.rs`.
+        let bastion = session("bastion", "bob", None, None).await;
+        let shared = session("shared", "bob", Some(bastion), None).await;
+        let shared = db.get_session(shared).await.unwrap().unwrap();
+        let assigned = CredentialMappings::Fixed([(bastion, profile)].into());
+        let dir = crate::login_pins::tests::TestDir::new();
+        let pins = LoginPinState::new(dir.file());
+        let through_bastion = |pins| {
+            let (db, shared, pg, assigned) = (&db, &shared, &pg, &assigned);
+            async move {
+                resolve_jump_chain(db, db, shared, Some(pg), assigned, Some("alice"), pins).await
+            }
+        };
+
+        // Never confirmed: refused, before the profile is read. Nothing is
+        // assigned to the session itself, but the profile for its jump host
+        // would be used with the session's switch for legacy algorithms, so
+        // the session has to be confirmed too.
+        let error = through_bastion(&pins).await.err().expect("not refused");
+        assert!(
+            error.starts_with("Session \"shared\" is not your own, and you have not confirmed"),
+            "{error}"
+        );
+        // The session confirmed and its jump host not: refused at that.
+        pins.confirm(
+            (shared.id, crate::login_pins::SessionPin::of(&shared)),
+            Vec::new(),
+        )
+        .unwrap();
+        let error = through_bastion(&pins).await.err().expect("not refused");
+        assert!(
+            error.starts_with("Jump host \"bastion\" is not your own, and you have not confirmed"),
+            "{error}"
+        );
+        // Both confirmed, each as what it is: the chain resolves.
+        let row = db.get_session(bastion).await.unwrap().unwrap();
+        pins.confirm(
+            (shared.id, crate::login_pins::SessionPin::of(&shared)),
+            vec![(bastion, crate::login_pins::JumpHostPin::of(&row))],
+        )
+        .unwrap();
+        let hops = through_bastion(&pins)
+            .await
+            .expect("refused though confirmed");
+        assert_eq!(hops.len(), 1);
+        assert_eq!(hops[0].host, "bastion.example");
+        // Another session of the same owner through the same jump host, which
+        // was never confirmed: the profile for the jump host is not used
+        // through it, whatever its switch says.
+        let other = session("other", "bob", Some(bastion), None).await;
+        let other = db.get_session(other).await.unwrap().unwrap();
+        let error =
+            resolve_jump_chain(&db, &db, &other, Some(&pg), &assigned, Some("alice"), &pins)
+                .await
+                .err()
+                .expect("not refused");
+        assert!(
+            error.starts_with("Session \"other\" is not your own, and you have not confirmed"),
+            "{error}"
+        );
+        // And the confirmed session with its switch turned on since.
+        let mut switched = shared.clone();
+        switched.legacy_algorithms = true;
+        let error = resolve_jump_chain(
+            &db,
+            &db,
+            &switched,
+            Some(&pg),
+            &assigned,
+            Some("alice"),
+            &pins,
+        )
+        .await
+        .err()
+        .expect("not refused");
+        assert!(error.contains("legacy algorithms off → on"), "{error}");
+        // Its owner has it name another host: refused again, and told why.
+        sqlx::query("UPDATE sessions SET hostname = 'elsewhere.example' WHERE id = ?")
+            .bind(bastion.to_string())
+            .execute(&pool)
+            .await
+            .unwrap();
+        let error = through_bastion(&pins).await.err().expect("not refused");
+        assert!(
+            error.contains("host bastion.example → elsewhere.example"),
+            "{error}"
+        );
+        // Without a known role nothing of hers is used.
+        let error = resolve_jump_chain(&db, &db, &shared, Some(&pg), &assigned, None, &pins)
+            .await
+            .err()
+            .expect("not refused");
+        assert!(error.contains("Restart ShellStation"), "{error}");
+        // And with nothing assigned there is nothing to confirm: the jump
+        // host has no profile for her, which is the error.
+        let error = resolve_jump_chain(
+            &db,
+            &db,
+            &shared,
+            Some(&pg),
+            &CredentialMappings::None,
+            Some("alice"),
+            &pins,
+        )
+        .await
+        .err()
+        .expect("not refused");
+        assert!(
+            error.starts_with("No credential profile assigned to jump host \"bastion\""),
+            "{error}"
+        );
+        // In `SQLite` mode every session is the user's own, whatever its
+        // owner says, so there the row's own profile counts and nothing is
+        // confirmed; this one's row names none.
+        let error = resolve_jump_chain(
+            &db,
+            &db,
+            &shared,
+            None,
+            &CredentialMappings::None,
+            Some("alice"),
+            &pins,
+        )
+        .await
+        .err()
+        .expect("not refused");
+        assert!(
+            error.starts_with("No credential profile assigned to jump host \"bastion\""),
+            "{error}"
+        );
     }
 }

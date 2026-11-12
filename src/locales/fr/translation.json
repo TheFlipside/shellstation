@@ -28,7 +28,8 @@
     "applyLoginSequence": "Appliquer une séquence de connexion…",
     "bulkEdit": "Édition en masse des sessions…",
     "makeShared": "Partager",
-    "makePersonal": "Rendre personnel"
+    "makePersonal": "Rendre personnel",
+    "myLogin": "Mes identifiants…"
   },
   "bulkEdit": {
     "title": "Édition en masse — {{name}}",
@@ -61,6 +62,14 @@
     "profileLabel": "Profil d'identifiants",
     "profileNone": "(Effacer l'attribution)",
     "success": "{{count}} session(s) mise(s) à jour"
+  },
+  "sessionLogin": {
+    "title": "Mes identifiants — {{name}}",
+    "info": "{{owner}} partage cette session et décide de l'hôte auquel elle se connecte. Ce que vous attribuez ici ne vaut que pour vous, et les autres utilisateurs ne le voient pas. Cela n'est utilisé que pour ce qui est affiché ici au moment de l'enregistrement : si la session est modifiée plus tard, vous devez d'abord la confirmer ici à nouveau.",
+    "jumpHostProfileLabel": "Profil d'identifiants pour l'hôte de rebond {{name}}",
+    "jumpHostNeedsProfile": "Aucune connexion à un hôte de rebond n'est établie sans profil d'identifiants.",
+    "jumpHostUnavailable": "Cette session passe par un hôte de rebond que vous ne pouvez pas utiliser : son propriétaire ne l'a pas partagé, ou il n'appartient pas au propriétaire de la session. La connexion est impossible tant que le propriétaire n'a pas changé cela.",
+    "notConfirmed": "Vous avez attribué quelque chose à cette session, mais vous n'avez pas confirmé ce à quoi elle se connecte maintenant. Ce n'est pas utilisé tant que vous n'avez pas enregistré ici. Vérifiez d'abord tout ce qui est affiché ici : ce qui a changé depuis votre confirmation est marqué en rouge, et l'ancienne valeur, s'il y en avait une, est barrée."
   },
   "credentialProfiles": {
     "title": "Gestionnaire d'identifiants",

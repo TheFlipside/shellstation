@@ -532,6 +532,59 @@ body,
   word-break: break-all;
 }
 
+/* A value another user chose, such as a shared session's host: set apart
+   from the text around it, left to right, and wrapped however long it is.
+   It is shown whole, with nothing of it to scroll to: the end of a host is
+   what decides where a connection goes, and what follows in the dialog is
+   reached only past it. What shows it cuts a value that is longer than one
+   can be. */
+.dialog-given-value {
+  display: block;
+  background: var(--color-base);
+  border: 1px solid var(--color-surface1);
+  border-radius: 4px;
+  padding: 6px 10px;
+  font-size: 13px;
+  color: var(--color-text);
+  overflow-wrap: anywhere;
+  /* Spaces show as written, also several in a row. */
+  white-space: pre-wrap;
+  unicode-bidi: isolate;
+}
+
+/* The dialog's own text where it quotes what another user wrote, such as a
+   session's name: marks stacked on a letter stay inside the text's own box
+   and do not reach over what stands above or below it. */
+.dialog-quoted-text {
+  overflow: hidden;
+}
+
+/* Such a value where it is another than the user last confirmed. */
+.dialog-given-changed {
+  border-color: var(--color-red);
+  border-width: 2px;
+}
+
+/* The label of what has no value to show the change by: a switch, or a jump
+   host that a session did not go on to before. With the weight of a field's
+   own label rule, which sets a colour, and told by more than the colour. */
+.dialog-field label.dialog-label-changed {
+  color: var(--color-red);
+  font-weight: 700;
+}
+
+/* What such a value was when the user last confirmed it, under what it is
+   now: crossed out, as a `del` is. */
+.dialog-given-was {
+  display: block;
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--color-subtext0);
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  unicode-bidi: isolate;
+}
+
 /* The key on record, beside an offered key that does not match it. */
 .dialog-fingerprint-recorded {
   color: var(--color-subtext0);
@@ -1591,6 +1644,12 @@ body,
 
 .custom-select-trigger:hover {
   border-color: var(--color-surface2);
+}
+
+.custom-select-trigger:disabled {
+  opacity: 0.6;
+  cursor: default;
+  border-color: var(--color-surface1);
 }
 
 .custom-select-label {

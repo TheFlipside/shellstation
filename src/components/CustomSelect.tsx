@@ -12,6 +12,8 @@ interface CustomSelectProps {
   options: SelectOption[];
   onChange: (value: string) => void;
   placeholder?: string;
+  /** Shows the value and takes no input. */
+  disabled?: boolean;
 }
 
 export function CustomSelect({
@@ -20,6 +22,7 @@ export function CustomSelect({
   options,
   onChange,
   placeholder,
+  disabled = false,
 }: CustomSelectProps): React.JSX.Element {
   const [open, setOpen] = useState(false);
   const [focusIndex, setFocusIndex] = useState(-1);
@@ -41,6 +44,12 @@ export function CustomSelect({
     setOpen(false);
     setFocusIndex(-1);
   }, []);
+
+  // A select that stops taking input is closed, so that it does not come back
+  // open, where it was, once it takes input again.
+  useEffect(() => {
+    if (disabled) close();
+  }, [disabled, close]);
 
   // Close on outside click or scroll
   useEffect(() => {
@@ -274,6 +283,7 @@ export function CustomSelect({
           }
         }}
         onKeyDown={handleTriggerKeyDown}
+        disabled={disabled}
         aria-haspopup="listbox"
         aria-expanded={open}
       >
@@ -283,6 +293,7 @@ export function CustomSelect({
         </span>
       </button>
       {open &&
+        !disabled &&
         dropdownPos &&
         portalTarget &&
         createPortal(

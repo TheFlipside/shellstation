@@ -34,6 +34,7 @@ mod db;
 mod highlight;
 mod import;
 mod limits;
+mod login_pins;
 mod login_sequence;
 mod migrate_legacy;
 mod private_fs;
@@ -1782,6 +1783,12 @@ pub fn run() {
                 config_path,
             });
 
+            // What the user has confirmed of other users' shared sessions,
+            // kept with the local database whose profiles it is about.
+            app.manage(login_pins::LoginPinState::new(
+                config_dir.join("session-logins.json"),
+            ));
+
             // Initialize session logger
             let log_dir = match &app_config.logging.log_directory {
                 Some(p) if !p.is_empty() => validate_config_path(p, "Session log directory")
@@ -2115,6 +2122,9 @@ pub fn run() {
             commands::set_session_credential,
             commands::get_session_credential,
             commands::bulk_set_session_credentials,
+            // What the user confirmed of another user's session (multi-user)
+            commands::session_login_confirm,
+            commands::session_login_confirmed,
             // Database config & migration
             commands::app_restart,
             commands::db_get_config,

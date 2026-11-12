@@ -71,6 +71,9 @@ commands.allow = [
   "set_session_credential",
   "get_session_credential",
   "bulk_set_session_credentials",
+  # What the user confirmed of another user's session (multi-user)
+  "session_login_confirm",
+  "session_login_confirmed",
   # Database config & migration
   "app_restart",
   "db_get_config",

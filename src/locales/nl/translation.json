@@ -28,7 +28,8 @@
     "applyLoginSequence": "Inlogsequentie toepassen…",
     "bulkEdit": "Sessies bulkbewerken…",
     "makeShared": "Delen",
-    "makePersonal": "Persoonlijk maken"
+    "makePersonal": "Persoonlijk maken",
+    "myLogin": "Mijn aanmelding…"
   },
   "bulkEdit": {
     "title": "Bulkbewerking — {{name}}",
@@ -61,6 +62,14 @@
     "profileLabel": "Inloggegevensprofiel",
     "profileNone": "(Toewijzing wissen)",
     "success": "{{count}} sessie(s) bijgewerkt"
+  },
+  "sessionLogin": {
+    "title": "Mijn aanmelding — {{name}}",
+    "info": "{{owner}} deelt deze sessie en bepaalt met welke host ze verbinding maakt. Wat u hier toewijst, geldt alleen voor u, en andere gebruikers zien het niet. Het wordt alleen gebruikt voor wat hier bij het opslaan wordt getoond: als de sessie later wordt gewijzigd, bevestigt u die hier eerst opnieuw.",
+    "jumpHostProfileLabel": "Inloggegevensprofiel voor jumphost {{name}}",
+    "jumpHostNeedsProfile": "Zonder inloggegevensprofiel wordt geen verbinding met een jumphost gemaakt.",
+    "jumpHostUnavailable": "Deze sessie loopt via een jumphost die u niet kunt gebruiken: een die de eigenaar niet heeft gedeeld, of een die niet van de eigenaar van de sessie is. Verbinden kan pas als de eigenaar dat wijzigt.",
+    "notConfirmed": "U hebt iets aan deze sessie toegewezen, maar nog niet bevestigd waarmee ze nu verbinding maakt. Het wordt pas gebruikt als u hier opslaat. Controleer eerst alles wat hier wordt getoond: wat sinds uw bevestiging is gewijzigd, is rood gemarkeerd, en de eerdere waarde is, als die er was, doorgestreept."
   },
   "credentialProfiles": {
     "title": "Inloggegevensbeheer",

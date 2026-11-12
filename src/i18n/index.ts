@@ -39,6 +39,10 @@ void i18n
     fallbackLng: "en",
     interpolation: {
       escapeValue: false, // React already escapes
+      // A value put into a translation is text, never a `$t(...)` or a
+      // `{{...}}` of its own: names and hosts can be another user's. This is
+      // i18next's default; it is stated so that it stays.
+      skipOnVariables: true,
     },
   });
 

@@ -28,7 +28,8 @@
     "applyLoginSequence": "Tillämpa inloggningssekvens…",
     "bulkEdit": "Massredigera sessioner…",
     "makeShared": "Dela",
-    "makePersonal": "Gör personlig"
+    "makePersonal": "Gör personlig",
+    "myLogin": "Min inloggning…"
   },
   "bulkEdit": {
     "title": "Massredigering — {{name}}",
@@ -61,6 +62,14 @@
     "profileLabel": "Inloggningsprofil",
     "profileNone": "(Rensa tilldelning)",
     "success": "{{count}} session(er) uppdaterade"
+  },
+  "sessionLogin": {
+    "title": "Min inloggning — {{name}}",
+    "info": "{{owner}} delar den här sessionen och bestämmer vilken värd den ansluter till. Det du tilldelar här gäller bara dig, och andra användare ser det inte. Det används bara för det som visas här när du sparar: om sessionen ändras senare bekräftar du den först här igen.",
+    "jumpHostProfileLabel": "Inloggningsprofil för hoppvärden {{name}}",
+    "jumpHostNeedsProfile": "Utan inloggningsprofil görs ingen anslutning till en hoppvärd.",
+    "jumpHostUnavailable": "Den här sessionen går via en hoppvärd som du inte kan använda: en som ägaren inte har delat, eller en som inte tillhör sessionens ägare. Det går inte att ansluta förrän ägaren ändrar det.",
+    "notConfirmed": "Du har tilldelat något till den här sessionen men inte bekräftat vad den ansluter till nu. Det används inte förrän du sparar här. Kontrollera först allt som visas här: det som har ändrats sedan du bekräftade det är rödmarkerat, och det tidigare värdet, om det fanns ett, är överstruket."
   },
   "credentialProfiles": {
     "title": "Inloggningshanterare",

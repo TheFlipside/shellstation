@@ -28,7 +28,8 @@
     "applyLoginSequence": "Login-Sequenz anwenden…",
     "bulkEdit": "Verbindungen bearbeiten…",
     "makeShared": "Freigeben",
-    "makePersonal": "Persönlich machen"
+    "makePersonal": "Persönlich machen",
+    "myLogin": "Meine Anmeldung…"
   },
   "bulkEdit": {
     "title": "Massenbearbeitung — {{name}}",
@@ -61,6 +62,14 @@
     "profileLabel": "Anmeldeprofil",
     "profileNone": "(Zuweisung aufheben)",
     "success": "{{count}} Sitzung(en) aktualisiert"
+  },
+  "sessionLogin": {
+    "title": "Meine Anmeldung — {{name}}",
+    "info": "{{owner}} gibt diese Sitzung frei und legt fest, mit welchem Host sie sich verbindet. Was Sie hier zuweisen, gilt nur für Sie, und andere Benutzer sehen es nicht. Es wird nur für das verwendet, was hier beim Speichern angezeigt wird: Wird die Sitzung später geändert, bestätigen Sie sie hier zuerst erneut.",
+    "jumpHostProfileLabel": "Anmeldeprofil für Jump-Host {{name}}",
+    "jumpHostNeedsProfile": "Ohne Anmeldeprofil wird zu einem Jump-Host keine Verbindung hergestellt.",
+    "jumpHostUnavailable": "Diese Sitzung führt über einen Jump-Host, den Sie nicht verwenden können: einen, den ihr Besitzer nicht freigegeben hat, oder einen, der nicht dem Besitzer gehört. Eine Verbindung ist erst möglich, wenn ihr Besitzer das ändert.",
+    "notConfirmed": "Sie haben dieser Sitzung etwas zugewiesen, aber noch nicht bestätigt, womit sie sich jetzt verbindet. Es wird erst verwendet, wenn Sie hier speichern. Prüfen Sie zuerst alles, was hier angezeigt wird: Was sich seit Ihrer Bestätigung geändert hat, ist rot markiert, der frühere Wert ist, soweit es einen gab, durchgestrichen."
   },
   "credentialProfiles": {
     "title": "Anmeldeverwaltung",

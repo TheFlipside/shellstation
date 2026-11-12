@@ -28,7 +28,8 @@
     "applyLoginSequence": "Apply Login Sequence…",
     "bulkEdit": "Bulk Edit Sessions…",
     "makeShared": "Make Shared",
-    "makePersonal": "Make Personal"
+    "makePersonal": "Make Personal",
+    "myLogin": "My Login…"
   },
   "bulkEdit": {
     "title": "Bulk Edit — {{name}}",
@@ -61,6 +62,14 @@
     "profileLabel": "Credential Profile",
     "profileNone": "(Clear assignment)",
     "success": "Updated {{count}} session(s)"
+  },
+  "sessionLogin": {
+    "title": "My Login — {{name}}",
+    "info": "{{owner}} shares this session and decides which host it connects to. What you assign here is yours alone, and other users do not see it. It is used only for what is shown here when you save: if the session is changed later, you confirm it here again first.",
+    "jumpHostProfileLabel": "Credential Profile for Jump Host {{name}}",
+    "jumpHostNeedsProfile": "A jump host is not connected to without a credential profile.",
+    "jumpHostUnavailable": "This session goes through a jump host that you cannot use: one its owner has not shared, or one that is not the owner's own. It cannot be connected to until its owner changes that.",
+    "notConfirmed": "You have assigned something to this session, but have not confirmed what it connects to now. It is not used until you save here. Check everything shown here first: what has changed since you confirmed it is marked in red, with the earlier value crossed out where there was one."
   },
   "credentialProfiles": {
     "title": "Credential Manager",

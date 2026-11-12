@@ -23,6 +23,7 @@ import { MoveDialog } from "./MoveDialog";
 import { FolderCredentialDialog } from "./FolderCredentialDialog";
 import { BulkEditDialog } from "./BulkEditDialog";
 import { SessionDialog, type SessionFormData } from "./SessionDialog";
+import { SessionLoginDialog } from "./SessionLoginDialog";
 import { FolderIcon, SessionIconComponent } from "./SessionIcons";
 import { SettingsDialog } from "./SettingsDialog";
 import { CredentialManager } from "./CredentialManager";
@@ -121,6 +122,8 @@ export function SessionSidebar(): React.JSX.Element {
     id: string;
     name: string;
   } | null>(null);
+  // Another user's shared session whose login the user is assigning.
+  const [loginSession, setLoginSession] = useState<Session | null>(null);
   const [bulkEditFolder, setBulkEditFolder] = useState<{
     id: string;
     name: string;
@@ -296,7 +299,7 @@ export function SessionSidebar(): React.JSX.Element {
       // Skip all tree key handling when a modal dialog is open — the dialog
       // captures Enter/Escape via its own hooks but cannot prevent the tree's
       // React onKeyDown from firing first.
-      if (confirmDialog || folderDialog || sessionDialog) return;
+      if (confirmDialog || folderDialog || sessionDialog || loginSession) return;
 
       const key = e.key;
 
@@ -310,7 +313,8 @@ export function SessionSidebar(): React.JSX.Element {
         return;
       }
 
-      // F2: rename folder or edit session (owned items only in PG mode)
+      // F2: rename folder or edit session (owned items only in PG mode).
+      // For another user's shared session it opens the user's own login.
       if (key === "F2" && selectedItemId) {
         e.preventDefault();
         if (selectedItemType === "folder") {
@@ -325,7 +329,12 @@ export function SessionSidebar(): React.JSX.Element {
         } else if (selectedItemType === "session") {
           const session = sessions.find((s) => s.id === selectedItemId);
           if (!session) return;
-          if (isPgMode && session.owner !== pgUser) return;
+          if (isPgMode && session.owner !== pgUser) {
+            // While the role is not known, no session is taken for another
+            // user's either.
+            if (pgUser !== null) setLoginSession(session);
+            return;
+          }
           setSessionDialog({
             mode: "edit",
             folderId: session.folder_id,
@@ -462,6 +471,7 @@ export function SessionSidebar(): React.JSX.Element {
       confirmDialog,
       folderDialog,
       sessionDialog,
+      loginSession,
       deleteFolder,
       deleteSession,
       clearSelection,
@@ -752,6 +762,19 @@ export function SessionSidebar(): React.JSX.Element {
               label: t("contextMenu.clone"),
               onClick: () => {
                 if (session) cloneSession(session);
+              },
+            },
+          ]
+        : []),
+      // Another user's shared session is not the user's to edit, but the
+      // login the user connects to it with is. Not while the role is not
+      // known: every session would count as another user's then.
+      ...(isPg && pgUser !== null && !isSessionOwner && session
+        ? [
+            {
+              label: t("contextMenu.myLogin"),
+              onClick: () => {
+                setLoginSession(session);
               },
             },
           ]
@@ -1281,6 +1304,23 @@ export function SessionSidebar(): React.JSX.Element {
           onSubmit={handleSessionSubmit}
           onCancel={() => {
             setSessionDialog(null);
+            treeRef.current?.focus();
+          }}
+          onManageCredentials={() => {
+            setShowCredentialManager(true);
+          }}
+          onManageLoginSequences={() => {
+            setShowLoginSequenceManager(true);
+          }}
+        />
+      )}
+
+      {loginSession && (
+        <SessionLoginDialog
+          session={loginSession}
+          sessions={sessions}
+          onClose={() => {
+            setLoginSession(null);
             treeRef.current?.focus();
           }}
           onManageCredentials={() => {
