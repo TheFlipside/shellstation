@@ -141,8 +141,14 @@ pub async fn bulk_set_session_login_sequences(
 }
 
 /// Set (or clear) the mapping that the current role has under `user_ident`
-/// for every session in `folder_id` and the folders below it, and return
-/// how many sessions that was.
+/// for every session of the role's own in `folder_id` and the folders below
+/// it, and return how many mappings that wrote or removed: one for each
+/// session when setting, and when clearing one for each session that had
+/// one.
+///
+/// Only the role's own folders and sessions count, and the walk ends on
+/// folders that name each other as their parent: see
+/// `bulk_set_user_credentials` in `session_credentials.rs`.
 pub(crate) async fn bulk_set_user_login_sequences(
     pool: &sqlx::PgPool,
     folder_id: &str,
@@ -152,13 +158,14 @@ pub(crate) async fn bulk_set_user_login_sequences(
     if let Some(seq_id) = login_sequence_id {
         let result = sqlx::query(
             "WITH RECURSIVE subtree(id) AS ( \
-                 SELECT id FROM folders WHERE id = $3 \
-                 UNION ALL \
+                 SELECT id FROM folders WHERE id = $3 AND owner = current_user \
+                 UNION \
                  SELECT f.id FROM folders f JOIN subtree s ON f.parent_id = s.id \
+                     WHERE f.owner = current_user \
              ) \
              INSERT INTO session_login_sequences (session_id, owner, user_ident, login_sequence_id) \
              SELECT s.id, current_user, $1, $2 FROM sessions s \
-             WHERE s.folder_id IN (SELECT id FROM subtree) \
+             WHERE s.folder_id IN (SELECT id FROM subtree) AND s.owner = current_user \
              ON CONFLICT (session_id, owner, user_ident) \
              DO UPDATE SET login_sequence_id = EXCLUDED.login_sequence_id",
         )
@@ -172,14 +179,15 @@ pub(crate) async fn bulk_set_user_login_sequences(
     } else {
         let result = sqlx::query(
             "WITH RECURSIVE subtree(id) AS ( \
-                 SELECT id FROM folders WHERE id = $2 \
-                 UNION ALL \
+                 SELECT id FROM folders WHERE id = $2 AND owner = current_user \
+                 UNION \
                  SELECT f.id FROM folders f JOIN subtree s ON f.parent_id = s.id \
+                     WHERE f.owner = current_user \
              ) \
              DELETE FROM session_login_sequences \
              WHERE owner = current_user AND user_ident = $1 AND session_id IN ( \
                  SELECT s.id FROM sessions s \
-                 WHERE s.folder_id IN (SELECT id FROM subtree) \
+                 WHERE s.folder_id IN (SELECT id FROM subtree) AND s.owner = current_user \
              )",
         )
         .bind(user_ident)

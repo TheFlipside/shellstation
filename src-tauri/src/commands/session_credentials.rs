@@ -159,8 +159,20 @@ pub async fn bulk_set_session_credentials(
 }
 
 /// Set (or clear) the mapping that the current role has under `user_ident`
-/// for every session in `folder_id` and the folders below it, and return
-/// how many sessions that was.
+/// for every session of the role's own in `folder_id` and the folders below
+/// it, and return how many mappings that wrote or removed: one for each
+/// session when setting, and when clearing one for each session that had
+/// one.
+///
+/// The folder and the folders below it count only where they are the role's
+/// own, as for the other folder-wide statements (`bulk_edit_sessions` in
+/// `db/postgres.rs`), and so do the sessions in them: another user's session
+/// can be in such a folder from before a folder took only its owner's items,
+/// and what a user assigns to another user's session is assigned in
+/// **My Login**, where the session is shown and confirmed. A folder of
+/// another user's is thus no folder to this, and nothing is changed for it.
+/// `UNION`, not `UNION ALL`, so that the walk ends on folders that name each
+/// other as their parent.
 pub(crate) async fn bulk_set_user_credentials(
     pool: &sqlx::PgPool,
     folder_id: &str,
@@ -170,13 +182,15 @@ pub(crate) async fn bulk_set_user_credentials(
     if let Some(profile_id) = credential_profile_id {
         let result = sqlx::query(
             "WITH RECURSIVE subtree(id) AS ( \
-                 SELECT id FROM folders WHERE id = $3 \
-                 UNION ALL \
+                 SELECT id FROM folders WHERE id = $3 AND owner = current_user \
+                 UNION \
                  SELECT f.id FROM folders f JOIN subtree s ON f.parent_id = s.id \
+                     WHERE f.owner = current_user \
              ) \
              INSERT INTO session_credentials (session_id, owner, user_ident, credential_profile_id) \
              SELECT s.id, current_user, $1, $2 FROM sessions s \
-             WHERE s.folder_id IN (SELECT id FROM subtree) AND s.protocol != 'telnet' \
+             WHERE s.folder_id IN (SELECT id FROM subtree) \
+                 AND s.owner = current_user AND s.protocol != 'telnet' \
              ON CONFLICT (session_id, owner, user_ident) \
              DO UPDATE SET credential_profile_id = EXCLUDED.credential_profile_id",
         )
@@ -190,14 +204,16 @@ pub(crate) async fn bulk_set_user_credentials(
     } else {
         let result = sqlx::query(
             "WITH RECURSIVE subtree(id) AS ( \
-                 SELECT id FROM folders WHERE id = $2 \
-                 UNION ALL \
+                 SELECT id FROM folders WHERE id = $2 AND owner = current_user \
+                 UNION \
                  SELECT f.id FROM folders f JOIN subtree s ON f.parent_id = s.id \
+                     WHERE f.owner = current_user \
              ) \
              DELETE FROM session_credentials \
              WHERE owner = current_user AND user_ident = $1 AND session_id IN ( \
                  SELECT s.id FROM sessions s \
-                 WHERE s.folder_id IN (SELECT id FROM subtree) AND s.protocol != 'telnet' \
+                 WHERE s.folder_id IN (SELECT id FROM subtree) \
+                     AND s.owner = current_user AND s.protocol != 'telnet' \
              )",
         )
         .bind(user_ident)

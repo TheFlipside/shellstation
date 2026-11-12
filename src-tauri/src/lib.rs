@@ -4344,7 +4344,8 @@ mod tests {
         );
 
         // Bob again: his rows are as he left them, alice's are out of reach,
-        // and a folder-wide change of his reaches the one session he can see.
+        // and a folder-wide change of his finds no folder in one of alice's,
+        // shared though it is.
         pg_exec(&pool, &format!("SET ROLE {bob}")).await.unwrap();
         assert_eq!(
             query_user_credential(&pool, &shared, "alice")
@@ -4372,11 +4373,29 @@ mod tests {
                 );
             }
         }
+        for to in [Some(other_text.as_str()), None] {
+            assert_eq!(
+                bulk_set_user_credentials(&pool, &folder, "bob", to)
+                    .await
+                    .unwrap(),
+                0
+            );
+            assert_eq!(
+                bulk_set_user_login_sequences(&pool, &folder, "bob", to)
+                    .await
+                    .unwrap(),
+                0
+            );
+        }
         assert_eq!(
-            bulk_set_user_credentials(&pool, &folder, "bob", None)
+            query_user_credential(&pool, &shared, "bob").await.unwrap(),
+            Some(of_bob)
+        );
+        assert_eq!(
+            query_user_login_sequence(&pool, &shared, "bob")
                 .await
                 .unwrap(),
-            1
+            Some(of_bob)
         );
 
         // And alice's are untouched by all of that.
@@ -4388,6 +4407,131 @@ mod tests {
                     .unwrap(),
                 Some(other)
             );
+        }
+
+        // What a folder takes no more, put there by a superuser as rows from
+        // before that rule are: in alice's folder a shared session of bob's
+        // and a shared folder of his, with a session of hers in it. And two
+        // folders of hers that name each other as their parent, with a
+        // session in one. A statement that does not end fails here after 5 s.
+        let (bobs_in_hers, hers_in_his, in_ring) = (
+            uuid::Uuid::new_v4().to_string(),
+            uuid::Uuid::new_v4().to_string(),
+            uuid::Uuid::new_v4().to_string(),
+        );
+        let (his_folder, ring_a, ring_b) = (
+            uuid::Uuid::new_v4().to_string(),
+            uuid::Uuid::new_v4().to_string(),
+            uuid::Uuid::new_v4().to_string(),
+        );
+        let session_in = |id: &str, folder: &str, owner: &str| {
+            format!(
+                "INSERT INTO sessions (id, folder_id, name, hostname, username, owner, visibility) \
+                 VALUES ('{id}', '{folder}', 'later', 'host.example', '', '{owner}', 'shared')"
+            )
+        };
+        for sql in [
+            "RESET ROLE".to_string(),
+            session_in(&bobs_in_hers, &folder, &bob),
+            format!(
+                "INSERT INTO folders (id, name, parent_id, sort_order, owner, visibility) VALUES \
+                 ('{his_folder}', 'his', '{folder}', 0, '{bob}', 'shared'), \
+                 ('{ring_a}', 'ring a', NULL, 0, '{alice}', 'personal'), \
+                 ('{ring_b}', 'ring b', '{ring_a}', 0, '{alice}', 'personal')"
+            ),
+            format!("UPDATE folders SET parent_id = '{ring_b}' WHERE id = '{ring_a}'"),
+            session_in(&hers_in_his, &his_folder, &alice),
+            session_in(&in_ring, &ring_b, &alice),
+            "SET statement_timeout = '5s'".to_string(),
+            format!("SET ROLE {alice}"),
+        ] {
+            pg_exec(&pool, &sql).await.expect(&sql);
+        }
+        // Alice can see all three sessions, and assigns to bob's by itself,
+        // as My Login does, and to her own in his folder.
+        let single = uuid::Uuid::new_v4();
+        let apart = [&bobs_in_hers, &hers_in_his];
+        for session in apart {
+            set_user_credential(&pool, session, "alice", Some(&single.to_string()))
+                .await
+                .unwrap();
+            set_user_login_sequence(&pool, session, "alice", Some(&single.to_string()))
+                .await
+                .unwrap();
+        }
+        // Her folder-wide change is for her own sessions in her own folders:
+        // the two from before, and neither bob's session nor what is below
+        // his folder. What she assigned to those two stays, when she assigns
+        // to the folder and when she clears it.
+        let wide = uuid::Uuid::new_v4();
+        let wide_text = wide.to_string();
+        for to in [Some(wide_text.as_str()), None] {
+            assert_eq!(
+                bulk_set_user_credentials(&pool, &folder, "alice", to)
+                    .await
+                    .unwrap(),
+                2
+            );
+            assert_eq!(
+                bulk_set_user_login_sequences(&pool, &folder, "alice", to)
+                    .await
+                    .unwrap(),
+                2
+            );
+            for session in [&shared, &personal] {
+                assert_eq!(
+                    query_user_credential(&pool, session, "alice")
+                        .await
+                        .unwrap(),
+                    to.map(|_| wide)
+                );
+                assert_eq!(
+                    query_user_login_sequence(&pool, session, "alice")
+                        .await
+                        .unwrap(),
+                    to.map(|_| wide)
+                );
+            }
+            // Bob's folder in hers is no folder of hers by itself either.
+            assert_eq!(
+                bulk_set_user_credentials(&pool, &his_folder, "alice", to)
+                    .await
+                    .unwrap(),
+                0
+            );
+            assert_eq!(
+                bulk_set_user_login_sequences(&pool, &his_folder, "alice", to)
+                    .await
+                    .unwrap(),
+                0
+            );
+            for session in apart {
+                assert_eq!(
+                    query_user_credential(&pool, session, "alice")
+                        .await
+                        .unwrap(),
+                    Some(single)
+                );
+                assert_eq!(
+                    query_user_login_sequence(&pool, session, "alice")
+                        .await
+                        .unwrap(),
+                    Some(single)
+                );
+            }
+        }
+        // The walk ends on the ring, from either of its folders.
+        for ring in [&ring_a, &ring_b] {
+            for to in [Some(wide_text.as_str()), None] {
+                assert_eq!(
+                    bulk_set_user_credentials(&pool, ring, "alice", to).await,
+                    Ok(1)
+                );
+                assert_eq!(
+                    bulk_set_user_login_sequences(&pool, ring, "alice", to).await,
+                    Ok(1)
+                );
+            }
         }
 
         pool.close().await;
