@@ -68,6 +68,8 @@ CREATE ROLE shellstation_users NOLOGIN;
 GRANT CONNECT ON DATABASE shellstation TO shellstation_users;
 GRANT USAGE ON SCHEMA public TO shellstation_users;
 GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO shellstation_users;
+-- The table of applied migrations is the admin role's to write (section 5)
+REVOKE INSERT, UPDATE, DELETE ON _sqlx_migrations FROM shellstation_users;
 GRANT USAGE ON ALL SEQUENCES IN SCHEMA public TO shellstation_users;
 ALTER DEFAULT PRIVILEGES FOR ROLE shellstation_admin IN SCHEMA public
     GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO shellstation_users;
@@ -105,6 +107,8 @@ GRANT USAGE ON SCHEMA public TO jdoe;
 
 -- Grant DML on all existing tables
 GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO jdoe;
+-- The table of applied migrations is the admin role's to write (section 5)
+REVOKE INSERT, UPDATE, DELETE ON _sqlx_migrations FROM jdoe;
 GRANT USAGE ON ALL SEQUENCES IN SCHEMA public TO jdoe;
 
 -- Ensure future tables (from migrations) are also accessible
@@ -149,6 +153,7 @@ REVOKE CREATE ON SCHEMA public FROM PUBLIC;
 REVOKE CREATE ON SCHEMA public FROM shellstation_users;
 REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM shellstation_users;
 GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO shellstation_users;
+REVOKE INSERT, UPDATE, DELETE ON public._sqlx_migrations FROM shellstation_users;
 REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public FROM shellstation_users;
 GRANT USAGE ON ALL SEQUENCES IN SCHEMA public TO shellstation_users;
 
@@ -274,7 +279,7 @@ SELECT CASE WHEN s.setrole = 0::oid THEN 'every role' ELSE s.setrole::regrole::t
 FROM pg_db_role_setting s LEFT JOIN pg_database d ON d.oid = s.setdatabase;
 ```
 
-And the table that says which migrations are applied, which every user could write to under Option B and regular users still can (see the known issues in `CHANGELOG.md`). It should have one row for each migration of the newest ShellStation version the admin role has started, each with `success` true, and no other. Start that version once against an empty database of its own if you need something to compare with:
+And the table that says which migrations are applied, which every user could write to under Option B, as regular users could until the release that leaves it to the admin role (section 5). It should have one row for each migration of the newest ShellStation version the admin role has started, each with `success` true, and no other. Start that version once against an empty database of its own if you need something to compare with:
 
 ```sql
 SELECT version, description, success, encode(checksum, 'hex') AS checksum
@@ -403,7 +408,7 @@ No other role can apply a migration: PostgreSQL leaves altering a table to its o
 
 So when a release's notes mention a change to the RLS setup, start one instance with the owning role's credentials once after updating. Until you do, the change is not in effect for anyone. For the release that adds these triggers, that means any user can still take over, move or delete other users' shared items. For the release that leaves shared items to their owner (below), it means any user can still rewrite them. For the release that keeps a jump host with its session's owner (below), it means a statement of a user's own can still name another user's session as a jump host; ShellStation itself already refuses to set one, and to connect through one.
 
-**The check at each start:** ShellStation does not take the setup for granted. At every start, whichever role it is, it looks in the catalog for what its version's setup applies: row-level security on the four tables, the policies, the triggers and the functions they call, the constraint on visibility, and the primary key of the two mapping tables ([DESIGN.md §4.5.2](DESIGN.md#452-permission-model)). It also looks whether anyone but the owning role has been granted something on the schema of the trigger functions, which the owning role's start revokes. Where something is missing, or a trigger function is not the one that version creates, a notice in the window says so and names the tables concerned. It stays until the user dismisses it and is back at every start while it applies, and the application log of that start lists every part as an error.
+**The check at each start:** ShellStation does not take the setup for granted. At every start, whichever role it is, it looks in the catalog for what its version's setup applies: row-level security on the four tables, the policies, the triggers and the functions they call, the constraint on visibility, and the primary key of the two mapping tables ([DESIGN.md §4.5.2](DESIGN.md#452-permission-model)). It also looks whether anyone but the owning role has been granted something on the schema of the trigger functions, or more than reading on the table of applied migrations, both of which the owning role's start revokes. Where something is missing, or a trigger function is not the one that version creates, a notice in the window says so and names the tables concerned. It stays until the user dismisses it and is back at every start while it applies, and the application log of that start lists every part as an error.
 
 Every user of the database sees that notice, so expect to hear of it in two cases. After a release that changes the setup, until the owning role has started it once: start one instance with the owning role's credentials, and the users are no longer told from their next start on. And after a start of the owning role whose setup did not finish, such as one that gave up on a lock (section 7): its own window shows the notice too, and its next start that gets through applies the rest. A user on an older version than the one the owning role last started is told as well, since the trigger functions are then a later version's; that user updates. If the check itself fails, the window says that it could not check, and the application log says why.
 
@@ -477,6 +482,34 @@ FROM sessions s JOIN sessions j ON j.id = s.jump_host_id WHERE s.owner <> j.owne
 ```
 
 A session whose owner is still the placeholder `'local'` is listed against a jump host that has an owner, and the other way round; ShellStation refuses those connections too.
+
+**The table of applied migrations (the release that leaves it to the admin role):** ShellStation decides by the table `_sqlx_migrations` whether a start has migrations to apply. Until this release the grants of section 2 let every regular user write to it, as to any other table. A user who took a row away or marked one as failed sent every start into the migrations: regular users then started in offline mode, and the admin role's start failed, before it got to the row-level security setup, until someone put the table right by hand. A user who added a row for a migration of a later release had that migration taken for applied when the release came. From this release on the start of the owning role takes back whatever anyone but the table's owner holds beyond `SELECT`, on the table or on one of its columns, at every start, and the check at each start (above) names the table where someone still holds more, or where it is not the owning role's. Section 2 now has the statement for new roles; without it the notice shows for every user after you have granted to a new role, until the admin role has started again.
+
+A user who can still write to the table can also lock all of it, and while it is locked the owning role's start does not get as far as taking the privileges back: it stops at reading the table and says at startup that it could not get a lock. End that user's session (section 7) and start again. Once the privileges are gone, a regular user can take no lock on the table that keeps anyone from reading it.
+
+Update the users' ShellStation before, or together with, the admin role's start of this release. A version from before it writes to the table at its start where the checksums stored there have other line endings than its own build's, as a build for Windows has against a database that was set up from Linux or macOS, and the other way round. Refused that, it starts in offline mode. This release writes there only as the role that applies migrations.
+
+To do it by hand, or to look, as a superuser:
+
+```sql
+-- For each role that was granted to; this takes what it holds on single
+-- columns of the table as well
+REVOKE ALL PRIVILEGES ON _sqlx_migrations FROM shellstation_users;
+GRANT SELECT ON _sqlx_migrations TO shellstation_users;
+
+-- No rows: what anyone but its owner holds on the table beyond reading it
+SELECT CASE WHEN a.grantee = 0::oid THEN 'PUBLIC' ELSE a.grantee::regrole::text END AS grantee,
+       a.privilege_type
+FROM pg_class c, LATERAL aclexplode(c.relacl) a
+WHERE c.oid = '_sqlx_migrations'::regclass::oid
+  AND a.grantee <> c.relowner AND a.privilege_type <> 'SELECT';
+
+-- No rows: privileges on single columns of it
+SELECT t.attname, t.attacl FROM pg_attribute t
+WHERE t.attrelid = '_sqlx_migrations'::regclass::oid AND t.attacl IS NOT NULL;
+```
+
+What was written to the table before is not undone, and cannot be told from it. Section 2.3 has a query for its rows and what they should be. A row for a migration that no version you have started carries is one to delete, as a superuser or the admin role. ShellStation writes a warning to the application log at each start while the table has a row for a migration that its own version does not carry. A version that is behind the one the admin role last started logs the same, so on a user's machine it means nothing by itself; in the log of the newest version's start it does.
 
 **Per-user mappings (the release that gives them an owner):** Each user's mappings of sessions to their own credential profiles and login sequences (`session_credentials`, `session_login_sequences`) are protected by row-level security from this release on ([DESIGN.md §4.5.1](DESIGN.md#451-how-rls-works)). The release has a migration, so the owning role starts first, as above, and that start also applies the protection. To check it:
 

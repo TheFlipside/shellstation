@@ -291,6 +291,27 @@ async fn pg_migrations_up_to_date(pool: &sqlx::PgPool) -> Result<bool, Box<dyn s
         .all(|m| applied.contains(&m.version)))
 }
 
+/// Apply the migrations this build carries that the database does not have
+/// yet, as the role that owns the tables can; for every other role this is
+/// the look that finds them all applied.
+///
+/// A start that finds them all applied reads [`MIGRATIONS_TABLE`] and
+/// nothing more, so a regular role needs no more than `SELECT` on it, and
+/// [`setup_postgres_rls`] leaves regular roles no more. Checksums that
+/// differ by line endings alone are put right only where migrations are
+/// about to run, which is what compares them: a checkout on Windows must
+/// not fail against a database initialized from Linux or macOS, or the
+/// other way round. That is an `UPDATE`, and so the owning role's as well.
+async fn apply_postgres_migrations(pool: &sqlx::PgPool) -> Result<(), Box<dyn std::error::Error>> {
+    if pg_migrations_up_to_date(pool).await? {
+        tracing::info!("All migrations already applied — skipping sqlx::migrate!()");
+        return Ok(());
+    }
+    fix_crlf_migration_checksums(pool).await?;
+    sqlx::migrate!().run(pool).await?;
+    Ok(())
+}
+
 /// Strip connection `URLs` and credentials from `PostgreSQL` error messages
 /// so they are safe to display in the frontend.
 fn sanitize_pg_error(raw: &str) -> String {
@@ -404,6 +425,81 @@ const ON_PLACING: i16 = ON_CHANGE | 4;
 
 /// The tables under row-level security; see [`setup_postgres_rls`].
 const RLS_TABLES: [&str; 4] = ["folders", "sessions", MAPPING_TABLES[0], MAPPING_TABLES[1]];
+
+/// The table in which sqlx keeps which migrations are applied. A start
+/// decides by it whether there is one to apply
+/// ([`pg_migrations_up_to_date`]), so whoever can write to it decides that
+/// for every user: a row taken away or marked as failed sends every start
+/// into the migrations, which regular roles are refused and the owning role
+/// fails at, and a row for a migration of a later release has that one taken
+/// for applied when it comes. Regular roles therefore read it and no more;
+/// see [`setup_postgres_rls`].
+const MIGRATIONS_TABLE: &str = "_sqlx_migrations";
+
+/// What anyone but its owner holds on [`MIGRATIONS_TABLE`] beyond reading
+/// it, as a subquery with a row for each: `grantee` is who, with 0 for
+/// everyone, `privilege_type` what, and `col` the column where it is held on
+/// one column alone, which the server keeps apart from what is held on the
+/// table. A table or column that nobody was granted anything on has no list
+/// to go through.
+fn migrations_table_writers() -> String {
+    let table = format!("'{MIGRATIONS_TABLE}'::pg_catalog.regclass::pg_catalog.oid");
+    format!(
+        "(SELECT a.grantee, a.privilege_type, NULL::pg_catalog.name AS col \
+            FROM pg_catalog.pg_class c, pg_catalog.aclexplode(c.relacl) a \
+           WHERE c.oid = {table} \
+             AND a.grantee <> c.relowner AND a.privilege_type <> 'SELECT' \
+          UNION ALL \
+          SELECT a.grantee, a.privilege_type, t.attname \
+            FROM pg_catalog.pg_class c \
+            JOIN pg_catalog.pg_attribute t ON t.attrelid = c.oid, \
+                 pg_catalog.aclexplode(t.attacl) a \
+           WHERE c.oid = {table} \
+             AND a.grantee <> c.relowner AND a.privilege_type <> 'SELECT')"
+    )
+}
+
+/// The migrations the database has on record that this build does not
+/// carry, by their versions.
+///
+/// A later version of the app that was started against the database leaves
+/// such rows, and this build is then behind. Where none was, they were not
+/// written by the app: until [`setup_postgres_rls`] left the table to its
+/// owner, any regular role could add a row, and one for a migration that a
+/// later release brings is taken for applied when that release comes
+/// ([`pg_migrations_up_to_date`]). Before that release it is a version no
+/// build carries, which is when it can be seen.
+async fn migrations_not_of_this_build(pool: &sqlx::PgPool) -> Result<Vec<i64>, sqlx::Error> {
+    let of_this_build: std::collections::HashSet<i64> =
+        sqlx::migrate!().iter().map(|m| m.version).collect();
+    let mut others: Vec<i64> = sqlx::query_scalar::<_, i64>("SELECT version FROM _sqlx_migrations")
+        .fetch_all(pool)
+        .await?
+        .into_iter()
+        .filter(|version| !of_this_build.contains(version))
+        .collect();
+    others.sort_unstable();
+    Ok(others)
+}
+
+/// Says in the application log what [`migrations_not_of_this_build`] finds.
+/// It is a warning and nothing more: a build that is behind the database is
+/// an everyday thing, and the two cannot be told apart from here.
+async fn warn_of_migrations_not_of_this_build(pool: &sqlx::PgPool) {
+    match migrations_not_of_this_build(pool).await {
+        Ok(others) if others.is_empty() => {}
+        // No more of them than a line of the log should hold; the table can
+        // have been anyone's to fill.
+        Ok(others) => tracing::warn!(
+            "The database has {} migrations on record that this version of ShellStation does not have, among them {:?}. A later version that was started against this database leaves such rows. If none was, ShellStation did not write them, and a migration with one of these numbers would be taken for applied when its release comes (ADMIN_GUIDE.md §5)",
+            others.len(),
+            &others[..others.len().min(20)]
+        ),
+        // The error can quote what the database says, so it is logged
+        // escaped.
+        Err(e) => tracing::warn!("Could not read the migrations the database has on record: {e:?}"),
+    }
+}
 
 /// The trigger functions of [`setup_postgres_rls`], each with its name and
 /// its body, in the order the setup creates them.
@@ -922,6 +1018,50 @@ async fn setup_postgres_rls(pool: &sqlx::PgPool) -> Result<(), String> {
     // would meet the same, so the setup ends there (`RlsStepEnds`).
     let mut failed: Vec<String> = Vec::new();
 
+    // The table of applied migrations is the owning role's to write and
+    // everyone else's to read (`MIGRATIONS_TABLE`). The admin guide's grants
+    // for regular roles are on all tables of the schema, and until this step
+    // existed they included writing to this one, so whatever anyone but its
+    // owner holds beyond `SELECT`, on the table or on one of its columns, is
+    // revoked, at every start, together with what a role that could pass
+    // its grant on has passed on. A
+    // privilege is named as the server names it, so one that a later version
+    // adds is revoked as well. Nothing is revoked where nothing is held, so
+    // a start that finds the table as it should be takes no lock on it. A
+    // `REVOKE` locks it as a reader does: it holds up no one, and waits only
+    // for a lock against every other use, on which it gives up like any
+    // other step.
+    let writers = migrations_table_writers();
+    let read_only = format!(
+        "DO $$ DECLARE held record; BEGIN \
+             FOR held IN \
+                 SELECT DISTINCT w.grantee, w.privilege_type, w.col FROM {writers} w \
+             LOOP \
+                 EXECUTE pg_catalog.format( \
+                     'REVOKE %s%s ON {MIGRATIONS_TABLE} FROM %s CASCADE', \
+                     held.privilege_type, \
+                     CASE WHEN held.col IS NULL THEN '' \
+                          ELSE pg_catalog.format(' (%I)', held.col) END, \
+                     CASE WHEN held.grantee = 0::pg_catalog.oid THEN 'PUBLIC' \
+                          ELSE pg_catalog.format('%I', \
+                              (SELECT r.rolname FROM pg_catalog.pg_roles r \
+                               WHERE r.oid = held.grantee)) END); \
+             END LOOP; \
+         END $$"
+    );
+    if let Err(failure) = rls_setup_step(
+        pool,
+        &format!("privileges on {MIGRATIONS_TABLE}"),
+        &read_only,
+    )
+    .await
+    {
+        failed.push(failure.message);
+        if failure.ends == RlsStepEnds::Setup {
+            return Err(failed.join("; "));
+        }
+    }
+
     // The schema for the trigger functions (`RLS_SCHEMA`) is made for the
     // role that owns the tables, also when a member of that role or a
     // superuser runs this. One that is there and is another role's is given
@@ -1313,7 +1453,10 @@ struct RlsGap {
 /// differs is one a start of the owning role has still to replace, or one of
 /// another version than this, a later one included. And it revokes whatever
 /// anyone but the owning role holds on the functions' schema, so the check
-/// asks whether anyone does.
+/// asks whether anyone does. The same goes for the table of applied
+/// migrations ([`MIGRATIONS_TABLE`]), on which the setup leaves everyone but
+/// its owner no more than reading: the check asks whether anyone holds more,
+/// and whether the table is the owning role's.
 ///
 /// An empty answer says that the setup's parts are there, not that nothing
 /// else is. What a policy of the setup's name says is not read, and neither
@@ -1456,6 +1599,26 @@ async fn check_postgres_rls(pool: &sqlx::PgPool) -> Result<Vec<RlsGap>, String> 
         ));
     }
 
+    // The table of applied migrations is the owning role's, and no one else
+    // holds more on it than reading it.
+    asked.push((
+        Some(MIGRATIONS_TABLE),
+        format!("table {MIGRATIONS_TABLE}, which is not the owning role's"),
+        format!(
+            "EXISTS (SELECT 1 FROM pg_catalog.pg_class c \
+                     WHERE c.oid = {} AND c.relowner = {owning_role})",
+            oid(MIGRATIONS_TABLE)
+        ),
+    ));
+    asked.push((
+        Some(MIGRATIONS_TABLE),
+        format!("privileges on {MIGRATIONS_TABLE}"),
+        format!(
+            "NOT EXISTS (SELECT 1 FROM {} w)",
+            migrations_table_writers()
+        ),
+    ));
+
     // Each question has an answer; one that came back without would be a
     // part that is not in place. A table that is not there fails the whole
     // statement, at the cast of its name.
@@ -1487,11 +1650,13 @@ async fn check_postgres_rls(pool: &sqlx::PgPool) -> Result<Vec<RlsGap>, String> 
 }
 
 /// What the window is told of `gaps`: the tables they are on, in the order
-/// of [`RLS_TABLES`], and whether the trigger functions are among them.
+/// of [`RLS_TABLES`] and with [`MIGRATIONS_TABLE`] after them, and whether
+/// the trigger functions are among them.
 fn rls_gaps_status(gaps: &[RlsGap]) -> commands::RlsSetupStatus {
     commands::RlsSetupStatus::Incomplete {
         tables: RLS_TABLES
             .into_iter()
+            .chain([MIGRATIONS_TABLE])
             .filter(|table| gaps.iter().any(|gap| gap.table == Some(*table)))
             .map(str::to_string)
             .collect(),
@@ -2224,17 +2389,7 @@ pub fn run() {
                         let pool = db::postgres::pool_options()
                             .connect_with(pg_opts)
                             .await?;
-                        // Fix CRLF/LF checksum mismatches before running migrations
-                        // so that Windows checkouts don't fail against a DB initialized
-                        // from Linux/macOS (or vice versa).
-                        fix_crlf_migration_checksums(&pool).await?;
-                        if pg_migrations_up_to_date(&pool).await? {
-                            tracing::info!(
-                                "All migrations already applied — skipping sqlx::migrate!()"
-                            );
-                        } else {
-                            sqlx::migrate!().run(&pool).await?;
-                        }
+                        apply_postgres_migrations(&pool).await?;
                         Ok::<sqlx::PgPool, Box<dyn std::error::Error>>(pool)
                     }) {
                         Ok(pool) => {
@@ -2267,6 +2422,9 @@ pub fn run() {
                             // whatever the owning role's last start left.
                             let rls_setup =
                                 tauri::async_runtime::block_on(rls_setup_status(&pool));
+                            tauri::async_runtime::block_on(
+                                warn_of_migrations_not_of_this_build(&pool),
+                            );
                             // Mappings from before a mapping had an owner
                             // (see `claim_legacy_mappings`). After the setup
                             // above, since the table owner's first start
@@ -3380,15 +3538,15 @@ mod tests {
         sqlx::migrate!().run(pool).await.unwrap();
         setup_postgres_rls(pool).await.unwrap();
         setup_postgres_rls(pool).await.unwrap();
-        pg_exec(
-            pool,
-            &format!(
+        for sql in [
+            format!(
                 "GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public \
                  TO {alice}, {bob}"
             ),
-        )
-        .await
-        .unwrap();
+            format!("REVOKE INSERT, UPDATE, DELETE ON _sqlx_migrations FROM {alice}, {bob}"),
+        ] {
+            pg_exec(pool, &sql).await.unwrap();
+        }
     }
 
     /// One connection as `role`, made the way the app makes its own, and
@@ -5061,16 +5219,35 @@ mod tests {
         // tables two constraints, two primary keys, seven triggers, eight
         // policies and row-level security four times. None of it is there
         // in another version's shape, and nothing is there that is to go.
+        // And the grant above, as the admin guide had it, lets the two users
+        // write to the table of applied migrations.
         let gaps = check_postgres_rls(&user).await.unwrap();
-        assert_eq!(gaps.len(), 5 + 2 + 2 + 7 + 8 + 4, "{gaps:?}");
+        assert_eq!(gaps.len(), 5 + 2 + 2 + 7 + 8 + 4 + 1, "{gaps:?}");
         assert!(gaps.iter().all(|gap| !gap.what.contains(", which is")));
+        assert_eq!(
+            gaps.last().map(|gap| gap.what.as_str()),
+            Some("privileges on _sqlx_migrations")
+        );
         assert_eq!(
             rls_gaps_status(&gaps),
             RlsSetupStatus::Incomplete {
-                tables: RLS_TABLES.map(str::to_string).to_vec(),
+                tables: RLS_TABLES
+                    .into_iter()
+                    .chain([MIGRATIONS_TABLE])
+                    .map(str::to_string)
+                    .collect(),
                 functions: true,
             }
         );
+        // Which they can, until the setup has run: one of them marks a
+        // migration as failed, and every start would go into the migrations.
+        let fail_one = "UPDATE _sqlx_migrations SET success = false \
+                        WHERE version = (SELECT min(version) FROM _sqlx_migrations)";
+        pg_exec(&user, fail_one).await.unwrap();
+        assert!(!pg_migrations_up_to_date(&user).await.unwrap());
+        pg_exec(&server, "UPDATE _sqlx_migrations SET success = true")
+            .await
+            .unwrap();
 
         // After the setup nothing is missing, whoever asks.
         setup_postgres_rls(&owner).await.unwrap();
@@ -5336,6 +5513,54 @@ mod tests {
                 vec!["schema shellstation_rls, on which others hold privileges"],
                 vec![],
             ),
+            // More than reading on the table of applied migrations: for one
+            // role, for everyone, and as the admin guide's grant on all
+            // tables gave it. The setup revokes it.
+            (
+                vec![format!("GRANT UPDATE ON _sqlx_migrations TO {bob}")],
+                vec!["privileges on _sqlx_migrations"],
+                vec![],
+            ),
+            (
+                vec!["GRANT ALL PRIVILEGES ON _sqlx_migrations TO PUBLIC".into()],
+                vec!["privileges on _sqlx_migrations"],
+                vec![],
+            ),
+            (
+                vec![format!(
+                    "GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public \
+                     TO {alice}, {bob}"
+                )],
+                vec!["privileges on _sqlx_migrations"],
+                vec![],
+            ),
+            // On one column alone, which the server keeps apart from what is
+            // held on the table.
+            (
+                vec![format!(
+                    "GRANT UPDATE (success) ON _sqlx_migrations TO {bob}"
+                )],
+                vec!["privileges on _sqlx_migrations"],
+                vec![],
+            ),
+            // Passed on by a role that was allowed to: both lose it.
+            (
+                vec![
+                    format!("GRANT DELETE ON _sqlx_migrations TO {bob} WITH GRANT OPTION"),
+                    format!("SET ROLE {bob}"),
+                    format!("GRANT DELETE ON _sqlx_migrations TO {alice}"),
+                    "RESET ROLE".into(),
+                ],
+                vec!["privileges on _sqlx_migrations"],
+                vec![],
+            ),
+            // The table as another role's, who writes to it whatever is
+            // revoked. Only a superuser gives it back.
+            (
+                vec![format!("ALTER TABLE _sqlx_migrations OWNER TO {bob}")],
+                vec!["table _sqlx_migrations, which is not the owning role's"],
+                vec![format!("ALTER TABLE _sqlx_migrations OWNER TO {admin}")],
+            ),
         ];
         for (taken_away, named, put_back) in cases {
             for sql in &taken_away {
@@ -5348,6 +5573,138 @@ mod tests {
             setup_postgres_rls(&owner).await.unwrap();
             assert_eq!(missing(&user).await, Vec::<String>::new(), "{taken_away:?}");
         }
+
+        // A regular user reads the table of applied migrations and cannot
+        // write to it any more: not mark one as failed, not take one away,
+        // not add one of a later release.
+        for sql in [
+            fail_one,
+            "DELETE FROM _sqlx_migrations",
+            "INSERT INTO _sqlx_migrations (version, description, success, checksum, execution_time) \
+             VALUES (99990101000000, 'later', true, '\\x00', 0)",
+        ] {
+            assert!(
+                refused(pg_exec(&user, sql).await, "permission denied"),
+                "{sql}"
+            );
+        }
+        assert!(pg_migrations_up_to_date(&user).await.unwrap());
+        // Nor lock it against anyone who reads it, which takes more than
+        // reading it oneself.
+        let mut locking = user.begin().await.unwrap();
+        let locked = sqlx::query("LOCK TABLE _sqlx_migrations IN ACCESS EXCLUSIVE MODE")
+            .execute(&mut *locking)
+            .await;
+        assert!(refused(locked, "permission denied"));
+        locking.rollback().await.unwrap();
+
+        // Nor does a start need to: one that finds every migration applied
+        // leaves a checksum alone that differs by its line endings, and the
+        // owning role puts it right, as it does before it migrates.
+        let migrator = sqlx::migrate!();
+        let first = migrator.iter().next().unwrap();
+        let with_lf = first.sql.as_str().replace("\r\n", "\n");
+        let other_endings = [with_lf.clone(), with_lf.replace('\n', "\r\n")]
+            .into_iter()
+            .map(|sql| Sha384::digest(sql.as_bytes()).to_vec())
+            .find(|hash| hash.as_slice() != first.checksum.as_ref())
+            .unwrap();
+        let version = first.version;
+        let stored = || {
+            let server = server.clone();
+            async move {
+                sqlx::query_scalar::<_, Vec<u8>>(
+                    "SELECT checksum FROM _sqlx_migrations WHERE version = $1",
+                )
+                .bind(version)
+                .fetch_one(&server)
+                .await
+                .unwrap()
+            }
+        };
+        sqlx::query("UPDATE _sqlx_migrations SET checksum = $1 WHERE version = $2")
+            .bind(&other_endings)
+            .bind(version)
+            .execute(&server)
+            .await
+            .unwrap();
+        assert!(apply_postgres_migrations(&user).await.is_ok());
+        assert_eq!(stored().await, other_endings);
+        assert!(fix_crlf_migration_checksums(&owner).await.is_ok());
+        assert_eq!(stored().await, first.checksum.as_ref());
+
+        // Revoking waits for no lock that a writer holds on the table.
+        pg_exec(
+            &server,
+            &format!("GRANT UPDATE ON _sqlx_migrations TO {bob}"),
+        )
+        .await
+        .unwrap();
+        let mut held = server.begin().await.unwrap();
+        sqlx::query("LOCK TABLE _sqlx_migrations IN EXCLUSIVE MODE")
+            .execute(&mut *held)
+            .await
+            .unwrap();
+        let set_up = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            setup_postgres_rls(&owner),
+        )
+        .await;
+        assert!(matches!(set_up, Ok(Ok(()))), "{set_up:?}");
+        held.rollback().await.unwrap();
+        assert_eq!(missing(&user).await, Vec::<String>::new());
+
+        // For a lock against every other use it does wait, and gives up as
+        // any other step does. The check says what is then left.
+        pg_exec(
+            &server,
+            &format!("GRANT UPDATE ON _sqlx_migrations TO {bob}"),
+        )
+        .await
+        .unwrap();
+        pg_exec(&owner, "SET lock_timeout = '300ms'").await.unwrap();
+        let mut held = server.begin().await.unwrap();
+        sqlx::query("LOCK TABLE _sqlx_migrations IN ACCESS EXCLUSIVE MODE")
+            .execute(&mut *held)
+            .await
+            .unwrap();
+        let started = std::time::Instant::now();
+        let set_up = setup_postgres_rls(&owner).await;
+        assert!(gave_up_on_lock(&set_up, started), "{set_up:?}");
+        assert!(set_up
+            .unwrap_err()
+            .contains("privileges on _sqlx_migrations"));
+        assert_eq!(missing(&user).await, ["privileges on _sqlx_migrations"]);
+        held.rollback().await.unwrap();
+        pg_exec(&owner, "RESET lock_timeout").await.unwrap();
+        setup_postgres_rls(&owner).await.unwrap();
+        assert_eq!(missing(&user).await, Vec::<String>::new());
+
+        // A row for a migration that this build does not carry, as a later
+        // version leaves one, or as someone could add one while the table
+        // was theirs to write: it is found, and counts for nothing here.
+        assert_eq!(
+            migrations_not_of_this_build(&user).await.unwrap(),
+            Vec::<i64>::new()
+        );
+        pg_exec(
+            &server,
+            "INSERT INTO _sqlx_migrations (version, description, success, checksum, execution_time) \
+             VALUES (99990101000000, 'later', true, '\\x00', 0)",
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            migrations_not_of_this_build(&user).await.unwrap(),
+            [99_990_101_000_000]
+        );
+        assert!(pg_migrations_up_to_date(&user).await.unwrap());
+        pg_exec(
+            &server,
+            "DELETE FROM _sqlx_migrations WHERE version = 99990101000000",
+        )
+        .await
+        .unwrap();
 
         // What the window is told: the tables, and whether the functions.
         let on = |table: &'static str, what: &str| RlsGap {
