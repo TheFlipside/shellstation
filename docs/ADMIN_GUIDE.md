@@ -12,6 +12,7 @@ This guide is intended for system administrators deploying ShellStation with a s
   - [2. Creating Regular Users](#2-creating-regular-users)
     - [2.1 Group Role (Recommended)](#21-group-role-recommended)
     - [2.2 Per-User Grants (Alternative)](#22-per-user-grants-alternative)
+    - [2.3 Databases Set Up with Option B](#23-databases-set-up-with-option-b)
   - [3. Resetting a User Password](#3-resetting-a-user-password)
   - [4. Removing a User](#4-removing-a-user)
   - [5. Applying Application Updates](#5-applying-application-updates)
@@ -49,16 +50,15 @@ Configure one ShellStation instance with the `shellstation_admin` credentials an
 
 ## 2. Creating Regular Users
 
-After the admin has initialized the schema, create roles for each team member. There are two permission models to choose from (see [DESIGN.md §4.5.2](DESIGN.md#452-permission-model) for the trade-offs):
+After the admin has initialized the schema, create roles for each team member. Regular users get the privileges to read and write rows and no others: `SELECT`, `INSERT`, `UPDATE` and `DELETE`. Row-level security then keeps each user's personal items to that user ([DESIGN.md §4.5.2](DESIGN.md#452-permission-model)). Changes to the schema are the admin role's: after an upgrade of ShellStation that includes one, the admin role connects first (section 5).
 
-- **Option A — Separated roles (recommended for larger teams):** Regular users get DML only. The admin must connect first after each ShellStation upgrade that includes schema changes.
-- **Option B — All users can migrate (simpler for small teams):** Every user gets schema modification rights. Any user can apply migrations automatically — no admin coordination needed. Their table privileges include `TRIGGER` and `TRUNCATE`, which reach past row-level security, and with `CREATE` on the schema they can put operators and functions into it that other users' statements may run. Choose this only for a team whose members you trust with each other's items.
+Earlier versions of this guide offered a second permission model, Option B, under which every user was to apply migrations. It is withdrawn: PostgreSQL does not allow what it promised, and its grants reach past row-level security. If your database was set up that way, see section 2.3.
 
 ### 2.1 Group Role (Recommended)
 
 Using a group role avoids repeating grants for every new user. Create the group once, then add users to it.
 
-**Option A — DML-only group (separated roles):**
+**DML-only group:**
 
 ```sql
 \c shellstation
@@ -79,39 +79,19 @@ CREATE ROLE jdoe WITH LOGIN PASSWORD 'user-password';
 GRANT shellstation_users TO jdoe;
 ```
 
-**Option B — Group with migration rights (self-service updates):**
-
-```sql
-\c shellstation
-
--- One-time: create the group role with schema modification access
-CREATE ROLE shellstation_users NOLOGIN;
-GRANT CONNECT ON DATABASE shellstation TO shellstation_users;
-GRANT USAGE, CREATE ON SCHEMA public TO shellstation_users;
-GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO shellstation_users;
-GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO shellstation_users;
-ALTER DEFAULT PRIVILEGES FOR ROLE shellstation_admin IN SCHEMA public
-    GRANT ALL PRIVILEGES ON TABLES TO shellstation_users;
-ALTER DEFAULT PRIVILEGES FOR ROLE shellstation_admin IN SCHEMA public
-    GRANT ALL PRIVILEGES ON SEQUENCES TO shellstation_users;
-
--- Per user: just add to the group
-CREATE ROLE jdoe WITH LOGIN PASSWORD 'user-password';
-GRANT shellstation_users TO jdoe;
-```
-
 The PostgreSQL role name becomes the `owner` value in RLS — each user sees their own personal items and all shared items.
 
-Two things to avoid:
+Three things to avoid:
 
 - **A role named `local`.** That is the placeholder owner of rows from before RLS was set up. A role with that name would own all such rows, personal ones included. Nobody else can claim one once row-level security is on. Per-user mappings from before they had an owner carry the same placeholder (section 5). There a role with that name gets no more than any other role, but it cannot save a mapping of its own.
 - **Granting `shellstation_admin` to regular users.** Members of the role that owns the tables have its rights over them. They get past the triggers, so they can put their rows into anyone's folder, and they can change the row-level security itself.
+- **More than the four privileges above.** `GRANT ALL PRIVILEGES` on the tables includes `TRIGGER` and `TRUNCATE`, which reach past row-level security: a trigger of a user's own runs when other users write, as those users, and `TRUNCATE` empties a table whatever its policies say. `CREATE` on the schema `public` lets a user put operators and functions there that other users' statements may run in place of the built-in ones. ShellStation needs none of these as a regular user.
 
 ### 2.2 Per-User Grants (Alternative)
 
 If you prefer not to use a group role (e.g., you need different privilege levels per user), you can grant permissions directly to each role.
 
-**Option A — DML-only users (separated roles):**
+**DML-only users:**
 
 ```sql
 \c shellstation
@@ -134,30 +114,233 @@ ALTER DEFAULT PRIVILEGES FOR ROLE shellstation_admin IN SCHEMA public
     GRANT USAGE ON SEQUENCES TO jdoe;
 ```
 
-**Option B — Users with migration rights (self-service updates):**
+Repeat for each user.
+
+### 2.3 Databases Set Up with Option B
+
+Until this version the guide offered a second permission model, Option B, for teams that wanted every user to apply migrations without the admin. It gave each user, or the group, `CREATE` on the schema `public` and all privileges on the tables. It is withdrawn, for two reasons.
+
+- **It did not do what it said.** PostgreSQL lets only a table's owner alter it, add an index to it or give it a policy, and no grant confers that. Every migration since the first changes an existing table, so an Option B user could apply none of them: that user's ShellStation started in offline mode until the admin role had started the new version, as a regular user's does.
+- **Its grants reach past row-level security.** All privileges on a table include `TRIGGER` and `TRUNCATE` (see the things to avoid in section 2.1). A trigger of a user's own runs with the rights of whoever writes to the table, the admin role included. `CREATE` on the schema lets a user put operators and functions there that other users' statements may run. What [DESIGN.md §4.5.1](DESIGN.md#451-how-rls-works) says one user cannot do to another's items does not hold for a user with these grants.
+
+**Do the following before the admin role connects again, in this order, with the users kept out.** A trigger runs with the rights of whoever writes to its table. One that a user added to `folders` or `sessions` can therefore run as the admin role whenever that role's ShellStation starts, since its start sends an update to both tables, and it runs as every other user who saves something, and as you if you change a row there. So until step 3 is done, change no row in ShellStation's tables yourself, as any role: no `INSERT`, `UPDATE`, `DELETE` or `COPY`, and no restore. None of the statements below does.
+
+All of it is run as a superuser. Keep the users out first, and pin the search path for your own session, as this is the kind of database where someone may have put an operator in your way:
 
 ```sql
 \c shellstation
+SET search_path = pg_catalog, pg_temp;
 
--- Create a user that can also run migrations
-CREATE ROLE jdoe WITH LOGIN PASSWORD 'user-password';
-
--- Grant connection and schema modification access
-GRANT CONNECT ON DATABASE shellstation TO jdoe;
-GRANT USAGE, CREATE ON SCHEMA public TO jdoe;
-
--- Grant DML + DDL on all existing tables
-GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO jdoe;
-GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO jdoe;
-
--- Ensure future tables are also fully accessible
-ALTER DEFAULT PRIVILEGES FOR ROLE shellstation_admin IN SCHEMA public
-    GRANT ALL PRIVILEGES ON TABLES TO jdoe;
-ALTER DEFAULT PRIVILEGES FOR ROLE shellstation_admin IN SCHEMA public
-    GRANT ALL PRIVILEGES ON SEQUENCES TO jdoe;
+-- Nobody but a superuser gets a new connection, and the open ones end
+ALTER DATABASE shellstation CONNECTION LIMIT 0;
+SELECT pg_terminate_backend(pid) FROM pg_stat_activity
+WHERE datname = 'shellstation' AND pid <> pg_backend_pid();
 ```
 
-Repeat for each user.
+If you want a record of what was there, take it now, since step 3 removes it: `pg_dump --schema-only` of the database.
+
+**1. Take the grants back.** Run this once for the group role, and once more for every user that was given Option B directly, as section 2.2 had it, each in place of `shellstation_users`. It leaves a role with what sections 2.1 and 2.2 grant:
+
+```sql
+-- Before PostgreSQL 15, and in a database upgraded from then, everyone may
+-- create objects in public, whatever a single role is granted (section 5)
+REVOKE CREATE ON SCHEMA public FROM PUBLIC;
+
+REVOKE CREATE ON SCHEMA public FROM shellstation_users;
+REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM shellstation_users;
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO shellstation_users;
+REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public FROM shellstation_users;
+GRANT USAGE ON ALL SEQUENCES IN SCHEMA public TO shellstation_users;
+
+-- The same for tables and sequences that later migrations create
+ALTER DEFAULT PRIVILEGES FOR ROLE shellstation_admin IN SCHEMA public
+    REVOKE ALL PRIVILEGES ON TABLES FROM shellstation_users;
+ALTER DEFAULT PRIVILEGES FOR ROLE shellstation_admin IN SCHEMA public
+    GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO shellstation_users;
+ALTER DEFAULT PRIVILEGES FOR ROLE shellstation_admin IN SCHEMA public
+    REVOKE ALL PRIVILEGES ON SEQUENCES FROM shellstation_users;
+ALTER DEFAULT PRIVILEGES FOR ROLE shellstation_admin IN SCHEMA public
+    GRANT USAGE ON SEQUENCES TO shellstation_users;
+```
+
+A `REVOKE` that fails over dependent privileges means the role passed a privilege on to another; run it again with `CASCADE` at its end. Then check that nothing is left, for any role, whether it holds it itself, through a group or as everyone does:
+
+```sql
+-- No rows: roles besides the admin role that can still create objects in
+-- public or in the database
+SELECT r.rolname FROM pg_roles r
+WHERE NOT r.rolsuper AND r.rolname !~ '^pg_' AND r.rolname <> 'shellstation_admin'
+  AND (has_schema_privilege(r.oid, 'public', 'CREATE')
+       OR has_database_privilege(r.oid, current_database(), 'CREATE'));
+
+-- No rows: what anyone but its owner holds on a table, view or sequence
+-- beyond reading and writing rows, and beyond using a sequence
+SELECT c.oid::regclass AS relation,
+       CASE WHEN a.grantee = 0::oid THEN 'PUBLIC' ELSE a.grantee::regrole::text END AS grantee,
+       a.privilege_type
+FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace,
+     LATERAL aclexplode(c.relacl) a
+WHERE n.nspname !~ '^pg_' AND n.nspname <> 'information_schema'
+  AND a.grantee <> c.relowner
+  AND NOT (c.relkind = 'S' AND a.privilege_type = 'USAGE')
+  AND NOT (c.relkind <> 'S' AND a.privilege_type IN ('SELECT', 'INSERT', 'UPDATE', 'DELETE'));
+
+-- No rows: privileges on single columns
+SELECT a.attrelid::regclass AS relation, a.attname, a.attacl
+FROM pg_attribute a
+JOIN pg_class c ON c.oid = a.attrelid
+JOIN pg_namespace n ON n.oid = c.relnamespace
+WHERE a.attacl IS NOT NULL AND n.nspname !~ '^pg_' AND n.nspname <> 'information_schema';
+
+-- What later tables and sequences get: one row for the admin role's tables
+-- in public and one for its sequences, each with an entry for every role you
+-- grant to, arwd for tables and U for sequences, and nothing else
+SELECT d.defaclrole::regrole AS for_role, d.defaclnamespace::regnamespace AS in_schema,
+       d.defaclobjtype AS kind, d.defaclacl AS grants
+FROM pg_default_acl d;
+```
+
+A member of the admin role is listed by the first of these whatever was revoked; step 2 finds the members. So is a role that owns the database or the schema `public` without being a superuser. An owner can grant itself anything there, so no revoke takes that from it: give the database and the schema to a superuser (`ALTER DATABASE shellstation OWNER TO postgres`, `ALTER SCHEMA public OWNER TO postgres`). Any other role that the first query lists for the database alone loses that with `REVOKE CREATE ON DATABASE shellstation FROM name`. And where the last query shows an entry or a row beyond the ones described, take it back with the statement that made it, `ALTER DEFAULT PRIVILEGES … REVOKE ALL PRIVILEGES ON TABLES FROM name`, for the role and schema the row names.
+
+**2. Look for what was made with them.** Taking the grants back removes nothing that was made: a trigger that a user added keeps firing. Each of these should return no rows:
+
+```sql
+-- Tables, views, sequences and indexes that are not the admin role's, as all
+-- of ShellStation's are. One a user created is that user's to alter, also
+-- where a later migration finds it under the name of a table it would create.
+SELECT c.oid::regclass AS relation, c.relkind, c.relowner::regrole AS owner
+FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+WHERE n.nspname !~ '^pg_' AND n.nspname <> 'information_schema'
+  AND c.relowner <> 'shellstation_admin'::regrole::oid;
+
+-- Schemas besides public and the one of the setup's trigger functions
+SELECT n.nspname, n.nspowner::regrole AS owner FROM pg_namespace n
+WHERE n.nspname !~ '^pg_' AND n.nspname NOT IN ('information_schema', 'public')
+  AND NOT (n.nspname = 'shellstation_rls'
+           AND n.nspowner = 'shellstation_admin'::regrole::oid);
+
+-- Triggers that do not call a function of the setup's: one in
+-- shellstation_rls, with the schema and the function the admin role's
+SELECT t.tgrelid::regclass AS on_table, t.tgname,
+       t.tgfoid::regprocedure AS calls, f.proowner::regrole AS function_owner
+FROM pg_trigger t
+JOIN pg_proc f ON f.oid = t.tgfoid
+JOIN pg_namespace n ON n.oid = f.pronamespace
+WHERE NOT t.tgisinternal
+  AND NOT (n.nspname = 'shellstation_rls'
+           AND n.nspowner = 'shellstation_admin'::regrole::oid
+           AND f.proowner = 'shellstation_admin'::regrole::oid);
+
+-- Functions, operators and types outside the schema of the setup.
+-- ShellStation keeps no function and no operator there, and no type but
+-- the ones that come with its tables, which are the admin role's.
+SELECT p.oid::regprocedure AS function, p.proowner::regrole AS owner,
+       p.prosecdef AS runs_as_owner
+FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+WHERE n.nspname !~ '^pg_' AND n.nspname NOT IN ('information_schema', 'shellstation_rls');
+SELECT o.oid::regoperator AS operator, o.oprowner::regrole AS owner
+FROM pg_operator o JOIN pg_namespace n ON n.oid = o.oprnamespace
+WHERE n.nspname !~ '^pg_' AND n.nspname <> 'information_schema';
+SELECT t.oid::regtype AS type, t.typowner::regrole AS owner
+FROM pg_type t JOIN pg_namespace n ON n.oid = t.typnamespace
+WHERE n.nspname !~ '^pg_' AND n.nspname <> 'information_schema'
+  AND t.typowner <> 'shellstation_admin'::regrole::oid;
+
+-- Members of the admin role, directly or through another role, who have its
+-- rights over the tables (section 2.1)
+WITH RECURSIVE has(member) AS (
+    SELECT m.member FROM pg_auth_members m
+    WHERE m.roleid = 'shellstation_admin'::regrole::oid
+    UNION
+    SELECT m.member FROM pg_auth_members m JOIN has ON m.roleid = has.member
+)
+SELECT member::regrole AS member FROM has;
+```
+
+And three that should list only what you set up yourself. A role that bypasses row-level security reads and writes every user's items. Before PostgreSQL 16, one that may create roles can make itself a member of the admin role and set its password. The predefined roles that read and write the server's files or run its programs reach past the database altogether. And a setting stored for a role, such as a search path for the admin role, applies at each of its connections:
+
+```sql
+-- Your superusers and no one else
+SELECT r.rolname, r.rolsuper, r.rolcreaterole, r.rolbypassrls FROM pg_roles r
+WHERE r.rolname !~ '^pg_' AND (r.rolsuper OR r.rolcreaterole OR r.rolbypassrls);
+
+-- Members of PostgreSQL's predefined roles
+SELECT m.roleid::regrole AS predefined_role, m.member::regrole AS member
+FROM pg_auth_members m WHERE m.roleid::regrole::text ~ '^pg_';
+
+-- Settings stored for a role or a database
+SELECT CASE WHEN s.setrole = 0::oid THEN 'every role' ELSE s.setrole::regrole::text END AS for_role,
+       COALESCE(d.datname::text, 'every database') AS in_database, s.setconfig AS settings
+FROM pg_db_role_setting s LEFT JOIN pg_database d ON d.oid = s.setdatabase;
+```
+
+And the table that says which migrations are applied, which every user could write to under Option B and regular users still can (see the known issues in `CHANGELOG.md`). It should have one row for each migration of the newest ShellStation version the admin role has started, each with `success` true, and no other. Start that version once against an empty database of its own if you need something to compare with:
+
+```sql
+SELECT version, description, success, encode(checksum, 'hex') AS checksum
+FROM public._sqlx_migrations ORDER BY version;
+```
+
+A row for a migration that the version does not have yet would keep that migration from being applied when its release comes.
+
+Some rows are no user's doing. What you or an extension put into the database as a superuser is listed as the superuser's. And on a database whose admin role has not yet started the release that moved the trigger functions into `shellstation_rls` (section 5), the setup's own seven triggers are listed, with functions named `shellstation_…` in `public`; a function of such a name can also be left over from then, which section 5 has a query for. An extension that a user installed looks like one you installed, so go by what you know to have installed.
+
+**3. Remove it.** A table that a user made goes first (`DROP TABLE name`); the block below stops at a partitioned one. Then every trigger and every policy on the tables in `public`, the setup's own with them. The check at each start goes by their names and not by what a policy says (section 5), so nothing short of making them again shows that they are the setup's. With row-level security on and no policy, a table takes nothing from a regular user and shows nothing, and step 4 makes the setup's seven triggers and eight policies again. The block switches row-level security on before it drops them, whatever was done to the tables:
+
+```sql
+ALTER TABLE public.folders ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
+ALTER TABLE public.sessions ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
+ALTER TABLE public.session_credentials ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
+ALTER TABLE public.session_login_sequences ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
+
+DO $$ DECLARE found record; BEGIN
+    FOR found IN
+        SELECT p.polname AS name, p.polrelid::regclass AS relation
+        FROM pg_policy p
+        JOIN pg_class c ON c.oid = p.polrelid
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname = 'public'
+    LOOP
+        EXECUTE format('DROP POLICY %I ON %s', found.name, found.relation);
+    END LOOP;
+    FOR found IN
+        SELECT t.tgname AS name, t.tgrelid::regclass AS relation
+        FROM pg_trigger t
+        JOIN pg_class c ON c.oid = t.tgrelid
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname = 'public' AND NOT t.tgisinternal
+    LOOP
+        EXECUTE format('DROP TRIGGER %I ON %s', found.name, found.relation);
+    END LOOP;
+END $$;
+```
+
+Then what the queries of step 2 listed:
+
+- A function, operator, type or schema that a user made: `DROP FUNCTION` and the like, with the name and arguments as the query prints them. Do not add `CASCADE`; what still depends on it is worth a look first.
+- A table or view that a user made: drop it. Do not take it over as it is. A view, a default, a rule or a check on it is that user's code, and it would run as whoever uses the table. If you need what a table holds, copy the rows out, and make the table yourself.
+- A member of the admin role: `REVOKE shellstation_admin FROM name`.
+- An attribute, a predefined role or a stored setting that you did not set: `ALTER ROLE name NOBYPASSRLS` (or `NOCREATEROLE`), `REVOKE` the predefined role, and `ALTER ROLE name RESET ALL` for a setting of one role, with `IN DATABASE shellstation` after the name where it is for the one database. A setting for every role goes with `ALTER ROLE ALL RESET ALL`, with or without the database, and one for the database with `ALTER DATABASE shellstation RESET ALL`.
+- A row in `_sqlx_migrations` for a migration that was never applied: `DELETE FROM public._sqlx_migrations WHERE version = …`, now that no trigger is left on the table. If a row is missing or marked as failed, the admin role's start stops at it: put that table's rows back from a backup.
+
+Whatever a role still owns in the database also keeps it from being dropped later (section 4). `DROP OWNED BY name` drops everything the role owns in this database at once, tables with their rows included. It also takes back everything the role was granted directly there and on the database itself, the right to connect included, so for a user who was set up as in section 2.2, run all of that section's statements again afterwards, and check that the user is still in the group (`\du name`).
+
+Run the queries of steps 1 and 2 once more. They should now return nothing but what you know to be yours.
+
+**4. Start one instance with the admin role's credentials,** after letting connections in again:
+
+```sql
+ALTER DATABASE shellstation CONNECTION LIMIT -1;
+```
+
+Its start makes the setup's triggers and policies again and replaces the trigger functions. Its window shows no notice about row-level security once that is done; if it does, see section 5. The users can start after it.
+
+**What these steps cannot undo, or show.** A trigger ran with the rights of whoever wrote, so what it did was done as that user:
+
+- **Every user's items.** A trigger can have read what the user who wrote could read, and kept it somewhere. It can have changed rows as their owners saved them, the owner, visibility, host and jump host included, and been dropped again. Nothing in the database shows either afterwards. A backup from before the role had these grants is the one thing to compare with. Without one, every user should look over their own sessions, personal ones as well as shared ones, and the hosts and jump hosts above all.
+- **The admin role.** If the admin role started or was used while such a trigger was there, statements may have run with its rights. It owns the tables, so they can have changed the policies and triggers, which step 3 therefore makes again, and the tables themselves: compare the output of `pg_dump --schema-only` with that of a database set up afresh if you want to be sure of them. They can also have granted privileges, changed what later tables are granted, made functions that run with the admin role's rights, added members to it and stored settings for it; steps 1 and 2 show what of that is there. And they can have changed the admin role's password, so set a new one (section 3).
+- **A superuser.** If a superuser changed a row in those tables while such a trigger was there, or if the admin role is one, which section 1 does not make it, everything on the server was within that user's reach. The same goes, before PostgreSQL 16, for an admin role that may create roles.
+- **`TRUNCATE`** emptied a table for everyone. With `folders` or `sessions` its users will have noticed; with the per-user mappings or the highlight profiles they may not have. Compare the row counts with a backup.
 
 ---
 
@@ -207,24 +390,18 @@ DROP ROLE jdoe;
 
 ## 5. Applying Application Updates
 
-When a new ShellStation version includes database schema changes:
+When a new ShellStation version includes database schema changes, the admin role applies them:
 
-**Option A — Separated roles (admin applies migrations):**
-
-1. **Stop all regular user instances** (or accept that they will fail to start until the migration is applied). A migration gives up if it has to wait more than 5 seconds for a lock, such as for a transaction another user has left open, or if one of its statements takes more than 60 seconds; ShellStation then says at startup which of the two it was, and tries again at the next start. See section 7 for finding what holds a lock, and for giving the owning role more time.
+1. **Stop all regular user instances** (or accept that they will start in offline mode, with a banner that says the database could not be used, until the migration is applied). A migration gives up if it has to wait more than 5 seconds for a lock, such as for a transaction another user has left open, or if one of its statements takes more than 60 seconds; ShellStation then says at startup which of the two it was, and tries again at the next start. See section 7 for finding what holds a lock, and for giving the owning role more time.
 2. **Start one instance using the admin credentials** (`shellstation_admin`). Migrations run automatically on startup.
-3. **If new tables were created**, re-run the default privilege grants (the `ALTER DEFAULT PRIVILEGES` from section 2 only covers tables created after the grant was set up — new tables from migrations executed by the admin role are covered).
+3. **New tables need no grants of their own.** The `ALTER DEFAULT PRIVILEGES` from section 2 covers every table the admin role creates after it was set up, which a migration's tables are.
 4. **Regular users can now connect** normally.
 
-**Option B — Self-service updates (any user can migrate):**
+No other role can apply a migration: PostgreSQL leaves altering a table to its owner (section 2.3). Two instances of the admin role that start at the same time take turns, since the migration system holds a lock while it runs: the second waits for the first, for up to 5 seconds, and one that waits longer says at startup that it could not get a lock, and starts normally the next time.
 
-1. Users update ShellStation independently. The **first user to launch the new version** automatically applies pending migrations.
-2. Subsequent users start normally — the migration check detects that all migrations are already applied.
-3. No admin coordination is required. In the unlikely event of two users starting simultaneously during a migration, the migration system uses a lock to serialize execution — only one instance runs the migration, and the other waits for it, for up to 5 seconds. One that waits longer says at startup that it could not get a lock, and starts normally the next time.
+**Row-level security changes:** The RLS setup (policies, and the triggers that keep shared items with their owner) runs on every startup. Only the role that owns the tables can apply it, though. That is normally `shellstation_admin`, which created the schema in section 1. For any other role the setup ends at its check that the role owns the tables, and that failure is logged and skipped.
 
-**Row-level security changes (both options):** The RLS setup (policies, and the triggers that keep shared items with their owner) runs on every startup. Only the role that owns the tables can apply it, though. That is normally `shellstation_admin`, which created the schema in section 1. For any other role the setup ends at its check that the role owns the tables, and that failure is logged and skipped.
-
-So when a release's notes mention a change to the RLS setup, start one instance with the owning role's credentials once after updating. This applies under Option B too. Until you do, the change is not in effect for anyone. For the release that adds these triggers, that means any user can still take over, move or delete other users' shared items. For the release that leaves shared items to their owner (below), it means any user can still rewrite them. For the release that keeps a jump host with its session's owner (below), it means a statement of a user's own can still name another user's session as a jump host; ShellStation itself already refuses to set one, and to connect through one.
+So when a release's notes mention a change to the RLS setup, start one instance with the owning role's credentials once after updating. Until you do, the change is not in effect for anyone. For the release that adds these triggers, that means any user can still take over, move or delete other users' shared items. For the release that leaves shared items to their owner (below), it means any user can still rewrite them. For the release that keeps a jump host with its session's owner (below), it means a statement of a user's own can still name another user's session as a jump host; ShellStation itself already refuses to set one, and to connect through one.
 
 **The check at each start:** ShellStation does not take the setup for granted. At every start, whichever role it is, it looks in the catalog for what its version's setup applies: row-level security on the four tables, the policies, the triggers and the functions they call, the constraint on visibility, and the primary key of the two mapping tables ([DESIGN.md §4.5.2](DESIGN.md#452-permission-model)). It also looks whether anyone but the owning role has been granted something on the schema of the trigger functions, which the owning role's start revokes. Where something is missing, or a trigger function is not the one that version creates, a notice in the window says so and names the tables concerned. It stays until the user dismisses it and is back at every start while it applies, and the application log of that start lists every part as an error.
 
@@ -232,7 +409,7 @@ Every user of the database sees that notice, so expect to hear of it in two case
 
 The check goes by names, as the setup does. It does not read what a policy says, and it looks for no policy or trigger that someone has added beside the setup's.
 
-Under Option B, too, the triggers are installed by the owning role, as under Option A. They do not stop a user who holds `TRIGGER` or `TRUNCATE` on the tables, though, and Option B grants both ([DESIGN.md §4.5.1](DESIGN.md#451-how-rls-works)).
+The triggers do not stop a user who holds `TRIGGER` or `TRUNCATE` on the tables, as a user does who was set up under the withdrawn Option B ([DESIGN.md §4.5.1](DESIGN.md#451-how-rls-works)). Section 2.3 has how to take those back.
 
 To look for yourself whether the triggers are installed and enabled and call the functions of the setup, run the query below. It does not show whether the functions are current, which the check at each start does; starting the owning role once after an update takes care of that.
 
@@ -265,7 +442,7 @@ WHERE pronamespace = 'public'::regnamespace::oid AND proname LIKE 'shellstation\
 -- DROP FUNCTION public.shellstation_own_folder();
 ```
 
-**Objects in `public` (existing databases):** A database that was set up before PostgreSQL 15, or by an earlier version of section 1, still lets every role create objects in the schema `public`. An operator or function a user puts there can be run by other users' statements in place of the built-in one, as those users. Under Option A, take that away once, as a superuser; ShellStation creates nothing there as a regular user:
+**Objects in `public` (existing databases):** A database that was set up before PostgreSQL 15, or by an earlier version of section 1, still lets every role create objects in the schema `public`. An operator or function a user puts there can be run by other users' statements in place of the built-in one, as those users. Take that away once, as a superuser; ShellStation creates nothing there as a regular user:
 
 ```sql
 REVOKE CREATE ON SCHEMA public FROM PUBLIC;
@@ -350,7 +527,7 @@ RLS policies, constraints, and the migration tracking table are included in the 
 
 ## 7. Locks Held by a User
 
-Every user of the database can hold a lock that other users' changes need, on purpose or not. A user can lock a whole table with the same privileges ShellStation itself needs, so those cannot be taken away. Single items a user can lock only where they are the user's own, with one exception: a row of a user's own that refers to another user's session keeps that session from being deleted, though not from being changed, while the transaction that wrote it is open. Such a row is a mapping for it, or a row in the central `credentials` table, which the app does not use and which has no row-level security. Naming it as a jump host does this only for a session that named it before the database refused that (section 5), and where the trigger that refuses it is not installed yet or does not hold the user (Option B). A transaction left open in `psql` or another tool does the same without meaning to, and so does a client that has stopped responding in the middle of a change. See [DESIGN.md §4.5.3](DESIGN.md#453-locks) for what ShellStation does about it.
+Every user of the database can hold a lock that other users' changes need, on purpose or not. A user can lock a whole table with the same privileges ShellStation itself needs, so those cannot be taken away. Single items a user can lock only where they are the user's own, with one exception: a row of a user's own that refers to another user's session keeps that session from being deleted, though not from being changed, while the transaction that wrote it is open. Such a row is a mapping for it, or a row in the central `credentials` table, which the app does not use and which has no row-level security. Naming it as a jump host does this only for a session that named it before the database refused that (section 5), and where the trigger that refuses it is not installed yet or does not hold the user (one with the grants of Option B, section 2.3). A transaction left open in `psql` or another tool does the same without meaning to, and so does a client that has stopped responding in the middle of a change. See [DESIGN.md §4.5.3](DESIGN.md#453-locks) for what ShellStation does about it.
 
 **What users see.** A change that needs a lock someone else holds fails after 5 seconds with `canceling statement due to lock timeout`, and can be tried again. If a whole table is locked, the session tree does not load, for anyone and whoever owns the items, and ShellStation shows an error instead of waiting. Before this release it waited without end in both cases.
 
