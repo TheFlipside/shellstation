@@ -25,6 +25,29 @@ pub struct DbStatus {
     pub error: Option<String>,
     /// `PostgreSQL` `current_user` — populated only in `PostgreSQL` mode.
     pub pg_user: Option<String>,
+    /// Whether the row-level security setup is in the database, as this
+    /// start found it. `None` in `SQLite` mode, and where `PostgreSQL` was not
+    /// connected to.
+    pub rls_setup: Option<RlsSetupStatus>,
+}
+
+/// What the check at startup found of the row-level security setup in the
+/// `PostgreSQL` database (`check_postgres_rls` in `lib.rs`). The window
+/// shows a notice for anything but `InPlace`.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(tag = "state", rename_all = "camelCase")]
+pub enum RlsSetupStatus {
+    /// Everything this version's setup applies is there.
+    InPlace,
+    /// Something is missing, or is not this version's: on these tables, and
+    /// with `functions`, among the trigger functions and their schema. The
+    /// table names are the app's own.
+    Incomplete {
+        tables: Vec<String>,
+        functions: bool,
+    },
+    /// The check itself failed, so the setup may or may not be there.
+    Unchecked,
 }
 
 /// Tauri managed state for DB health status.
@@ -1056,6 +1079,39 @@ mod tests {
     // distinct DoS vector (count caps) or a stored-data integrity rule
     // (field-length caps, port range). Every branch needs an explicit
     // test so silent collapsing into "Ok" cannot regress.
+
+    // The window reads the status by these names (`RlsSetupStatus` in
+    // `src/rlsSetupNotice.ts`); one it does not know shows no notice.
+    #[test]
+    fn rls_setup_status_reaches_the_window_under_its_names() {
+        let status = |rls_setup| {
+            serde_json::to_value(DbStatus {
+                backend: "postgres".to_string(),
+                healthy: true,
+                error: None,
+                pg_user: None,
+                rls_setup,
+            })
+            .unwrap()["rlsSetup"]
+                .clone()
+        };
+        assert_eq!(status(None), serde_json::Value::Null);
+        assert_eq!(
+            status(Some(RlsSetupStatus::InPlace)),
+            serde_json::json!({ "state": "inPlace" })
+        );
+        assert_eq!(
+            status(Some(RlsSetupStatus::Unchecked)),
+            serde_json::json!({ "state": "unchecked" })
+        );
+        assert_eq!(
+            status(Some(RlsSetupStatus::Incomplete {
+                tables: vec!["folders".to_string()],
+                functions: true,
+            })),
+            serde_json::json!({ "state": "incomplete", "tables": ["folders"], "functions": true })
+        );
+    }
 
     fn folder(name: &str) -> Folder {
         Folder {

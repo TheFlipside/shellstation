@@ -14,6 +14,7 @@ import { UserIdentDialog } from "./components/UserIdentDialog";
 import { useAppQuit } from "./hooks/useAppQuit";
 import { useTheme } from "./hooks/useTheme";
 import { showPrivateIpCheckOffNotice } from "./privateIpCheckNotice";
+import { showRlsSetupNotice, type RlsSetupStatus } from "./rlsSetupNotice";
 import { useAppStore } from "./stores/appStore";
 import { startUpConnectionSettings, useSettingsStore } from "./stores/settingsStore";
 import { useTerminalStore } from "./stores/terminalStore";
@@ -24,6 +25,7 @@ interface DbStatus {
   healthy: boolean;
   error: string | null;
   pgUser: string | null;
+  rlsSetup: RlsSetupStatus | null;
 }
 
 function App(): React.JSX.Element {
@@ -73,6 +75,9 @@ function App(): React.JSX.Element {
         if (backend === "postgres" && status.healthy) {
           void loadUserIdent();
         }
+        // In PostgreSQL mode, whether the row-level security setup is in
+        // the database. A remount shows the same notice, not a second one.
+        showRlsSetupNotice(status.rlsSetup);
       })
       .catch(() => {
         // Status check failed — ignore

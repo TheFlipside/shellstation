@@ -390,6 +390,11 @@ const OBSOLETE_POLICIES: [(&str, &str); 2] = [
 /// calls one of these was made by a role with the owning role's privileges.
 const RLS_SCHEMA: &str = "shellstation_rls";
 
+/// The search path the trigger functions are pinned to, with the temporary
+/// schema last: they run as the updating user, and a temporary table is
+/// found before `pg_catalog` unless the path says otherwise.
+const RLS_FUNCTION_PATH: &str = "pg_catalog, pg_temp";
+
 /// When the triggers of [`setup_postgres_rls`] fire, as `pg_trigger.tgtype`
 /// has it: a row trigger (1) that fires before (2) an update (16), and for
 /// the ones that look at what a row is put into or names as its jump host,
@@ -400,98 +405,9 @@ const ON_PLACING: i16 = ON_CHANGE | 4;
 /// The tables under row-level security; see [`setup_postgres_rls`].
 const RLS_TABLES: [&str; 4] = ["folders", "sessions", MAPPING_TABLES[0], MAPPING_TABLES[1]];
 
-/// Idempotent `RLS` setup for `PostgreSQL` multi-user isolation.
-///
-/// Its statements run with the session's `search_path`, which has `public`
-/// in it, where other roles may be able to create things (every role before
-/// `PostgreSQL` 15, and the users of Option B). `pg_catalog` is searched
-/// first, but an operator or function elsewhere on the path whose argument
-/// types match exactly is preferred to one in `pg_catalog` that needs a
-/// cast. An `=` for `oid` and `regclass` in `public` would thus be what
-/// `tgrelid = 'folders'::regclass` runs, as the owning role, and it could
-/// answer as it liked. So wherever the statements here compare, both sides
-/// have the same type, for which `pg_catalog` has the operator: the name of
-/// a table, function or schema is cast on to `oid`, and a number that is
-/// compared with an `oid` is written as one. Functions are named with
-/// `pg_catalog`.
-///
-/// Called after `sqlx::migrate!()` succeeds, at every start. Only the role
-/// that owns the tables can apply it, and for any other role it ends at the
-/// check for that.
-///
-/// A start that finds everything in place takes no lock on a table beyond
-/// what the two fix-up updates at the top need, which conflict with nothing
-/// a reader or writer holds. Each step looks in the catalog first and
-/// changes only what is missing. `ALTER TABLE`, `CREATE POLICY` and
-/// `CREATE TRIGGER` lock the whole table before they find that there is
-/// nothing to do: the first two against every other use of it, the third
-/// against writers. A lock against every other use waits for every open
-/// transaction that has touched the table, and while it waits, everything
-/// else that wants the table waits behind it, plain reads included. One
-/// transaction left open somewhere would then hold up every user for as
-/// long as the owning role's start waits, at each of its starts. A step
-/// that does have something to change still takes its lock, and waits no
-/// longer than the session's `lock_timeout` (`db::postgres::pool_options`).
-/// If it gives up there, the setup leaves the rest of that table's steps
-/// and goes on with the next table, and the next start of the owning role
-/// goes on from there. Whatever failed is reported together at the end.
-async fn setup_postgres_rls(pool: &sqlx::PgPool) -> Result<(), String> {
-    // Fix the placeholder owner from the migration DEFAULT.
-    sqlx::query("UPDATE folders SET owner = current_user WHERE owner = 'local'")
-        .execute(pool)
-        .await
-        .map_err(|e| format!("RLS setup (fix folder owners): {e}"))?;
-    sqlx::query("UPDATE sessions SET owner = current_user WHERE owner = 'local'")
-        .execute(pool)
-        .await
-        .map_err(|e| format!("RLS setup (fix session owners): {e}"))?;
-
-    // The rest is the table owner's to apply, and no one else gets past
-    // here. An `ALTER TABLE` used to be what stopped everyone else, at every
-    // start; the steps below no longer run one when nothing is missing, so
-    // the question is asked outright. It is the one `ALTER TABLE` asks: a
-    // superuser, or a role with the privileges of the role that owns the
-    // table. Without it, a role that may create functions in the schema
-    // (every role before PostgreSQL 15, and the users of Option B) could get
-    // as far as the trigger functions below on a database that does not have
-    // them yet, and the triggers would then call functions of that role's.
-    let tables = RLS_TABLES
-        .map(|table| format!("'{table}'::pg_catalog.regclass::pg_catalog.oid"))
-        .join(", ");
-    let owns_tables: bool = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
-        "SELECT count(*) = {} AND bool_and(pg_catalog.pg_has_role(c.relowner, 'USAGE')) \
-         FROM pg_catalog.pg_class c WHERE c.oid IN ({tables})",
-        RLS_TABLES.len()
-    )))
-    .fetch_one(pool)
-    .await
-    .map_err(|e| format!("RLS setup (table ownership): {e}"))?;
-    if !owns_tables {
-        return Err(RLS_SETUP_NOT_OWNER.to_string());
-    }
-
-    // From here on, a step that fails does not stop the ones after it, with
-    // the two exceptions below. The steps do not depend on each other (but
-    // for the functions, which need their schema, and the triggers, which
-    // need their functions), so one that cannot be
-    // applied to this database, such as a constraint that existing rows
-    // break, must not keep the others from it at every start. Whatever
-    // failed is reported together at the end.
-    //
-    // The steps go a table at a time, and row-level security is each
-    // table's last, in one statement with its policies. Until that step, a
-    // table is as it was before the setup; after it, everything the setup
-    // has for it is in place. A step that gives up on a lock ends its
-    // table's steps, which would wait for the same lock and each spend
-    // `lock_timeout` on it before the app has a window, and the setup goes
-    // on with the next table. Whoever makes a step give up, by holding a
-    // lock when the owning role starts, thus has no say in which part of a
-    // table's protection is applied, and none over the other tables. The
-    // next start goes on from there. The other exception is a step that
-    // fails at the connection and not at the database: every further step
-    // would meet the same, so the setup ends there (`RlsStepEnds`).
-    let mut failed: Vec<String> = Vec::new();
-
+/// The trigger functions of [`setup_postgres_rls`], each with its name and
+/// its body, in the order the setup creates them.
+fn rls_functions() -> [(&'static str, String); 4] {
     // Triggers keep a row with its owner, in a folder of its owner's, and
     // behind a jump host of its owner's.
     //
@@ -503,7 +419,7 @@ async fn setup_postgres_rls(pool: &sqlx::PgPool) -> Result<(), String> {
     //   role. Owner changes are left to superusers (who reassign a removed
     //   user's rows, ADMIN_GUIDE.md §4) and the table owner, plus claiming a
     //   placeholder `'local'` row for oneself, as the fix-up at the top of
-    //   this function does. That fix-up finds such rows at the first setup
+    //   the setup does. That fix-up finds such rows at the first setup
     //   only, while row-level security is not yet on; once it is, the
     //   policies let no role update a row that is not its own.
     // - `shellstation_keep_place`: a row is moved (`folder_id`, `parent_id`)
@@ -553,11 +469,12 @@ async fn setup_postgres_rls(pool: &sqlx::PgPool) -> Result<(), String> {
     // any user claim to own the table. `folders` is named with the schema of
     // the table the trigger is on, for the same reason. The functions
     // themselves are in a schema of the owning role's (`RLS_SCHEMA`), where
-    // no one else can have put one. They are replaced on every run so that
-    // a fix to them reaches existing databases, which locks no table; only
-    // the table owner gets this far, the ownership check above stops
-    // everyone else. A failure to replace one does not stop the steps after
-    // it, but its triggers are then left alone.
+    // no one else can have put one. The setup replaces them on every run so
+    // that a fix to them reaches existing databases, which locks no table;
+    // only the table owner gets that far, its ownership check stops everyone
+    // else. A failure to replace one does not stop the steps after it, but
+    // its triggers are then left alone. `check_postgres_rls` compares the
+    // bodies here with the ones in the database.
     let table_owner = "pg_catalog.pg_has_role(current_user, \
          (SELECT relowner FROM pg_catalog.pg_class WHERE oid = TG_RELID), 'MEMBER')";
     let refuse = |when: &str, message: &str| {
@@ -571,7 +488,7 @@ async fn setup_postgres_rls(pool: &sqlx::PgPool) -> Result<(), String> {
              END"
         )
     };
-    let functions = [
+    [
         (
             "shellstation_keep_owner",
             refuse(
@@ -667,100 +584,22 @@ async fn setup_postgres_rls(pool: &sqlx::PgPool) -> Result<(), String> {
                  END"
             ),
         ),
-    ];
-    // The schema for them (`RLS_SCHEMA`) is made for the role that owns the
-    // tables, also when a member of that role or a superuser runs this. One
-    // that is there and is another role's is given to it, which only a
-    // superuser can do, or the role it belongs to if it is a member of the
-    // owning role. Where that fails, the schema is not to be trusted with
-    // the functions: none is created, and the triggers are left alone.
-    let owning_role = "(SELECT c.relowner FROM pg_catalog.pg_class c \
-         WHERE c.oid = 'folders'::pg_catalog.regclass::pg_catalog.oid)";
-    let owning_role_name =
-        format!("(SELECT r.rolname FROM pg_catalog.pg_roles r WHERE r.oid = {owning_role})");
-    //
-    // A schema that changes hands keeps what its earlier owner granted on
-    // it, and one of the owning role's may have been granted on since.
-    // `USAGE` would let a role name the functions in a trigger of its own,
-    // and `CREATE` put things beside them, so whatever anyone but the owning
-    // role holds on the schema is revoked, at every start, together with
-    // what a role that could pass its grant on has passed on.
-    let schema = format!(
-        "DO $$ DECLARE schema_owner oid; grantee oid; BEGIN \
-             SELECT n.nspowner INTO schema_owner FROM pg_catalog.pg_namespace n \
-                 WHERE n.nspname = '{RLS_SCHEMA}'; \
-             IF schema_owner IS NULL THEN \
-                 BEGIN \
-                     EXECUTE pg_catalog.format( \
-                         'CREATE SCHEMA {RLS_SCHEMA} AUTHORIZATION %I', {owning_role_name}); \
-                 EXCEPTION WHEN duplicate_schema OR unique_violation THEN NULL; \
-                 END; \
-                 SELECT n.nspowner INTO schema_owner FROM pg_catalog.pg_namespace n \
-                     WHERE n.nspname = '{RLS_SCHEMA}'; \
-             END IF; \
-             IF schema_owner IS DISTINCT FROM {owning_role} THEN \
-                 EXECUTE pg_catalog.format( \
-                     'ALTER SCHEMA {RLS_SCHEMA} OWNER TO %I', {owning_role_name}); \
-             END IF; \
-             FOR grantee IN \
-                 SELECT DISTINCT a.grantee FROM pg_catalog.pg_namespace n, \
-                     pg_catalog.aclexplode(n.nspacl) a \
-                 WHERE n.nspname = '{RLS_SCHEMA}' AND a.grantee <> {owning_role} \
-             LOOP \
-                 IF grantee = 0::pg_catalog.oid THEN \
-                     EXECUTE 'REVOKE ALL ON SCHEMA {RLS_SCHEMA} FROM PUBLIC CASCADE'; \
-                 ELSE \
-                     EXECUTE pg_catalog.format( \
-                         'REVOKE ALL ON SCHEMA {RLS_SCHEMA} FROM %I CASCADE', \
-                         (SELECT r.rolname FROM pg_catalog.pg_roles r WHERE r.oid = grantee)); \
-                 END IF; \
-             END LOOP; \
-         END $$"
-    );
-    let schema_is_owners =
-        match rls_setup_step(pool, &format!("schema {RLS_SCHEMA}"), &schema).await {
-            Ok(()) => true,
-            Err(failure) => {
-                failed.push(failure.message);
-                if failure.ends == RlsStepEnds::Setup {
-                    return Err(failed.join("; "));
-                }
-                false
-            }
-        };
+    ]
+}
 
-    // Each function is replaced and made the owning role's in one statement,
-    // so that one a member of that role creates is not left as the member's.
-    // `CREATE OR REPLACE` fails for a function that is there and is not this
-    // role's to replace, and with it the statement.
-    let mut replaced: Vec<&str> = Vec::new();
-    for (name, body) in &functions {
-        if !schema_is_owners {
-            break;
-        }
-        let sql = format!(
-            "DO $do$ BEGIN \
-                 CREATE OR REPLACE FUNCTION {RLS_SCHEMA}.{name}() RETURNS trigger \
-                 LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp AS $fn$ {body} $fn$; \
-                 IF (SELECT f.proowner FROM pg_catalog.pg_proc f \
-                     WHERE f.oid = '{RLS_SCHEMA}.{name}()'::pg_catalog.regprocedure::pg_catalog.oid) \
-                    IS DISTINCT FROM {owning_role} THEN \
-                     EXECUTE pg_catalog.format( \
-                         'ALTER FUNCTION {RLS_SCHEMA}.{name}() OWNER TO %I', \
-                         {owning_role_name}); \
-                 END IF; \
-             END $do$"
-        );
-        match rls_setup_step(pool, &format!("function {name}"), &sql).await {
-            Ok(()) => replaced.push(*name),
-            Err(failure) => {
-                failed.push(failure.message);
-                if failure.ends == RlsStepEnds::Setup {
-                    return Err(failed.join("; "));
-                }
-            }
-        }
-    }
+/// A trigger of [`setup_postgres_rls`]: its name, its table, its function,
+/// what it is created with, when it fires, and its column.
+type RlsTrigger = (
+    &'static str,
+    &'static str,
+    &'static str,
+    String,
+    i16,
+    &'static str,
+);
+
+/// The triggers of [`setup_postgres_rls`].
+fn rls_triggers() -> [RlsTrigger; 7] {
     // Each trigger with its table, its function, when it fires, that last
     // as `pg_trigger.tgtype` has it (`ON_CHANGE`, `ON_PLACING`), and its
     // column. The first two functions are for updates that change their
@@ -782,7 +621,7 @@ async fn setup_postgres_rls(pool: &sqlx::PgPool) -> Result<(), String> {
              EXECUTE FUNCTION {RLS_SCHEMA}.shellstation_own_folder('{column}')"
         )
     };
-    let triggers = [
+    [
         (
             "folders_keep_owner",
             "folders",
@@ -843,26 +682,63 @@ async fn setup_postgres_rls(pool: &sqlx::PgPool) -> Result<(), String> {
             ON_PLACING,
             "jump_host_id",
         ),
-    ];
+    ]
+}
 
-    // Policies and row-level security are each table's in one statement,
-    // which is one transaction: a table gets its policies and has row-level
-    // security switched on, or neither. With it on and no policy, a table
-    // refuses everything to everyone; with it off, its policies do nothing.
-    // FORCE makes the policies apply to the table owner as well.
+/// What a trigger of [`setup_postgres_rls`] has to be apart from the function
+/// it calls, as a condition on a row `t` of `pg_trigger`: enabled, fired on
+/// the events and for the column it should be, and with the argument and a
+/// condition, or none, as it should have. What the condition says is not
+/// compared.
+fn rls_trigger_shape((_, _, _, definition, tgtype, column): &RlsTrigger) -> String {
+    // Whether a trigger has an argument and a condition is read off the
+    // definition it is created with, so the two cannot differ:
+    // `shellstation_own_folder` has its column as its argument and no
+    // condition, the other functions a condition and no argument.
     //
-    // A policy that is there is left as it is, but for the ones in
-    // `OBSOLETE_POLICIES`, which are dropped in the same statement. When
-    // there is something to do, the block takes the table's lock and looks
-    // again, since two starts of the owning role at the same time would
-    // both find it to do, and the second would fail at a policy that is
-    // there, or gone, by then.
-    //
+    // The argument is kept as its bytes with a zero byte after it, which
+    // `encode` writes as a backslash and three zeros. The text to compare it
+    // with is an `E''` string, in which a backslash is written twice
+    // whatever `standard_conforming_strings` says.
+    let argument = if definition.ends_with("()") {
+        "t.tgnargs = 0".to_string()
+    } else {
+        format!(
+            "t.tgnargs = 1 \
+             AND pg_catalog.encode(t.tgargs, 'escape') = E'{column}\\\\000'"
+        )
+    };
+    let condition = if definition.contains(" WHEN (") {
+        "t.tgqual IS NOT NULL"
+    } else {
+        "t.tgqual IS NULL"
+    };
+    format!(
+        "t.tgenabled = 'O' AND t.tgtype = {tgtype} \
+         AND t.tgattr::pg_catalog.text = ( \
+             SELECT a.attnum::pg_catalog.text FROM pg_catalog.pg_attribute a \
+             WHERE a.attrelid = t.tgrelid AND a.attname = '{column}') \
+         AND {argument} AND {condition}"
+    )
+}
+
+/// A policy of [`setup_postgres_rls`]: its name, its table, the command it is
+/// for, and what it is `USING` and, where it has one, `WITH CHECK`.
+type RlsPolicy = (
+    &'static str,
+    &'static str,
+    &'static str,
+    &'static str,
+    Option<&'static str>,
+);
+
+/// The policies of [`setup_postgres_rls`].
+fn rls_policies() -> [RlsPolicy; 8] {
     // A shared row has a policy for reading it and none for changing it:
     // the owner's `*_owner_all` is the only one that lets a row be updated.
     // `*_shared_delete` says nothing that `*_owner_all` does not, and is
     // left as it is.
-    let policies = [
+    [
         // Folders
         (
             "folders_owner_all",
@@ -951,7 +827,211 @@ async fn setup_postgres_rls(pool: &sqlx::PgPool) -> Result<(), String> {
                  (SELECT 1 FROM sessions s WHERE s.id = session_login_sequences.session_id)",
             ),
         ),
-    ];
+    ]
+}
+
+/// Idempotent `RLS` setup for `PostgreSQL` multi-user isolation.
+///
+/// Its statements run with the session's `search_path`, which has `public`
+/// in it, where other roles may be able to create things (every role before
+/// `PostgreSQL` 15, and the users of Option B). `pg_catalog` is searched
+/// first, but an operator or function elsewhere on the path whose argument
+/// types match exactly is preferred to one in `pg_catalog` that needs a
+/// cast. An `=` for `oid` and `regclass` in `public` would thus be what
+/// `tgrelid = 'folders'::regclass` runs, as the owning role, and it could
+/// answer as it liked. So wherever the statements here compare, both sides
+/// have the same type, for which `pg_catalog` has the operator: the name of
+/// a table, function or schema is cast on to `oid`, and a number that is
+/// compared with an `oid` is written as one. Functions are named with
+/// `pg_catalog`.
+///
+/// Called after `sqlx::migrate!()` succeeds, at every start. Only the role
+/// that owns the tables can apply it, and for any other role it ends at the
+/// check for that.
+///
+/// A start that finds everything in place takes no lock on a table beyond
+/// what the two fix-up updates at the top need, which conflict with nothing
+/// a reader or writer holds. Each step looks in the catalog first and
+/// changes only what is missing. `ALTER TABLE`, `CREATE POLICY` and
+/// `CREATE TRIGGER` lock the whole table before they find that there is
+/// nothing to do: the first two against every other use of it, the third
+/// against writers. A lock against every other use waits for every open
+/// transaction that has touched the table, and while it waits, everything
+/// else that wants the table waits behind it, plain reads included. One
+/// transaction left open somewhere would then hold up every user for as
+/// long as the owning role's start waits, at each of its starts. A step
+/// that does have something to change still takes its lock, and waits no
+/// longer than the session's `lock_timeout` (`db::postgres::pool_options`).
+/// If it gives up there, the setup leaves the rest of that table's steps
+/// and goes on with the next table, and the next start of the owning role
+/// goes on from there. Whatever failed is reported together at the end.
+async fn setup_postgres_rls(pool: &sqlx::PgPool) -> Result<(), String> {
+    // Fix the placeholder owner from the migration DEFAULT.
+    sqlx::query("UPDATE folders SET owner = current_user WHERE owner = 'local'")
+        .execute(pool)
+        .await
+        .map_err(|e| format!("RLS setup (fix folder owners): {e}"))?;
+    sqlx::query("UPDATE sessions SET owner = current_user WHERE owner = 'local'")
+        .execute(pool)
+        .await
+        .map_err(|e| format!("RLS setup (fix session owners): {e}"))?;
+
+    // The rest is the table owner's to apply, and no one else gets past
+    // here. An `ALTER TABLE` used to be what stopped everyone else, at every
+    // start; the steps below no longer run one when nothing is missing, so
+    // the question is asked outright. It is the one `ALTER TABLE` asks: a
+    // superuser, or a role with the privileges of the role that owns the
+    // table. Without it, a role that may create functions in the schema
+    // (every role before PostgreSQL 15, and the users of Option B) could get
+    // as far as the trigger functions below on a database that does not have
+    // them yet, and the triggers would then call functions of that role's.
+    let tables = RLS_TABLES
+        .map(|table| format!("'{table}'::pg_catalog.regclass::pg_catalog.oid"))
+        .join(", ");
+    let owns_tables: bool = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+        "SELECT count(*) = {} AND bool_and(pg_catalog.pg_has_role(c.relowner, 'USAGE')) \
+         FROM pg_catalog.pg_class c WHERE c.oid IN ({tables})",
+        RLS_TABLES.len()
+    )))
+    .fetch_one(pool)
+    .await
+    .map_err(|e| format!("RLS setup (table ownership): {e}"))?;
+    if !owns_tables {
+        return Err(RLS_SETUP_NOT_OWNER.to_string());
+    }
+
+    // From here on, a step that fails does not stop the ones after it, with
+    // the two exceptions below. The steps do not depend on each other (but
+    // for the functions, which need their schema, and the triggers, which
+    // need their functions), so one that cannot be
+    // applied to this database, such as a constraint that existing rows
+    // break, must not keep the others from it at every start. Whatever
+    // failed is reported together at the end.
+    //
+    // The steps go a table at a time, and row-level security is each
+    // table's last, in one statement with its policies. Until that step, a
+    // table is as it was before the setup; after it, everything the setup
+    // has for it is in place. A step that gives up on a lock ends its
+    // table's steps, which would wait for the same lock and each spend
+    // `lock_timeout` on it before the app has a window, and the setup goes
+    // on with the next table. Whoever makes a step give up, by holding a
+    // lock when the owning role starts, thus has no say in which part of a
+    // table's protection is applied, and none over the other tables. The
+    // next start goes on from there. The other exception is a step that
+    // fails at the connection and not at the database: every further step
+    // would meet the same, so the setup ends there (`RlsStepEnds`).
+    let mut failed: Vec<String> = Vec::new();
+
+    // The schema for the trigger functions (`RLS_SCHEMA`) is made for the
+    // role that owns the tables, also when a member of that role or a
+    // superuser runs this. One that is there and is another role's is given
+    // to it, which only a superuser can do, or the role it belongs to if it
+    // is a member of the owning role. Where that fails, the schema is not to
+    // be trusted with the functions: none is created, and the triggers are
+    // left alone.
+    let owning_role = "(SELECT c.relowner FROM pg_catalog.pg_class c \
+         WHERE c.oid = 'folders'::pg_catalog.regclass::pg_catalog.oid)";
+    let owning_role_name =
+        format!("(SELECT r.rolname FROM pg_catalog.pg_roles r WHERE r.oid = {owning_role})");
+    //
+    // A schema that changes hands keeps what its earlier owner granted on
+    // it, and one of the owning role's may have been granted on since.
+    // `USAGE` would let a role name the functions in a trigger of its own,
+    // and `CREATE` put things beside them, so whatever anyone but the owning
+    // role holds on the schema is revoked, at every start, together with
+    // what a role that could pass its grant on has passed on.
+    let schema = format!(
+        "DO $$ DECLARE schema_owner oid; grantee oid; BEGIN \
+             SELECT n.nspowner INTO schema_owner FROM pg_catalog.pg_namespace n \
+                 WHERE n.nspname = '{RLS_SCHEMA}'; \
+             IF schema_owner IS NULL THEN \
+                 BEGIN \
+                     EXECUTE pg_catalog.format( \
+                         'CREATE SCHEMA {RLS_SCHEMA} AUTHORIZATION %I', {owning_role_name}); \
+                 EXCEPTION WHEN duplicate_schema OR unique_violation THEN NULL; \
+                 END; \
+                 SELECT n.nspowner INTO schema_owner FROM pg_catalog.pg_namespace n \
+                     WHERE n.nspname = '{RLS_SCHEMA}'; \
+             END IF; \
+             IF schema_owner IS DISTINCT FROM {owning_role} THEN \
+                 EXECUTE pg_catalog.format( \
+                     'ALTER SCHEMA {RLS_SCHEMA} OWNER TO %I', {owning_role_name}); \
+             END IF; \
+             FOR grantee IN \
+                 SELECT DISTINCT a.grantee FROM pg_catalog.pg_namespace n, \
+                     pg_catalog.aclexplode(n.nspacl) a \
+                 WHERE n.nspname = '{RLS_SCHEMA}' AND a.grantee <> {owning_role} \
+             LOOP \
+                 IF grantee = 0::pg_catalog.oid THEN \
+                     EXECUTE 'REVOKE ALL ON SCHEMA {RLS_SCHEMA} FROM PUBLIC CASCADE'; \
+                 ELSE \
+                     EXECUTE pg_catalog.format( \
+                         'REVOKE ALL ON SCHEMA {RLS_SCHEMA} FROM %I CASCADE', \
+                         (SELECT r.rolname FROM pg_catalog.pg_roles r WHERE r.oid = grantee)); \
+                 END IF; \
+             END LOOP; \
+         END $$"
+    );
+    let functions = rls_functions();
+    let schema_is_owners =
+        match rls_setup_step(pool, &format!("schema {RLS_SCHEMA}"), &schema).await {
+            Ok(()) => true,
+            Err(failure) => {
+                failed.push(failure.message);
+                if failure.ends == RlsStepEnds::Setup {
+                    return Err(failed.join("; "));
+                }
+                false
+            }
+        };
+
+    // Each function is replaced and made the owning role's in one statement,
+    // so that one a member of that role creates is not left as the member's.
+    // `CREATE OR REPLACE` fails for a function that is there and is not this
+    // role's to replace, and with it the statement.
+    let mut replaced: Vec<&str> = Vec::new();
+    for (name, body) in &functions {
+        if !schema_is_owners {
+            break;
+        }
+        let sql = format!(
+            "DO $do$ BEGIN \
+                 CREATE OR REPLACE FUNCTION {RLS_SCHEMA}.{name}() RETURNS trigger \
+                 LANGUAGE plpgsql SET search_path = {RLS_FUNCTION_PATH} AS $fn$ {body} $fn$; \
+                 IF (SELECT f.proowner FROM pg_catalog.pg_proc f \
+                     WHERE f.oid = '{RLS_SCHEMA}.{name}()'::pg_catalog.regprocedure::pg_catalog.oid) \
+                    IS DISTINCT FROM {owning_role} THEN \
+                     EXECUTE pg_catalog.format( \
+                         'ALTER FUNCTION {RLS_SCHEMA}.{name}() OWNER TO %I', \
+                         {owning_role_name}); \
+                 END IF; \
+             END $do$"
+        );
+        match rls_setup_step(pool, &format!("function {name}"), &sql).await {
+            Ok(()) => replaced.push(*name),
+            Err(failure) => {
+                failed.push(failure.message);
+                if failure.ends == RlsStepEnds::Setup {
+                    return Err(failed.join("; "));
+                }
+            }
+        }
+    }
+    let triggers = rls_triggers();
+
+    // Policies and row-level security are each table's in one statement,
+    // which is one transaction: a table gets its policies and has row-level
+    // security switched on, or neither. With it on and no policy, a table
+    // refuses everything to everyone; with it off, its policies do nothing.
+    // FORCE makes the policies apply to the table owner as well.
+    //
+    // A policy that is there is left as it is, but for the ones in
+    // `OBSOLETE_POLICIES`, which are dropped in the same statement. When
+    // there is something to do, the block takes the table's lock and looks
+    // again, since two starts of the owning role at the same time would
+    // both find it to do, and the second would fail at a policy that is
+    // there, or gone, by then.
+    let policies = rls_policies();
 
     // A mapping's key includes its owner. The tables came with a primary key
     // of (session_id, user_ident): with it, a role that wrote a row under
@@ -1033,41 +1113,16 @@ async fn setup_postgres_rls(pool: &sqlx::PgPool) -> Result<(), String> {
         // drop. While another trigger still calls it, it stays for that
         // trigger's turn. A function under the name that is someone else's
         // stays where it is, with nothing calling it.
-        for (name, _, function, definition, tgtype, column) in triggers
+        for trigger in triggers
             .iter()
             .filter(|trigger| trigger.1 == table && replaced.contains(&trigger.2))
         {
-            // Whether a trigger has an argument and a condition is read off
-            // the definition it is created with, so the two cannot differ:
-            // `shellstation_own_folder` has its column as its argument and
-            // no condition, the other functions a condition and no argument.
-            //
-            // The argument is kept as its bytes with a zero byte after it,
-            // which `encode` writes as a backslash and three zeros. The text
-            // to compare it with is an `E''` string, in which a backslash is
-            // written twice whatever `standard_conforming_strings` says.
-            let argument = if definition.ends_with("()") {
-                "t.tgnargs = 0".to_string()
-            } else {
-                format!(
-                    "t.tgnargs = 1 \
-                     AND pg_catalog.encode(t.tgargs, 'escape') = E'{column}\\\\000'"
-                )
-            };
-            let condition = if definition.contains(" WHEN (") {
-                "t.tgqual IS NOT NULL"
-            } else {
-                "t.tgqual IS NULL"
-            };
-            let argument_and_condition = format!("{argument} AND {condition}");
+            let (name, _, function, definition, _, _) = trigger;
+            let shape = rls_trigger_shape(trigger);
             let look = format!(
                 "SELECT t.oid, t.tgfoid, \
                         t.tgfoid = '{RLS_SCHEMA}.{function}()'::pg_catalog.regprocedure::pg_catalog.oid \
-                            AND t.tgenabled = 'O' AND t.tgtype = {tgtype} \
-                            AND t.tgattr::pg_catalog.text = ( \
-                                SELECT a.attnum::pg_catalog.text FROM pg_catalog.pg_attribute a \
-                                WHERE a.attrelid = t.tgrelid AND a.attname = '{column}') \
-                            AND {argument_and_condition} \
+                            AND {shape} \
                  INTO have, calls, fits \
                  FROM pg_catalog.pg_trigger t \
                  WHERE t.tgrelid = '{table}'::pg_catalog.regclass::pg_catalog.oid \
@@ -1224,6 +1279,256 @@ async fn rls_setup_step(pool: &sqlx::PgPool, what: &str, sql: &str) -> Result<()
         message: format!("RLS setup ({what}): {e}"),
         ends,
     })
+}
+
+/// Something [`check_postgres_rls`] did not find the way
+/// [`setup_postgres_rls`] leaves it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RlsGap {
+    /// The table it belongs to; `None` for a trigger function and for the
+    /// schema they are in.
+    table: Option<&'static str>,
+    /// What it is, in the words the setup reports a failed step with.
+    what: String,
+}
+
+/// Whether what [`setup_postgres_rls`] applies is in the database, and what
+/// of it is not.
+///
+/// Only the role that owns the tables can apply the setup, and only a start
+/// of it that gets through does. Every other role works against the database
+/// as it is: before the owning role has started a release that changes the
+/// setup, and after a start of it that gave up on a lock someone held. So
+/// every start asks, as whatever role it is, since the catalog is everyone's
+/// to read.
+///
+/// It asks what the setup's own steps ask before they change anything, and
+/// so goes by what they go by: a policy, a constraint and a primary key by
+/// their names, a trigger by the function it calls and by its shape
+/// ([`rls_trigger_shape`]). Beyond that it asks about the two things the
+/// setup does at every start without looking. It replaces each trigger
+/// function, so the check compares what a `CREATE OR REPLACE` sets with what
+/// this version creates: the body, the search path the function is pinned
+/// to, and that it runs as its caller. A function that
+/// differs is one a start of the owning role has still to replace, or one of
+/// another version than this, a later one included. And it revokes whatever
+/// anyone but the owning role holds on the functions' schema, so the check
+/// asks whether anyone does.
+///
+/// An empty answer says that the setup's parts are there, not that nothing
+/// else is. What a policy of the setup's name says is not read, and neither
+/// a trigger nor a policy of someone's own is looked for; the users of Option
+/// B can make the first.
+///
+/// It is one statement, which reads the catalog and nothing else, and so
+/// waits for no lock anyone holds on a table. As in the setup, the two sides
+/// of each comparison have the same type (see there). A function is found by
+/// its name and its schema's: a cast to `regprocedure`, as the setup uses,
+/// takes `USAGE` on the schema, which only the owning role has.
+async fn check_postgres_rls(pool: &sqlx::PgPool) -> Result<Vec<RlsGap>, String> {
+    let oid = |table: &str| format!("'{table}'::pg_catalog.regclass::pg_catalog.oid");
+    let owning_role = format!(
+        "(SELECT c.relowner FROM pg_catalog.pg_class c WHERE c.oid = {})",
+        oid("folders")
+    );
+    let function_named = |name: &str| {
+        format!(
+            "FROM pg_catalog.pg_proc p \
+             JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace \
+             WHERE n.nspname = '{RLS_SCHEMA}' AND p.proname = '{name}' AND p.pronargs = 0"
+        )
+    };
+
+    // Each part of the setup with the table it belongs to, what it is, and
+    // a question that is true where it is in place.
+    //
+    // The schema is there and the owning role's, and no one else holds a
+    // privilege on it. A schema nobody has been granted anything on has no
+    // list of privileges to go through.
+    let mut asked: Vec<(Option<&'static str>, String, String)> = vec![
+        (
+            None,
+            format!("schema {RLS_SCHEMA}"),
+            format!(
+                "EXISTS (SELECT 1 FROM pg_catalog.pg_namespace n \
+                         WHERE n.nspname = '{RLS_SCHEMA}' AND n.nspowner = {owning_role})"
+            ),
+        ),
+        (
+            None,
+            format!("schema {RLS_SCHEMA}, on which others hold privileges"),
+            format!(
+                "NOT EXISTS (SELECT 1 FROM pg_catalog.pg_namespace n, \
+                                 pg_catalog.aclexplode(n.nspacl) a \
+                             WHERE n.nspname = '{RLS_SCHEMA}' AND a.grantee <> {owning_role})"
+            ),
+        ),
+    ];
+    // A function is there, and the owning role's; and it is this version's,
+    // which one that is not there is not asked. The body is the statement's
+    // parameter of the function's number. The search path is kept as the
+    // one setting of the function, written `name=value`; the white space in
+    // it is left out of the comparison. A function without a setting has
+    // none to compare, which is not this version's either.
+    let functions = rls_functions();
+    let pinned_path = format!("search_path={RLS_FUNCTION_PATH}").replace(' ', "");
+    for (number, (name, _)) in (1..).zip(&functions) {
+        let named = function_named(name);
+        asked.push((
+            None,
+            format!("function {name}"),
+            format!("EXISTS (SELECT 1 {named} AND p.proowner = {owning_role})"),
+        ));
+        asked.push((
+            None,
+            format!("function {name}, which is not this version's"),
+            format!(
+                "NOT EXISTS (SELECT 1 {named} AND NOT COALESCE( \
+                     p.prosrc = ${number} AND NOT p.prosecdef \
+                     AND pg_catalog.replace( \
+                             pg_catalog.array_to_string(p.proconfig, ','), ' ', '') \
+                         = '{pinned_path}', false))"
+            ),
+        ));
+    }
+    let triggers = rls_triggers();
+    let policies = rls_policies();
+    for table in RLS_TABLES {
+        let on_table = oid(table);
+        let constraint = |name: &str, kind: &str| {
+            format!(
+                "EXISTS (SELECT 1 FROM pg_catalog.pg_constraint \
+                         WHERE conrelid = {on_table} AND conname = '{name}'{kind})"
+            )
+        };
+        if ["folders", "sessions"].contains(&table) {
+            asked.push((
+                Some(table),
+                format!("constraint {table}_vis_ck"),
+                constraint(&format!("{table}_vis_ck"), ""),
+            ));
+        }
+        if MAPPING_TABLES.contains(&table) {
+            asked.push((
+                Some(table),
+                format!("primary key of {table}"),
+                constraint(&format!("{table}_owner_key"), " AND contype = 'p'"),
+            ));
+        }
+        for trigger in triggers.iter().filter(|trigger| trigger.1 == table) {
+            let (name, _, function, ..) = trigger;
+            let named = function_named(function);
+            let shape = rls_trigger_shape(trigger);
+            asked.push((
+                Some(table),
+                format!("trigger {name}"),
+                format!(
+                    "EXISTS (SELECT 1 FROM pg_catalog.pg_trigger t \
+                             WHERE t.tgrelid = {on_table} AND t.tgname = '{name}' \
+                               AND NOT t.tgisinternal \
+                               AND t.tgfoid = (SELECT p.oid {named}) AND {shape})"
+                ),
+            ));
+        }
+        let policy = |name: &str| {
+            format!(
+                "EXISTS (SELECT 1 FROM pg_catalog.pg_policy \
+                         WHERE polrelid = {on_table} AND polname = '{name}')"
+            )
+        };
+        for (name, _) in OBSOLETE_POLICIES.iter().filter(|policy| policy.1 == table) {
+            asked.push((
+                Some(table),
+                format!("policy {name}, which is to go"),
+                format!("NOT {}", policy(name)),
+            ));
+        }
+        for (name, ..) in policies.iter().filter(|policy| policy.1 == table) {
+            asked.push((Some(table), format!("policy {name}"), policy(name)));
+        }
+        asked.push((
+            Some(table),
+            format!("row level security on {table}"),
+            format!(
+                "(SELECT c.relrowsecurity AND c.relforcerowsecurity \
+                  FROM pg_catalog.pg_class c WHERE c.oid = {on_table})"
+            ),
+        ));
+    }
+
+    // Each question has an answer; one that came back without would be a
+    // part that is not in place. A table that is not there fails the whole
+    // statement, at the cast of its name.
+    let questions = asked
+        .iter()
+        .map(|(_, _, question)| format!("COALESCE(({question}), false)"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let mut query = sqlx::query_scalar::<_, Vec<bool>>(sqlx::AssertSqlSafe(format!(
+        "SELECT ARRAY[{questions}]"
+    )));
+    // As the setup's `CREATE FUNCTION` has the body, between its quotes.
+    for (_, body) in &functions {
+        query = query.bind(format!(" {body} "));
+    }
+    let in_place = query
+        .fetch_one(pool)
+        .await
+        .map_err(|e| format!("RLS check: {e}"))?;
+    if in_place.len() != asked.len() {
+        return Err("RLS check: the answer does not fit the questions".to_string());
+    }
+    Ok(asked
+        .into_iter()
+        .zip(in_place)
+        .filter(|(_, in_place)| !in_place)
+        .map(|((table, what, _), _)| RlsGap { table, what })
+        .collect())
+}
+
+/// What the window is told of `gaps`: the tables they are on, in the order
+/// of [`RLS_TABLES`], and whether the trigger functions are among them.
+fn rls_gaps_status(gaps: &[RlsGap]) -> commands::RlsSetupStatus {
+    commands::RlsSetupStatus::Incomplete {
+        tables: RLS_TABLES
+            .into_iter()
+            .filter(|table| gaps.iter().any(|gap| gap.table == Some(*table)))
+            .map(str::to_string)
+            .collect(),
+        functions: gaps.iter().any(|gap| gap.table.is_none()),
+    }
+}
+
+/// Runs [`check_postgres_rls`] and says what it found: in the application
+/// log with every part, and as its return value for the window, which shows
+/// it ([`commands::DbStatus`]). A check that failed is reported as that, and
+/// not as a setup in place.
+async fn rls_setup_status(pool: &sqlx::PgPool) -> commands::RlsSetupStatus {
+    match check_postgres_rls(pool).await {
+        Ok(gaps) if gaps.is_empty() => {
+            tracing::info!("PostgreSQL RLS setup: every part this version applies was found");
+            commands::RlsSetupStatus::InPlace
+        }
+        // The parts are named by this app, with nothing of the database's
+        // in them.
+        Ok(gaps) => {
+            let parts = gaps
+                .iter()
+                .map(|gap| gap.what.as_str())
+                .collect::<Vec<_>>()
+                .join("; ");
+            tracing::error!(
+                "PostgreSQL RLS setup is not in the database as this version applies it. What is missing is not in effect until a start of the role that owns the tables gets through with this version; a function that is not this version's can also be a later version's (ADMIN_GUIDE.md §5). Missing or different: {parts}"
+            );
+            rls_gaps_status(&gaps)
+        }
+        // The error can quote what the database says, so it is logged
+        // escaped.
+        Err(e) => {
+            tracing::error!("Could not check whether the PostgreSQL RLS setup is in place: {e:?}");
+            commands::RlsSetupStatus::Unchecked
+        }
+    }
 }
 
 /// Claim the per-user mappings written under `user_ident` before a mapping
@@ -1887,6 +2192,7 @@ pub fn run() {
                         healthy: db_error.is_none(),
                         error: db_error,
                         pg_user: None,
+                        rls_setup: None,
                     }));
                 }
                 DbBackend::Postgres => {
@@ -1954,6 +2260,13 @@ pub fn run() {
                                     "PostgreSQL RLS setup did not finish. If this role owns the tables, what the setup had still to apply is not in effect until a start with it gets through; see ADMIN_GUIDE.md §5, and §7 if it keeps failing: {e:?}"
                                 ),
                             }
+                            // Whether the setup is in the database, for
+                            // the window to say where it is not: after a
+                            // setup that did not finish, and for every role
+                            // that the setup is not for, which works against
+                            // whatever the owning role's last start left.
+                            let rls_setup =
+                                tauri::async_runtime::block_on(rls_setup_status(&pool));
                             // Mappings from before a mapping had an owner
                             // (see `claim_legacy_mappings`). After the setup
                             // above, since the table owner's first start
@@ -2008,6 +2321,7 @@ pub fn run() {
                                 healthy: true,
                                 error: None,
                                 pg_user,
+                                rls_setup: Some(rls_setup),
                             }));
                         }
                         Err(e) => {
@@ -2053,6 +2367,7 @@ pub fn run() {
                                 healthy: false,
                                 error: Some(safe_msg),
                                 pg_user: None,
+                                rls_setup: None,
                             }));
                         }
                     }
@@ -2620,6 +2935,16 @@ mod tests {
     #[ignore = "needs a throwaway PostgreSQL server in SHELLSTATION_TEST_PG_URL"]
     async fn folder_walks_end_on_a_loop() {
         with_rls_test_database(check_folder_walks_end_on_a_loop).await;
+    }
+
+    /// `check_postgres_rls` against a real server: it finds nothing missing
+    /// after the setup, as a regular user, and names each part that is taken
+    /// away or is not the setup's. Same server as for
+    /// `shared_rows_keep_their_owner`; run with `--ignored rls_setup_check`.
+    #[tokio::test]
+    #[ignore = "needs a throwaway PostgreSQL server in SHELLSTATION_TEST_PG_URL"]
+    async fn rls_setup_check_finds_what_is_missing() {
+        with_rls_test_database(check_rls_setup_check_finds_what_is_missing).await;
     }
 
     /// Run `checks` with a database of its own on the throwaway server and
@@ -4672,5 +4997,415 @@ mod tests {
         }
 
         pool.close().await;
+    }
+
+    async fn check_rls_setup_check_finds_what_is_missing(
+        opts: sqlx::postgres::PgConnectOptions,
+        admin: String,
+        alice: String,
+        bob: String,
+    ) {
+        use commands::RlsSetupStatus;
+
+        // Three connections: the superuser's, which takes things away and
+        // puts back what the setup cannot; the owning role's, which migrates
+        // and runs the setup; and a regular user's, made as the app makes
+        // its own, which asks.
+        let server = PgPoolOptions::new()
+            .max_connections(1)
+            .connect_with(opts.clone())
+            .await
+            .unwrap();
+        let database: String = sqlx::query_scalar("SELECT current_database()")
+            .fetch_one(&server)
+            .await
+            .unwrap();
+        for sql in [
+            format!("GRANT ALL PRIVILEGES ON DATABASE {database} TO {admin}"),
+            format!("GRANT ALL ON SCHEMA public TO {admin}"),
+            format!("GRANT USAGE ON SCHEMA public TO {alice}, {bob}"),
+        ] {
+            pg_exec(&server, &sql).await.unwrap();
+        }
+        let owner = PgPoolOptions::new()
+            .max_connections(1)
+            .connect_with(opts.clone())
+            .await
+            .unwrap();
+        pg_exec(&owner, &format!("SET ROLE {admin}")).await.unwrap();
+        sqlx::migrate!().run(&owner).await.unwrap();
+        pg_exec(
+            &owner,
+            &format!(
+                "GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public \
+                 TO {alice}, {bob}"
+            ),
+        )
+        .await
+        .unwrap();
+        let (user, _) = app_connection_as(&opts, &alice).await;
+        let missing = |pool: &sqlx::PgPool| {
+            let pool = pool.clone();
+            async move {
+                check_postgres_rls(&pool)
+                    .await
+                    .unwrap()
+                    .into_iter()
+                    .map(|gap| gap.what)
+                    .collect::<Vec<_>>()
+            }
+        };
+
+        // A database the setup has never been applied to, as one is whose
+        // first setup failed: the schema and the four functions, and on the
+        // tables two constraints, two primary keys, seven triggers, eight
+        // policies and row-level security four times. None of it is there
+        // in another version's shape, and nothing is there that is to go.
+        let gaps = check_postgres_rls(&user).await.unwrap();
+        assert_eq!(gaps.len(), 5 + 2 + 2 + 7 + 8 + 4, "{gaps:?}");
+        assert!(gaps.iter().all(|gap| !gap.what.contains(", which is")));
+        assert_eq!(
+            rls_gaps_status(&gaps),
+            RlsSetupStatus::Incomplete {
+                tables: RLS_TABLES.map(str::to_string).to_vec(),
+                functions: true,
+            }
+        );
+
+        // After the setup nothing is missing, whoever asks.
+        setup_postgres_rls(&owner).await.unwrap();
+        for pool in [&user, &owner, &server] {
+            assert_eq!(missing(pool).await, Vec::<String>::new());
+        }
+        assert_eq!(rls_setup_status(&user).await, RlsSetupStatus::InPlace);
+
+        // A regular user cannot name the functions, which is why the check
+        // finds them by their names in the catalog.
+        assert!(refused(
+            pg_exec(
+                &user,
+                &format!("SELECT '{RLS_SCHEMA}.shellstation_keep_owner()'::regprocedure"),
+            )
+            .await,
+            "permission denied for schema",
+        ));
+
+        // Each of these takes a part of the setup away, or leaves one in
+        // its place that is not the setup's, and the check names that part
+        // and no other. The setup then puts it back, after the statements
+        // that put back what it cannot.
+        let does_nothing = "RETURNS trigger LANGUAGE plpgsql AS 'BEGIN RETURN NEW; END'";
+        let cases: Vec<(Vec<String>, Vec<&str>, Vec<String>)> = vec![
+            (
+                vec!["ALTER TABLE folders NO FORCE ROW LEVEL SECURITY".into()],
+                vec!["row level security on folders"],
+                vec![],
+            ),
+            (
+                vec!["ALTER TABLE sessions DISABLE ROW LEVEL SECURITY".into()],
+                vec!["row level security on sessions"],
+                vec![],
+            ),
+            (
+                vec!["DROP POLICY sessions_shared_read ON sessions".into()],
+                vec!["policy sessions_shared_read"],
+                vec![],
+            ),
+            (
+                vec!["DROP POLICY session_credentials_owner_all ON session_credentials".into()],
+                vec!["policy session_credentials_owner_all"],
+                vec![],
+            ),
+            // The policy of an earlier version that let anyone update a
+            // shared row.
+            (
+                vec!["CREATE POLICY folders_shared_update ON folders FOR UPDATE \
+                     USING (visibility = 'shared')"
+                    .into()],
+                vec!["policy folders_shared_update, which is to go"],
+                vec![],
+            ),
+            (
+                vec!["ALTER TABLE folders DROP CONSTRAINT folders_vis_ck".into()],
+                vec!["constraint folders_vis_ck"],
+                vec![],
+            ),
+            (
+                vec!["ALTER TABLE session_login_sequences \
+                     RENAME CONSTRAINT session_login_sequences_owner_key TO another_key"
+                    .into()],
+                vec!["primary key of session_login_sequences"],
+                vec!["ALTER TABLE session_login_sequences \
+                     RENAME CONSTRAINT another_key TO session_login_sequences_owner_key"
+                    .into()],
+            ),
+            // A constraint of the primary key's name that is none. The
+            // setup makes the key from the index of that name, as the
+            // migration leaves it.
+            (
+                vec![
+                    "ALTER TABLE session_credentials \
+                     DROP CONSTRAINT session_credentials_owner_key"
+                        .into(),
+                    "ALTER TABLE session_credentials ADD CONSTRAINT session_credentials_owner_key \
+                     UNIQUE (session_id, owner, user_ident)"
+                        .into(),
+                ],
+                vec!["primary key of session_credentials"],
+                vec![
+                    "ALTER TABLE session_credentials \
+                     DROP CONSTRAINT session_credentials_owner_key"
+                        .into(),
+                    "CREATE UNIQUE INDEX session_credentials_owner_key \
+                     ON session_credentials(session_id, owner, user_ident)"
+                        .into(),
+                ],
+            ),
+            (
+                vec!["DROP TRIGGER sessions_own_jump_host ON sessions".into()],
+                vec!["trigger sessions_own_jump_host"],
+                vec![],
+            ),
+            (
+                vec!["ALTER TABLE folders DISABLE TRIGGER folders_keep_owner".into()],
+                vec!["trigger folders_keep_owner"],
+                vec![],
+            ),
+            // A trigger of the name that calls a function elsewhere.
+            (
+                vec![
+                    format!("CREATE FUNCTION public.shellstation_keep_place() {does_nothing}"),
+                    "DROP TRIGGER folders_keep_place ON folders".into(),
+                    "CREATE TRIGGER folders_keep_place BEFORE UPDATE OF parent_id ON folders \
+                     FOR EACH ROW WHEN (OLD.parent_id IS DISTINCT FROM NEW.parent_id) \
+                     EXECUTE FUNCTION public.shellstation_keep_place()"
+                        .into(),
+                ],
+                vec!["trigger folders_keep_place"],
+                vec![],
+            ),
+            // One that calls the setup's function, for another column.
+            (
+                vec![
+                    "DROP TRIGGER sessions_keep_place ON sessions".into(),
+                    format!(
+                        "CREATE TRIGGER sessions_keep_place BEFORE UPDATE OF name ON sessions \
+                         FOR EACH ROW WHEN (OLD.name IS DISTINCT FROM NEW.name) \
+                         EXECUTE FUNCTION {RLS_SCHEMA}.shellstation_keep_place()"
+                    ),
+                ],
+                vec!["trigger sessions_keep_place"],
+                vec![],
+            ),
+            // A function with another body, as one is that a start of the
+            // owning role has still to replace. Its triggers still call it.
+            (
+                vec![format!(
+                    "CREATE OR REPLACE FUNCTION {RLS_SCHEMA}.shellstation_own_folder() \
+                     {does_nothing}"
+                )],
+                vec!["function shellstation_own_folder, which is not this version's"],
+                vec![],
+            ),
+            // One that calls it with another argument, which tells the
+            // function which column to look at; one without its condition;
+            // and one that does not fire for new rows.
+            (
+                vec![
+                    "DROP TRIGGER sessions_own_folder ON sessions".into(),
+                    format!(
+                        "CREATE TRIGGER sessions_own_folder \
+                         BEFORE INSERT OR UPDATE OF folder_id ON sessions FOR EACH ROW \
+                         EXECUTE FUNCTION {RLS_SCHEMA}.shellstation_own_folder('name')"
+                    ),
+                ],
+                vec!["trigger sessions_own_folder"],
+                vec![],
+            ),
+            (
+                vec![
+                    "DROP TRIGGER folders_keep_owner ON folders".into(),
+                    format!(
+                        "CREATE TRIGGER folders_keep_owner BEFORE UPDATE OF owner ON folders \
+                         FOR EACH ROW EXECUTE FUNCTION {RLS_SCHEMA}.shellstation_keep_owner()"
+                    ),
+                ],
+                vec!["trigger folders_keep_owner"],
+                vec![],
+            ),
+            (
+                vec![
+                    "DROP TRIGGER folders_own_folder ON folders".into(),
+                    format!(
+                        "CREATE TRIGGER folders_own_folder BEFORE UPDATE OF parent_id ON folders \
+                         FOR EACH ROW \
+                         EXECUTE FUNCTION {RLS_SCHEMA}.shellstation_own_folder('parent_id')"
+                    ),
+                ],
+                vec!["trigger folders_own_folder"],
+                vec![],
+            ),
+            // The other way round: an argument where there is none to have,
+            // and a condition on the one that looks at the column itself.
+            (
+                vec![
+                    "DROP TRIGGER sessions_keep_owner ON sessions".into(),
+                    format!(
+                        "CREATE TRIGGER sessions_keep_owner BEFORE UPDATE OF owner ON sessions \
+                         FOR EACH ROW WHEN (OLD.owner IS DISTINCT FROM NEW.owner) \
+                         EXECUTE FUNCTION {RLS_SCHEMA}.shellstation_keep_owner('owner')"
+                    ),
+                ],
+                vec!["trigger sessions_keep_owner"],
+                vec![],
+            ),
+            (
+                vec![
+                    "DROP TRIGGER folders_own_folder ON folders".into(),
+                    format!(
+                        "CREATE TRIGGER folders_own_folder \
+                         BEFORE INSERT OR UPDATE OF parent_id ON folders FOR EACH ROW \
+                         WHEN (NEW.parent_id IS NOT NULL) \
+                         EXECUTE FUNCTION {RLS_SCHEMA}.shellstation_own_folder('parent_id')"
+                    ),
+                ],
+                vec!["trigger folders_own_folder"],
+                vec![],
+            ),
+            // A function that is no longer pinned to its search path, one
+            // pinned to another, and one that runs as its owner: what the
+            // setup's `CREATE OR REPLACE` puts back.
+            (
+                vec![format!(
+                    "ALTER FUNCTION {RLS_SCHEMA}.shellstation_keep_place() RESET search_path"
+                )],
+                vec!["function shellstation_keep_place, which is not this version's"],
+                vec![],
+            ),
+            (
+                vec![format!(
+                    "ALTER FUNCTION {RLS_SCHEMA}.shellstation_keep_place() \
+                     SET search_path = public, pg_catalog"
+                )],
+                vec!["function shellstation_keep_place, which is not this version's"],
+                vec![],
+            ),
+            (
+                vec![format!(
+                    "ALTER FUNCTION {RLS_SCHEMA}.shellstation_own_jump_host() SECURITY DEFINER"
+                )],
+                vec!["function shellstation_own_jump_host, which is not this version's"],
+                vec![],
+            ),
+            // A function and the schema that are another role's, who could
+            // then change what the triggers call.
+            (
+                vec![format!(
+                    "ALTER FUNCTION {RLS_SCHEMA}.shellstation_keep_owner() OWNER TO {bob}"
+                )],
+                vec!["function shellstation_keep_owner"],
+                vec![format!(
+                    "ALTER FUNCTION {RLS_SCHEMA}.shellstation_keep_owner() OWNER TO {admin}"
+                )],
+            ),
+            (
+                vec![format!("ALTER SCHEMA {RLS_SCHEMA} OWNER TO {bob}")],
+                vec!["schema shellstation_rls"],
+                vec![format!("ALTER SCHEMA {RLS_SCHEMA} OWNER TO {admin}")],
+            ),
+            // A function that is gone, and its trigger with it.
+            (
+                vec![format!(
+                    "DROP FUNCTION {RLS_SCHEMA}.shellstation_own_jump_host() CASCADE"
+                )],
+                vec![
+                    "function shellstation_own_jump_host",
+                    "trigger sessions_own_jump_host",
+                ],
+                vec![],
+            ),
+            // A privilege on the schema for everyone, which lets a role name
+            // the functions; the setup revokes it.
+            (
+                vec![format!("GRANT USAGE ON SCHEMA {RLS_SCHEMA} TO PUBLIC")],
+                vec!["schema shellstation_rls, on which others hold privileges"],
+                vec![],
+            ),
+            (
+                vec![format!("GRANT CREATE ON SCHEMA {RLS_SCHEMA} TO {bob}")],
+                vec!["schema shellstation_rls, on which others hold privileges"],
+                vec![],
+            ),
+        ];
+        for (taken_away, named, put_back) in cases {
+            for sql in &taken_away {
+                pg_exec(&server, sql).await.unwrap();
+            }
+            assert_eq!(missing(&user).await, named, "{taken_away:?}");
+            for sql in &put_back {
+                pg_exec(&server, sql).await.unwrap();
+            }
+            setup_postgres_rls(&owner).await.unwrap();
+            assert_eq!(missing(&user).await, Vec::<String>::new(), "{taken_away:?}");
+        }
+
+        // What the window is told: the tables, and whether the functions.
+        let on = |table: &'static str, what: &str| RlsGap {
+            table: Some(table),
+            what: what.to_string(),
+        };
+        assert_eq!(
+            rls_gaps_status(&[
+                on("session_credentials", "a policy"),
+                on("sessions", "a trigger"),
+                on("sessions", "a policy"),
+            ]),
+            RlsSetupStatus::Incomplete {
+                tables: vec!["sessions".to_string(), "session_credentials".to_string()],
+                functions: false,
+            }
+        );
+        assert_eq!(
+            rls_gaps_status(&[RlsGap {
+                table: None,
+                what: "a function".to_string(),
+            }]),
+            RlsSetupStatus::Incomplete {
+                tables: vec![],
+                functions: true,
+            }
+        );
+
+        // The check reads the catalog, so it does not wait for a lock that
+        // someone holds on a table, as the setup's steps do: with all of
+        // `folders` locked, it still says what is missing there, and soon.
+        pg_exec(&server, "DROP POLICY folders_shared_read ON folders")
+            .await
+            .unwrap();
+        let mut held = server.begin().await.unwrap();
+        sqlx::query("LOCK TABLE folders IN ACCESS EXCLUSIVE MODE")
+            .execute(&mut *held)
+            .await
+            .unwrap();
+        let started = std::time::Instant::now();
+        assert_eq!(missing(&user).await, ["policy folders_shared_read"]);
+        assert_eq!(
+            rls_setup_status(&user).await,
+            RlsSetupStatus::Incomplete {
+                tables: vec!["folders".to_string()],
+                functions: false,
+            }
+        );
+        assert!(started.elapsed() < std::time::Duration::from_secs(2));
+        held.rollback().await.unwrap();
+        setup_postgres_rls(&owner).await.unwrap();
+        assert_eq!(rls_setup_status(&user).await, RlsSetupStatus::InPlace);
+
+        // A check that fails is not taken for a setup in place.
+        user.close().await;
+        assert_eq!(rls_setup_status(&user).await, RlsSetupStatus::Unchecked);
+
+        owner.close().await;
+        server.close().await;
     }
 }
