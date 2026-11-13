@@ -1160,10 +1160,14 @@ impl DatabaseProvider for PostgresProvider {
         folder_id: Uuid,
         profile_id: Option<Uuid>,
     ) -> DbResult<u32> {
+        // The walk down the folders is a `UNION`, not a `UNION ALL`, here
+        // and in the other statements that go down a folder: a folder the
+        // walk has been through is not gone through again, so it ends on
+        // folders that name each other as their parent.
         let result = sqlx::query(
             "WITH RECURSIVE subtree(id) AS ( \
                  SELECT id FROM folders WHERE id = $2 AND owner = current_user \
-                 UNION ALL \
+                 UNION \
                  SELECT f.id FROM folders f JOIN subtree s ON f.parent_id = s.id \
                      WHERE f.owner = current_user \
              ) \
@@ -1196,7 +1200,7 @@ impl DatabaseProvider for PostgresProvider {
 
         let subtree_cte = "WITH RECURSIVE subtree(id) AS ( \
             SELECT id FROM folders WHERE id = $1 AND owner = current_user \
-            UNION ALL \
+            UNION \
             SELECT f.id FROM folders f JOIN subtree s ON f.parent_id = s.id \
                 WHERE f.owner = current_user \
         )";
@@ -1552,7 +1556,7 @@ impl DatabaseProvider for PostgresProvider {
         let result = sqlx::query(
             "WITH RECURSIVE subtree(id) AS ( \
                  SELECT id FROM folders WHERE id = $2 AND owner = current_user \
-                 UNION ALL \
+                 UNION \
                  SELECT f.id FROM folders f JOIN subtree s ON f.parent_id = s.id \
                      WHERE f.owner = current_user \
              ) \

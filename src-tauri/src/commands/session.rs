@@ -389,19 +389,34 @@ pub async fn set_visibility(
     let pool =
         pg.0.as_ref()
             .ok_or("Visibility control is only available in PostgreSQL mode")?;
-    let id_uuid = parse_uuid(&id)?;
+    set_item_visibility(pool, parse_uuid(&id)?, &item_type, &visibility).await
+}
+
+/// Set the visibility of a folder or a session of the current role's own,
+/// and with a folder that of the role's own folders and sessions below it.
+///
+/// Apart from the command, so that it can be run against a server without
+/// the app. The walk down the folders is a `UNION`, not a `UNION ALL`: a
+/// folder it has been through is not gone through again, so it ends on
+/// folders that name each other as their parent.
+pub(crate) async fn set_item_visibility(
+    pool: &sqlx::PgPool,
+    id: uuid::Uuid,
+    item_type: &str,
+    visibility: &str,
+) -> Result<(), String> {
     if visibility != "personal" && visibility != "shared" {
         return Err(format!(
             "Invalid visibility \"{visibility}\": must be \"personal\" or \"shared\""
         ));
     }
-    let id_str = id_uuid.to_string();
-    match item_type.as_str() {
+    let id_str = id.to_string();
+    match item_type {
         "folder" => {
             let result = sqlx::query(
                 "UPDATE folders SET visibility = $1 WHERE id = $2 AND owner = current_user",
             )
-            .bind(&visibility)
+            .bind(visibility)
             .bind(&id_str)
             .execute(pool)
             .await
@@ -413,13 +428,13 @@ pub async fn set_visibility(
             sqlx::query(
                 "WITH RECURSIVE subtree(id) AS ( \
                      SELECT id FROM folders WHERE parent_id = $2 AND owner = current_user \
-                     UNION ALL \
+                     UNION \
                      SELECT f.id FROM folders f JOIN subtree s \
                          ON f.parent_id = s.id AND f.owner = current_user \
                  ) \
                  UPDATE folders SET visibility = $1 WHERE id IN (SELECT id FROM subtree)",
             )
-            .bind(&visibility)
+            .bind(visibility)
             .bind(&id_str)
             .execute(pool)
             .await
@@ -428,14 +443,14 @@ pub async fn set_visibility(
             sqlx::query(
                 "WITH RECURSIVE subtree(id) AS ( \
                      SELECT id FROM folders WHERE id = $2 AND owner = current_user \
-                     UNION ALL \
+                     UNION \
                      SELECT f.id FROM folders f JOIN subtree s \
                          ON f.parent_id = s.id AND f.owner = current_user \
                  ) \
                  UPDATE sessions SET visibility = $1 \
                  WHERE folder_id IN (SELECT id FROM subtree) AND owner = current_user",
             )
-            .bind(&visibility)
+            .bind(visibility)
             .bind(&id_str)
             .execute(pool)
             .await
@@ -445,7 +460,7 @@ pub async fn set_visibility(
             let result = sqlx::query(
                 "UPDATE sessions SET visibility = $1 WHERE id = $2 AND owner = current_user",
             )
-            .bind(&visibility)
+            .bind(visibility)
             .bind(&id_str)
             .execute(pool)
             .await
@@ -530,25 +545,41 @@ pub async fn session_sort_by_hostname(
 /// Sort the immediate children (folders + sessions) of a parent folder
 /// alphabetically.  When `recursive` is true, descend into every subfolder
 /// and do the same.
+///
+/// A folder is gone into once: folders that name each other as their
+/// parent, as a database may have from statements of someone's own, would
+/// otherwise keep this going down without end. The folders are read once
+/// for the same walk, after the first sort as before; sorting changes the
+/// order of folders, not what they are in.
 async fn sort_children_alphabetically(
     db: &std::sync::Arc<dyn super::super::db::DatabaseProvider>,
     parent_id: Option<Uuid>,
     recursive: bool,
 ) -> Result<(), String> {
-    db.sort_folders_alphabetically(parent_id).await?;
-    if let Some(pid) = parent_id {
-        db.sort_sessions_alphabetically(pid).await?;
-    }
-
-    if recursive {
-        let all_folders = db.list_folders().await?;
-        let children: Vec<Uuid> = all_folders
-            .iter()
-            .filter(|f| f.parent_id == parent_id)
-            .map(|f| f.id)
-            .collect();
-        for child_id in children {
-            Box::pin(sort_children_alphabetically(db, Some(child_id), true)).await?;
+    let mut all_folders = None;
+    let mut seen = HashSet::new();
+    let mut to_sort = vec![parent_id];
+    while let Some(parent) = to_sort.pop() {
+        if let Some(pid) = parent {
+            if !seen.insert(pid) {
+                continue;
+            }
+        }
+        db.sort_folders_alphabetically(parent).await?;
+        if let Some(pid) = parent {
+            db.sort_sessions_alphabetically(pid).await?;
+        }
+        if recursive {
+            let folders = match &all_folders {
+                Some(folders) => folders,
+                None => all_folders.insert(db.list_folders().await?),
+            };
+            to_sort.extend(
+                folders
+                    .iter()
+                    .filter(|f| f.parent_id == parent)
+                    .map(|f| Some(f.id)),
+            );
         }
     }
     Ok(())
@@ -1270,6 +1301,90 @@ mod tests {
         .await
         .err()
         .expect("the chain resolved")
+    }
+
+    #[tokio::test]
+    async fn a_recursive_sort_ends_on_folders_that_name_each_other() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(SqliteConnectOptions::new().filename(":memory:"))
+            .await
+            .unwrap();
+        sqlx::migrate!().run(&pool).await.unwrap();
+        let db: std::sync::Arc<dyn DatabaseProvider> =
+            std::sync::Arc::new(SqliteProvider::new(pool.clone()));
+        let folder = |name: &str, parent_id: Option<Uuid>| {
+            let db = db.clone();
+            let name = name.to_string();
+            async move {
+                db.create_folder(NewFolder { name, parent_id })
+                    .await
+                    .unwrap()
+                    .id
+            }
+        };
+        // Two folders that name each other as their parent, as only a
+        // statement past the move command leaves them, and in the second
+        // two more, out of order.
+        let ring_a = folder("ring a", None).await;
+        let ring_b = folder("ring b", Some(ring_a)).await;
+        let zeta = folder("zeta", Some(ring_b)).await;
+        folder("in zeta, second", Some(zeta)).await;
+        folder("in zeta, first", Some(zeta)).await;
+        folder("alpha", Some(ring_b)).await;
+        db.move_folder(ring_a, Some(ring_b)).await.unwrap();
+
+        let names_in = |parent: Uuid| {
+            let db = db.clone();
+            async move {
+                let mut folders = db.list_folders().await.unwrap();
+                folders.retain(|f| f.parent_id == Some(parent));
+                folders.sort_by_key(|f| f.sort_order);
+                folders.into_iter().map(|f| f.name).collect::<Vec<_>>()
+            }
+        };
+        assert_eq!(names_in(ring_b).await, ["zeta", "alpha", "ring a"]);
+        assert_eq!(names_in(zeta).await, ["in zeta, second", "in zeta, first"]);
+
+        // From either folder of the ring the sort ends, and has been through
+        // what is below the ring as well. One that does not end fails here.
+        for start in [ring_a, ring_b] {
+            sqlx::query("UPDATE folders SET sort_order = -sort_order")
+                .execute(&pool)
+                .await
+                .unwrap();
+            tokio::time::timeout(
+                std::time::Duration::from_secs(10),
+                sort_children_alphabetically(&db, Some(start), true),
+            )
+            .await
+            .expect("the sort did not end")
+            .unwrap();
+            assert_eq!(names_in(ring_b).await, ["alpha", "ring a", "zeta"]);
+            assert_eq!(names_in(zeta).await, ["in zeta, first", "in zeta, second"]);
+        }
+        // Without going down, only the folder asked for is sorted.
+        sqlx::query("UPDATE folders SET sort_order = -sort_order")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sort_children_alphabetically(&db, Some(ring_b), false)
+            .await
+            .unwrap();
+        assert_eq!(names_in(ring_b).await, ["alpha", "ring a", "zeta"]);
+        assert_eq!(names_in(zeta).await, ["in zeta, second", "in zeta, first"]);
+
+        // A folder that names itself as its parent is gone into once as
+        // well.
+        let own = folder("its own", None).await;
+        db.move_folder(own, Some(own)).await.unwrap();
+        tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            sort_children_alphabetically(&db, Some(own), true),
+        )
+        .await
+        .expect("the sort did not end")
+        .unwrap();
     }
 
     #[tokio::test]

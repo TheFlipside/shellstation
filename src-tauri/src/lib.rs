@@ -2612,6 +2612,16 @@ mod tests {
         with_rls_test_database(check_jump_hosts_stay_with_their_owner).await;
     }
 
+    /// Every statement that goes down the folders below a folder, against a
+    /// real server: on folders that name each other as their parent it ends,
+    /// and covers what is there once. Same server as for
+    /// `shared_rows_keep_their_owner`; run with `--ignored folder_walks`.
+    #[tokio::test]
+    #[ignore = "needs a throwaway PostgreSQL server in SHELLSTATION_TEST_PG_URL"]
+    async fn folder_walks_end_on_a_loop() {
+        with_rls_test_database(check_folder_walks_end_on_a_loop).await;
+    }
+
     /// Run `checks` with a database of its own on the throwaway server and
     /// the names of three roles made for it: an admin and two users. All
     /// four are dropped again afterwards.
@@ -4530,6 +4540,133 @@ mod tests {
                 assert_eq!(
                     bulk_set_user_login_sequences(&pool, ring, "alice", to).await,
                     Ok(1)
+                );
+            }
+        }
+
+        pool.close().await;
+    }
+
+    async fn check_folder_walks_end_on_a_loop(
+        opts: sqlx::postgres::PgConnectOptions,
+        admin: String,
+        alice: String,
+        bob: String,
+    ) {
+        use commands::{
+            bulk_set_user_credentials, bulk_set_user_login_sequences, set_item_visibility,
+        };
+        use db::{BulkSessionEdit, DatabaseProvider};
+
+        // One connection, so each SET ROLE holds for the statements after
+        // it, the app's own included.
+        let pool = PgPoolOptions::new()
+            .max_connections(1)
+            .connect_with(opts)
+            .await
+            .unwrap();
+        prepare_rls_test_database(&pool, &admin, &alice, &bob).await;
+        let app = PostgresProvider::new(pool.clone());
+
+        // Two folders of alice's that name each other as their parent and a
+        // third below one of them, with a session in the first and in the
+        // third. Made by a superuser, since the trigger keeps alice from it.
+        // And a folder of hers apart from those, with a session. Depending
+        // on how the server goes about a statement, it reads the whole walk
+        // first, or it looks for each of her sessions or folders among the
+        // folders of the walk and stops at the first it finds, and then only
+        // one that is not among them has it walk to the end: without these
+        // two, every statement here returned from a walk that does not end.
+        // A statement that does not end fails here after 5 s.
+        let (ring_a, ring_b, below, apart) = (
+            uuid::Uuid::new_v4(),
+            uuid::Uuid::new_v4(),
+            uuid::Uuid::new_v4(),
+            uuid::Uuid::new_v4(),
+        );
+        for sql in [
+            "RESET ROLE".to_string(),
+            format!(
+                "INSERT INTO folders (id, name, parent_id, sort_order, owner, visibility) VALUES \
+                 ('{ring_a}', 'ring a', NULL, 0, '{alice}', 'personal'), \
+                 ('{ring_b}', 'ring b', '{ring_a}', 0, '{alice}', 'personal'), \
+                 ('{below}', 'below', '{ring_b}', 0, '{alice}', 'personal'), \
+                 ('{apart}', 'apart', NULL, 0, '{alice}', 'personal')"
+            ),
+            format!("UPDATE folders SET parent_id = '{ring_b}' WHERE id = '{ring_a}'"),
+            format!(
+                "INSERT INTO sessions (id, folder_id, name, hostname, username, owner, visibility) VALUES \
+                 ('{}', '{ring_a}', 'in the ring', 'host.example', '', '{alice}', 'personal'), \
+                 ('{}', '{below}', 'below it', 'host.example', '', '{alice}', 'personal'), \
+                 ('{}', '{apart}', 'apart', 'host.example', '', '{alice}', 'personal')",
+                uuid::Uuid::new_v4(),
+                uuid::Uuid::new_v4(),
+                uuid::Uuid::new_v4()
+            ),
+            "SET statement_timeout = '5s'".to_string(),
+            format!("SET ROLE {alice}"),
+        ] {
+            pg_exec(&pool, &sql).await.expect(&sql);
+        }
+        assert!(refused(
+            pg_exec(
+                &pool,
+                &format!("UPDATE folders SET parent_id = '{below}' WHERE id = '{ring_b}'")
+            )
+            .await,
+            BY_RING
+        ));
+
+        // From either folder of the ring, each statement covers the two
+        // sessions there, and the three folders where it changes folders,
+        // and neither the folder apart nor its session.
+        for start in [ring_a, ring_b] {
+            let (profile, sequence) = (uuid::Uuid::new_v4(), uuid::Uuid::new_v4());
+            // The session rows' own profile and login sequence.
+            assert_eq!(
+                app.bulk_set_session_credential_profile(start, Some(profile))
+                    .await,
+                Ok(2)
+            );
+            assert_eq!(
+                app.bulk_set_session_login_sequence(start, Some(sequence))
+                    .await,
+                Ok(2)
+            );
+            // Bulk Edit, in both of its passes.
+            let edit = BulkSessionEdit {
+                login_sequence_id: Some(Some(sequence)),
+                jump_host_id: Some(None),
+                ..BulkSessionEdit::default()
+            };
+            assert_eq!(app.bulk_edit_sessions(start, edit).await, Ok(2));
+            // A folder's visibility, for the folders below it and for the
+            // sessions.
+            for (visibility, shared) in [("shared", 5), ("personal", 0)] {
+                assert_eq!(
+                    set_item_visibility(&pool, start, "folder", visibility).await,
+                    Ok(())
+                );
+                assert_eq!(
+                    pg_count(
+                        &pool,
+                        "SELECT (SELECT count(*) FROM folders WHERE visibility = 'shared') \
+                              + (SELECT count(*) FROM sessions WHERE visibility = 'shared')",
+                    )
+                    .await,
+                    shared
+                );
+            }
+            // The per-user mappings, set and cleared.
+            let (start, profile) = (start.to_string(), profile.to_string());
+            for to in [Some(profile.as_str()), None] {
+                assert_eq!(
+                    bulk_set_user_credentials(&pool, &start, "alice", to).await,
+                    Ok(2)
+                );
+                assert_eq!(
+                    bulk_set_user_login_sequences(&pool, &start, "alice", to).await,
+                    Ok(2)
                 );
             }
         }
