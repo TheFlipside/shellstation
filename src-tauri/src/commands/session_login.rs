@@ -255,7 +255,7 @@ mod tests {
                 stale(used_as, |s| s.port = 2222),
                 stale(used_as, |s| s.jump_host_id = None),
                 stale(used_as, |s| {
-                    s.jump_host_id = Some(Uuid::new_v4().to_string())
+                    s.jump_host_id = Some(Uuid::new_v4().to_string());
                 }),
             ] {
                 let error = result.unwrap_err();

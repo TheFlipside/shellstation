@@ -152,6 +152,119 @@ pub(crate) fn create_private_append_file(path: &Path) -> io::Result<std::fs::Fil
     create_new_private(path, true)
 }
 
+/// Open a file that is already there for appending, if it is a plain file of
+/// the user's own that has no other name: for a file that is written to
+/// over several runs of the app, such as the application log's file of the
+/// day, in a directory where others may be able to put something at its
+/// name. Never creates one: a missing file is [`io::ErrorKind::NotFound`],
+/// and the caller creates it with [`create_private_append_file`].
+///
+/// Refused, each as an error:
+/// - A symbolic link at the name, which is not followed, so that nothing is
+///   appended to where it leads. On Windows that goes for every reparse
+///   point.
+/// - Anything but a plain file. A FIFO is not waited on: the open does not
+///   block, on a FIFO without a reader it fails, and one with a reader is
+///   refused once it is open.
+/// - A file that belongs to another user, who could read what is appended.
+///   On Windows the owner may also be the administrators, who own what an
+///   elevated process creates and can read any file anyway; on a network
+///   share the owner is not looked at, since a server names it as it likes.
+/// - A file with more than one name. Someone else may be able to link a
+///   file of the user's to this name, and it would pass for the user's own
+///   here.
+/// - On Unix, a file that others could open by its mode, where the file
+///   system keeps modes: someone may have it open, and a mode takes no open
+///   file away. It is made read-only for its owner alone, and a file its
+///   owner may not write to is refused, so it stays refused.
+///
+/// On Windows the file keeps its access list. As with the creates, the
+/// handle appends and can do nothing else.
+pub(crate) fn open_own_append_file(path: &Path) -> io::Result<std::fs::File> {
+    #[cfg(windows)]
+    {
+        windows::open_own_for_append(path)
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
+        // Without blocking, for a FIFO, and without taking a terminal at
+        // the name for the process's own. On a plain file neither changes
+        // anything.
+        let file = std::fs::OpenOptions::new()
+            .append(true)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_NOCTTY)
+            .open(path)
+            .map_err(|e| match std::fs::symlink_metadata(path) {
+                // What the system says of a link differs between systems.
+                // Never as a missing file, which the caller would create.
+                Ok(at_name) if at_name.file_type().is_symlink() => {
+                    not_own("a symbolic link is at its name, which is not followed")
+                }
+                _ => e,
+            })?;
+        // Read through the handle, so that it is this file that is judged
+        // whatever the name holds a moment later.
+        let meta = file.metadata()?;
+        if !meta.file_type().is_file() {
+            return Err(not_own("it is not a plain file"));
+        }
+        // SAFETY: `geteuid` takes no arguments, touches no memory and
+        // cannot fail.
+        let user = unsafe { libc::geteuid() };
+        if meta.uid() != user {
+            return Err(not_own("it belongs to another user"));
+        }
+        if meta.nlink() != 1 {
+            return Err(not_own("it has another name as well (a hard link)"));
+        }
+        let mode = meta.mode() & 0o7777;
+        // One that its owner may not write to is not written to: it was
+        // made so below, at an earlier start, or by the user. Asked here as
+        // well as by the open, which root's gets past.
+        if mode & 0o200 == 0 {
+            return Err(not_own("it is read-only"));
+        }
+        if mode & 0o077 != 0 {
+            // Others could open it, and whoever has it open goes on reading
+            // what is appended, whatever its mode is by then. So it is not
+            // appended to, now or at a later start, and is made read-only
+            // for its owner alone, which takes it from everyone else and is
+            // what the check above goes by the next time.
+            //
+            // Only where the mode is one the file system keeps. Where it
+            // has no Unix modes, the mode says nothing of who can open the
+            // file: the change is refused, or not kept as asked, and the
+            // file is the one to write to. What the system made of the
+            // change is then put back, since it may have been a read-only
+            // flag.
+            if file
+                .set_permissions(std::fs::Permissions::from_mode(0o400))
+                .is_ok()
+            {
+                if file.metadata()?.mode() & 0o7777 == 0o400 {
+                    return Err(not_own("others could open it; it is left read-only"));
+                }
+                let _ = file.set_permissions(std::fs::Permissions::from_mode(mode));
+            }
+        }
+        Ok(file)
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        // Nothing here can tell whose file it is.
+        let _ = path;
+        Err(io::Error::from(io::ErrorKind::Unsupported))
+    }
+}
+
+/// The error for a file that [`open_own_append_file`] refuses for what it
+/// is.
+#[cfg(any(unix, windows))]
+fn not_own(why: &'static str) -> io::Error {
+    io::Error::new(io::ErrorKind::PermissionDenied, why)
+}
+
 /// `create_new` is what refuses a name already taken, whatever holds it: a
 /// file, a directory, or a symlink, dangling or not, which is not followed
 /// on either platform.

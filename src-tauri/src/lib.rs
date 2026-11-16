@@ -27,6 +27,7 @@
     clippy::cast_sign_loss
 )]
 
+mod app_log;
 mod commands;
 mod config;
 mod credentials;
@@ -1956,10 +1957,11 @@ fn app_log_directives(level: &str) -> String {
 /// Build the tracing subscriber from the application config.
 ///
 /// Always installs a stdout layer. When `cfg.enabled` is true, also installs
-/// a daily-rotating file appender writing to `<log_directory>/shellstation.log`
-/// (default `<config_dir>/logs/`). The returned `WorkerGuard` must be held
-/// for the process lifetime — dropping it flushes pending writes and shuts
-/// down the background writer thread.
+/// a file layer that writes to a file for each day,
+/// `<log_directory>/shellstation.YYYY-MM-DD.log` (default
+/// `<config_dir>/logs/`), which the app opens itself: see [`app_log`]. The
+/// returned `WorkerGuard` must be held for the process lifetime — dropping
+/// it flushes pending writes and shuts down the background writer thread.
 ///
 /// `RUST_LOG`, when set, takes precedence over `cfg.level`.
 fn init_tracing(
@@ -1980,9 +1982,10 @@ fn init_tracing(
         None
     };
     let Some(AppLogFile {
-        appender,
+        writer,
         dir: log_dir,
         dir_problem,
+        file_note,
     }) = log_file
     else {
         tracing_subscriber::registry()
@@ -1992,7 +1995,9 @@ fn init_tracing(
         return None;
     };
 
-    let (non_blocking, guard) = tracing_appender::non_blocking(appender);
+    // Lossy, which is the default: the writer logs from the thread that
+    // writes the log, and must never wait for room in its own queue.
+    let (non_blocking, guard) = tracing_appender::non_blocking(writer);
     let file_layer = fmt::layer().with_ansi(false).with_writer(non_blocking);
     tracing_subscriber::registry()
         .with(env_filter)
@@ -2010,20 +2015,26 @@ fn init_tracing(
     if let Some(problem) = dir_problem {
         tracing::warn!(log_dir = ?log_dir, "{problem}");
     }
+    if let Some(note) = file_note {
+        tracing::warn!(log_dir = ?log_dir, "{note}");
+    }
     Some(guard)
 }
 
 /// The application log as [`open_app_log_file`] opens it.
 struct AppLogFile {
-    appender: tracing_appender::rolling::RollingFileAppender,
+    writer: app_log::DailyLog,
     /// The directory the log is in.
     dir: std::path::PathBuf,
     /// Why the directory could not be restricted to its owner, if it could
     /// not: the log is written there all the same.
     dir_problem: Option<String>,
+    /// That the log is not in the file of the day's own name, and why, if
+    /// that name held something that is not appended to.
+    file_note: Option<String>,
 }
 
-/// Open the daily-rotating application log file for `init_tracing`.
+/// Open the application log's file of the day for `init_tracing`.
 ///
 /// Returns `None` when the configured directory is invalid or the directory
 /// or the file cannot be created, so that the caller falls back to
@@ -2048,11 +2059,9 @@ fn open_app_log_file(
     // created for its owner alone (0700 on Unix, an access list of its own
     // on Windows), as is every directory above it that is missing too, and
     // one that is already there is restricted to its owner
-    // on Unix and left as it is on Windows. The logging library creates the
-    // log file itself, by opening whatever holds the day's name, and with
-    // the mode the umask leaves it. On Unix the directory is therefore all
-    // that keeps others from reading the log, and only once it has been
-    // restricted.
+    // on Unix and left as it is on Windows. The log's files are created for
+    // their owner alone as well (`app_log`), so a directory that could not
+    // be restricted shows others their names and no more.
     if let Err(e) = crate::private_fs::create_private_dir(&log_dir) {
         eprintln!(
             "Failed to create application log directory {}: {e} — \
@@ -2068,12 +2077,13 @@ fn open_app_log_file(
     // the user can put a link, but only as long as that directory could be
     // restricted itself. A file system without Unix modes can refuse this
     // too. The directory is still usable, so logging goes ahead, into a
-    // directory that others may read.
+    // directory that others may list.
     let restricted = crate::private_fs::restrict_dir_to_owner_nofollow(&log_dir);
     let dir_problem = restricted.err().map(|e| {
         format!(
             "Failed to restrict the application log directory to its owner: {e} — \
-             others may be able to read the application log"
+             others may be able to list it, and to read the log where the file \
+             system has no Unix modes"
         )
     });
     if let Some(problem) = &dir_problem {
@@ -2081,17 +2091,18 @@ fn open_app_log_file(
     }
     // Creating the directory can succeed and opening the file still fail
     // (directory not writable, disk full); that falls back the same way.
-    match tracing_appender::rolling::Builder::new()
-        .rotation(tracing_appender::rolling::Rotation::DAILY)
-        .filename_prefix("shellstation")
-        .filename_suffix("log")
-        .build(&log_dir)
-    {
-        Ok(appender) => Some(AppLogFile {
-            appender,
-            dir: log_dir,
-            dir_problem,
-        }),
+    match app_log::DailyLog::open(&log_dir) {
+        Ok((writer, file_note)) => {
+            if let Some(note) = &file_note {
+                eprintln!("{note} ({})", log_dir.display());
+            }
+            Some(AppLogFile {
+                writer,
+                dir: log_dir,
+                dir_problem,
+                file_note,
+            })
+        }
         Err(e) => {
             eprintln!(
                 "Failed to open application log file in {}: {e} — \
@@ -2870,17 +2881,20 @@ mod tests {
         let opened = open_app_log_file(&std::env::temp_dir(), &log_config(&dir)).unwrap();
         assert_eq!(opened.dir, dir);
         assert_eq!(opened.dir_problem, None);
+        assert_eq!(opened.file_note, None);
         drop(opened);
         // A chosen directory that had to be created is its owner's alone,
-        // as the session logger's is.
+        // as the session logger's is, and so is the day's file in it.
         private_fs::assert_private(&dir);
+        let files: Vec<_> = std::fs::read_dir(&dir).unwrap().collect();
+        assert_eq!(files.len(), 1);
+        private_fs::assert_private(&files[0].as_ref().unwrap().path());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// A chosen directory that is already there is restricted to its owner
-    /// on Unix, as the session logger restricts its own, so that the log
-    /// file, which the logging library creates with the umask's mode, cannot
-    /// be read by others.
+    /// on Unix, as the session logger restricts its own, so that others
+    /// cannot list the log's files or put anything at their names.
     #[cfg(unix)]
     #[test]
     fn open_app_log_file_restricts_a_chosen_directory_already_there() {
@@ -2946,17 +2960,27 @@ mod tests {
         let _ = std::fs::remove_dir_all(&config_dir);
     }
 
+    /// A day's name that holds something the log is not appended to is
+    /// passed over for the next, and the note of it is returned to be
+    /// logged. `app_log` has the tests for what is passed over, and for a
+    /// day with no name left.
     #[test]
-    fn open_app_log_file_falls_back_when_the_file_cannot_be_opened() {
-        // The directory exists, but the day's file name is taken by a
-        // directory. Today and tomorrow (UTC, as the appender names files)
-        // both, so a run across midnight still hits one.
+    fn open_app_log_file_passes_over_a_name_that_is_taken() {
+        // Today and tomorrow (UTC, as the files are named) both, so a run
+        // across midnight still hits one.
         let dir = std::env::temp_dir().join(format!("ss-applog-{}", uuid::Uuid::new_v4()));
         let today = chrono::Utc::now().date_naive();
-        for day in [today, today + chrono::Days::new(1)] {
+        let days = [today, today + chrono::Days::new(1)];
+        for day in days {
             std::fs::create_dir_all(dir.join(format!("shellstation.{day}.log"))).unwrap();
         }
-        assert!(open_app_log_file(&std::env::temp_dir(), &log_config(&dir)).is_none());
+        let opened = open_app_log_file(&std::env::temp_dir(), &log_config(&dir)).unwrap();
+        let note = opened.file_note.clone().unwrap();
+        assert!(note.contains("could not be used"), "{note}");
+        drop(opened);
+        assert!(days
+            .iter()
+            .any(|day| dir.join(format!("shellstation.{day}_1.log")).is_file()));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

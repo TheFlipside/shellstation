@@ -34,6 +34,16 @@ extern "system" {
         needed: *mut u32,
     ) -> i32;
     fn ConvertSidToStringSidW(sid: *mut c_void, string_sid: *mut *mut u16) -> i32;
+    fn GetSecurityInfo(
+        handle: *mut c_void,
+        object_type: i32,
+        security_info: u32,
+        owner: *mut *mut c_void,
+        group: *mut *mut c_void,
+        dacl: *mut *mut c_void,
+        sacl: *mut *mut c_void,
+        security_descriptor: *mut *mut c_void,
+    ) -> u32;
     fn ConvertStringSecurityDescriptorToSecurityDescriptorW(
         string: *const u16,
         revision: u32,
@@ -55,7 +65,30 @@ extern "system" {
         template: *mut c_void,
     ) -> *mut c_void;
     fn CreateDirectoryW(name: *const u16, attributes: *const SecurityAttributes) -> i32;
+    fn GetFileInformationByHandle(file: *mut c_void, information: *mut FileInformation) -> i32;
 }
+
+/// `SE_FILE_OBJECT`, of `SE_OBJECT_TYPE`: what a handle to a file or
+/// directory is to `GetSecurityInfo`.
+const SE_FILE_OBJECT: i32 = 1;
+
+/// `BY_HANDLE_FILE_INFORMATION`: what `GetFileInformationByHandle` says of an
+/// open file. Only the attributes and the number of names are read.
+#[repr(C)]
+#[derive(Default)]
+struct FileInformation {
+    attributes: u32,
+    /// Created, last read and last written, a `FILETIME` each.
+    times: [u32; 6],
+    volume_serial_number: u32,
+    size: [u32; 2],
+    /// How many names the file has: more than one with hard links.
+    links: u32,
+    index: [u32; 2],
+}
+
+// Thirteen `DWORD`s, as the call writes them.
+const _: () = assert!(size_of::<FileInformation>() == 52);
 
 /// `SECURITY_ATTRIBUTES`: the security descriptor a create gives what it
 /// creates, and whether child processes inherit the handle.
@@ -318,6 +351,90 @@ pub(super) fn open_new(path: &Path, append: bool) -> io::Result<File> {
     Ok(unsafe { File::from_raw_handle(handle) })
 }
 
+/// Open the file that is already at `path` for appending only, if it is a
+/// plain file of the user's own with no other name: see
+/// `open_own_append_file` in the module above, whose rules these are. A
+/// missing file is an error, and nothing is created.
+pub(super) fn open_own_for_append(path: &Path) -> io::Result<File> {
+    use std::os::windows::fs::OpenOptionsExt;
+    use std::os::windows::io::AsRawHandle;
+    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+    const FILE_ATTRIBUTE_DIRECTORY: u32 = 0x10;
+    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+    /// The administrators, `BUILTIN\Administrators`.
+    const ADMINISTRATORS: &str = "S-1-5-32-544";
+
+    // A link at the name is opened itself and not followed, as is any other
+    // reparse point, and then refused below. Appending carries the right to
+    // write at the end only, as in `open_new`, and to read the owner.
+    let file = std::fs::OpenOptions::new()
+        .append(true)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(path)?;
+    // Read through the handle, so that it is this file that is judged
+    // whatever the name holds a moment later.
+    let mut information = FileInformation::default();
+    // SAFETY: the handle is open, and `information` is writable and as long
+    // as the structure the call fills in.
+    if unsafe { GetFileInformationByHandle(file.as_raw_handle(), &raw mut information) } == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    if information.attributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT) != 0 {
+        return Err(super::not_own("it is not a plain file"));
+    }
+    if information.links != 1 {
+        return Err(super::not_own("it has another name as well (a hard link)"));
+    }
+    // A server names the owner as it likes, as with the access list: see
+    // `on_share`.
+    if !on_share(path) {
+        let owner = owner_sid(&file)?;
+        if owner != ADMINISTRATORS && owner != current_user_sid()? {
+            return Err(super::not_own("it belongs to another user"));
+        }
+    }
+    Ok(file)
+}
+
+/// The SID of the owner of the open file `file`, whose handle must carry
+/// the right to read it (`READ_CONTROL`), as one opened for writing does.
+fn owner_sid(file: &File) -> io::Result<String> {
+    use std::os::windows::io::AsRawHandle;
+    const OWNER_SECURITY_INFORMATION: u32 = 0x1;
+    let mut owner = null_mut();
+    let mut descriptor = null_mut();
+    // SAFETY: the handle is open; only the owner is asked for, so the other
+    // out pointers may be null. On success `owner` points into `descriptor`,
+    // which the call allocated and which is freed below.
+    let status = unsafe {
+        GetSecurityInfo(
+            file.as_raw_handle(),
+            SE_FILE_OBJECT,
+            OWNER_SECURITY_INFORMATION,
+            &raw mut owner,
+            null_mut(),
+            null_mut(),
+            null_mut(),
+            &raw mut descriptor,
+        )
+    };
+    if status != 0 {
+        return Err(io::Error::from_raw_os_error(status.cast_signed()));
+    }
+    // A descriptor can be without an owner.
+    let sid = if owner.is_null() {
+        Err(io::Error::other("the file has no owner"))
+    } else {
+        // SAFETY: `owner` points to the SID in `descriptor`, which is still
+        // allocated.
+        unsafe { sid_string(owner) }
+    };
+    // SAFETY: the descriptor was allocated by the call above and is not
+    // used after this; the SID was copied.
+    unsafe { LocalFree(descriptor) };
+    sid
+}
+
 /// Create the directory at `path`, and any missing parents, for the current
 /// user alone; one on a share is created the plain way (see [`on_share`]).
 /// An existing directory is fine and left as it is, as with the standard
@@ -370,16 +487,6 @@ fn access_list(path: &Path) -> String {
 
     #[link(name = "advapi32")]
     extern "system" {
-        fn GetSecurityInfo(
-            handle: *mut c_void,
-            object_type: i32,
-            security_info: u32,
-            owner: *mut *mut c_void,
-            group: *mut *mut c_void,
-            dacl: *mut *mut c_void,
-            sacl: *mut *mut c_void,
-            security_descriptor: *mut *mut c_void,
-        ) -> u32;
         fn ConvertSecurityDescriptorToStringSecurityDescriptorW(
             descriptor: *mut c_void,
             revision: u32,
@@ -388,7 +495,6 @@ fn access_list(path: &Path) -> String {
             len: *mut u32,
         ) -> i32;
     }
-    const SE_FILE_OBJECT: i32 = 1;
     const DACL_SECURITY_INFORMATION: u32 = 0x4;
     const READ_CONTROL: u32 = 0x2_0000;
     const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
