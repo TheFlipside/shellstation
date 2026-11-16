@@ -61,7 +61,12 @@ step 3. The build signs each updater artifact for the version in
 `tauri.conf.json`, the manifest announces the version of the tag, and the
 app refuses an update whose two versions differ (`requireSignedVersion`,
 see [DESIGN.md §4.7.1](DESIGN.md#471-trust-model)). A release where they
-differ is one no installed app will update to.
+differ is one no installed app will update to. The pipeline's `preflight`
+job therefore fails for a tag whose version is not the one in
+`tauri.conf.json`, before anything is built. The two have to be the same
+string, apart from the tag's leading `v`. A tag that ends in `-test`, or
+in `-test` and a number, is not compared (see the throwaway tags in
+[DEVELOPMENT.md](DEVELOPMENT.md)).
 
 Refresh the lock files so they pick up the new version:
 

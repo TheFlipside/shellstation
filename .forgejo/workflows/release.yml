@@ -23,6 +23,34 @@ jobs:
             exit 1
           fi
 
+      - name: Reject a tag that is not the app's version
+        # The build signs each updater artifact for the version in
+        # tauri.conf.json, and the manifest announces the version of the
+        # tag. The app refuses an update whose two versions differ
+        # (requireSignedVersion), so a release tagged without the version
+        # bump would publish normally and be one no installed app updates
+        # to. A throwaway tag pushed to try the pipeline ends in "-test",
+        # or in "-test" and a number (docs/DEVELOPMENT.md), and is let
+        # through: no app takes its release either, and it is deleted
+        # again.
+        run: |
+          set -euo pipefail
+          tag_version="${GITHUB_REF_NAME#v}"
+          app_version="$(sed -n 's/^  "version": "\([^"]*\)".*$/\1/p' src-tauri/tauri.conf.json)"
+          # One version, and nothing else: what is read here is printed below.
+          if ! [[ "$app_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::Could not read the version from src-tauri/tauri.conf.json." >&2
+            exit 1
+          fi
+          if [[ "$tag_version" =~ -test[0-9]*$ ]]; then
+            echo "Throwaway tag: not compared with the app's version ${app_version}. No installed app will take this release as an update."
+            exit 0
+          fi
+          if [ "$tag_version" != "$app_version" ]; then
+            echo "::error::The tag is for version ${tag_version}, but src-tauri/tauri.conf.json has ${app_version}. No installed app would update to this release. Bump the version first, see docs/RELEASING.md." >&2
+            exit 1
+          fi
+
   build-linux:
     needs: preflight
     runs-on: linux

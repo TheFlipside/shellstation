@@ -1315,7 +1315,7 @@ Add the matching secrets to **both** Forgejo Actions and (if mirroring) GitHub A
 
 #### Verifying the setup
 
-After pushing the public key change, push a throwaway tag like `v0.0.0-test` to confirm the pipeline produces signed artifacts:
+After pushing the public key change, push a throwaway tag like `v0.0.0-test` to confirm the pipeline produces signed artifacts. The tag has to end in `-test`, or in `-test` and a number: the `preflight` job fails for any other tag whose version is not the one in `tauri.conf.json`.
 
 ```bash
 git tag v0.0.0-test
@@ -1324,13 +1324,13 @@ git push origin v0.0.0-test
 
 In the Forgejo workflow log:
 
-- The `preflight` job should pass (no placeholder pubkey).
+- The `preflight` job should pass (no placeholder pubkey, and a tag that ends in `-test`).
 - Each build job should print `Signing <path>.AppImage (or .exe, or .app.tar.gz)` during `tauri build`.
 - The `Generate latest.json (updater manifest)` step should print a non-empty `platforms:` list. If the list is empty, the secrets are not reaching the build step (check spelling, runner scope, etc.).
 
 This shows that the artifacts are signed, not that an app would install them: the manifest of a throwaway tag announces the tag's version, while the build signs for the version in `tauri.conf.json`, and the app refuses an update whose two versions differ ([DESIGN.md §4.7.1](DESIGN.md#471-trust-model)).
 
-Delete the throwaway release and tag afterwards:
+Delete the throwaway release and tag afterwards, and do not leave them: while GitHub serves the throwaway release as the latest one, its manifest is the one the installed apps fetch, and they find no update in it.
 
 ```bash
 git tag -d v0.0.0-test
@@ -1634,7 +1634,7 @@ Before starting the service, the account also needs the **Log on as a service** 
 
 Verify the runner appears as `windows-builder` at <https://git.fiedler.live/-/admin/actions/runners>.
 
-**6. Smoke test**: push a throwaway tag (`git tag v0.9.0-test1 && git push origin v0.9.0-test1`) and watch both runners pick up their jobs in the Actions tab. Delete the tag after the test runs.
+**6. Smoke test**: push a throwaway tag (`git tag v0.9.0-test1 && git push origin v0.9.0-test1`) and watch both runners pick up their jobs in the Actions tab. Keep `-test` and the number at the end of the tag, or the `preflight` job fails it for not being the app's version. Delete the tag after the test runs.
 
 ## 25. Updating Dependencies
 
