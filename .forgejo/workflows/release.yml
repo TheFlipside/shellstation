@@ -11,6 +11,13 @@ name: Release
 # and what a job runs afterwards, npm ci and the build scripts among it,
 # could read it there. Whether the runner hands the same token to the
 # steps in their environment as well is the runner's doing, not this file's.
+#
+# The cache of downloaded crates is restored for exactly the Cargo.lock
+# of the commit being built, and for no other (no restore-keys): what is
+# restored is built into an app that is then signed, and cargo does not
+# check a crate that is already there against the lock file again.
+# The runners run on their hosts, so ~/.cargo is there from earlier
+# jobs in any case; see Known issues in CHANGELOG.md.
 
 on:
   push:
@@ -88,8 +95,6 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
           key: linux-cargo-${{ hashFiles('src-tauri/Cargo.lock') }}
-          restore-keys: |
-            linux-cargo-
 
       - name: Install npm dependencies
         run: npm ci
@@ -154,8 +159,6 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
           key: windows-cargo-${{ hashFiles('src-tauri/Cargo.lock') }}
-          restore-keys: |
-            windows-cargo-
 
       - name: Install npm dependencies
         run: npm ci
@@ -233,8 +236,6 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
           key: macos-x64-cargo-${{ hashFiles('src-tauri/Cargo.lock') }}
-          restore-keys: |
-            macos-x64-cargo-
 
       - name: Install npm dependencies
         run: npm ci
@@ -296,8 +297,6 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
           key: macos-arm64-cargo-${{ hashFiles('src-tauri/Cargo.lock') }}
-          restore-keys: |
-            macos-arm64-cargo-
 
       - name: Install npm dependencies
         run: npm ci
