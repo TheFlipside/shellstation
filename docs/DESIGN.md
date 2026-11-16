@@ -279,6 +279,10 @@ ShellStation ships its own in-app updater built on `tauri-plugin-updater`. The g
 
 Every artifact the updater installs must validate against the embedded public key. A signed manifest is **not** required — the manifest is just a directory; what matters is that the artifact URL it points at carries a valid `.sig` produced by the held private key. An attacker who can replace `latest.json` (e.g. by compromising the GitHub release) cannot make the updater install anything unless they also hold the private key.
 
+What such an attacker could do is offer an older release as a new one: announce a higher version number with the `url` and `signature` of a release that was published before, which is genuine and validly signed, and so put a build with known faults back onto a machine. The signature therefore also says which version it is for. `tauri build` writes the app version into the signature's trusted comment, which the signature covers, and the plugin, once it has verified the signature, refuses an artifact whose signed version is not the one the manifest announced. With `plugins.updater.requireSignedVersion` on, as it is, it also refuses an artifact whose signature names no version, as the ones of releases signed before the Tauri CLI recorded it; without it, one of those would pass for any version. Two things follow for a release. The manifest takes its version from the tag and the signature from `tauri.conf.json`, so the two have to agree, or no client accepts the update. And an artifact signed by hand needs `tauri signer sign --app-version`. A version of the app from before this setting does not ask for a signed version, so it updates as before, and is open to such a manifest until it has updated once.
+
+What the signed version does not stop is an older release offered under its own version. To an app older than that release it is an update, and its signature is for the version announced: someone who can replace the manifest can hold such an app at a release that has since been superseded, though not take it back below the one it runs. Only a signed manifest, or a lowest version the app accepts, would close that.
+
 #### 4.7.2 Endpoint and manifest
 
 The plugin is configured with a single endpoint:
@@ -287,7 +291,7 @@ The plugin is configured with a single endpoint:
 https://github.com/TheFlipside/shellstation/releases/latest/download/latest.json
 ```
 
-GitHub's `/releases/latest/download/<file>` URL is a 302 to whichever release is tagged "Latest". Re-tagging a previous release as "Latest" is therefore the rollback procedure.
+GitHub's `/releases/latest/download/<file>` URL is a 302 to whichever release is tagged "Latest". Re-tagging a previous release as "Latest" is therefore the rollback procedure. It takes the newer release away from apps that do not have it yet; an app is never taken back to a version below its own. An app that requires a signed version (§4.7.1) is only ever offered releases newer than itself, which the build has signed with their version.
 
 `latest.json` has the format defined by `tauri-plugin-updater` 2.x:
 
@@ -332,7 +336,7 @@ The frontend mounts `UpdateDialog.tsx` once at the app root. On mount it runs a 
 
 The webview is granted three `updater:*` permissions: `allow-check`, `allow-download` and `allow-install`. The update dialog downloads and installs in two calls, because the sessions are closed between them (§4.7.3). `allow-download-and-install`, the one call for both, leaves no moment between and is not granted. Earlier versions granted it and left the two separate ones out, which had no use then. What they add for a hypothetical future webview-side attacker is a download that is kept in memory and not installed, and so any number of them, each a full artifact, until the page is reloaded or the process runs out of memory; the one call already let such an attacker install any update the signing key vouches for, and `app_quit` end the app. The plugin checks the signature in both calls: `install` takes only what `download` has kept, and checks it again. The `process:*` grant is similarly narrowed to `allow-restart` only; `allow-exit` is not needed and is not granted. The opener plugin gets no grant at all: the Help menu opens its links from Rust, and the plugin's injected link-click handler is turned off.
 
-The `check` IPC accepts an optional `proxy` parameter from the webview. The shipping JS never passes one. A future XSS in the webview could theoretically use this to redirect update checks through an attacker-controlled proxy (SSRF / fingerprinting). The mitigation today is that ShellStation has no HTML-rendering surface: terminal output goes through xterm.js's canvas/WebGL renderer (not HTML), the CSP is tight (`script-src 'self'`), and translation strings are rendered as React text nodes. If a future feature ever introduces an HTML sink for untrusted content, the proxy SSRF should be closed by wrapping `check()` in a Rust-side IPC command that doesn't forward the proxy parameter.
+The `check` IPC accepts an optional `proxy` parameter from the webview. The shipping JS never passes one. A future XSS in the webview could theoretically use this to redirect update checks through an attacker-controlled proxy (SSRF / fingerprinting). It also accepts a `target`, by which such a script could ask for another platform's artifact, which is signed all the same and would fail to install or to run. The mitigation today is that ShellStation has no HTML-rendering surface: terminal output goes through xterm.js's canvas/WebGL renderer (not HTML), the CSP is tight (`script-src 'self'`), and translation strings are rendered as React text nodes. If a future feature ever introduces an HTML sink for untrusted content, the proxy SSRF should be closed by wrapping `check()` in a Rust-side IPC command that doesn't forward the proxy parameter.
 
 #### 4.7.6 CI integration
 
@@ -350,6 +354,7 @@ The release pipeline (`.forgejo/workflows/release.yml`) carries the practical in
 | Manifest URL unreachable                  | Auto-check: silent log. Manual: error toast.                                                            |
 | Manifest fetched but no platform match    | Plugin returns `Err(TargetNotFound)`. Auto-check: silent log. Manual: error toast.                      |
 | Artifact downloaded but signature invalid | Plugin returns `Err`. Install is aborted; running binary is untouched.                                  |
+| Signed version missing, or not announced  | Plugin returns `Err` from `download`, as for an invalid signature: nothing installed, generic error.    |
 | Download interrupted mid-stream           | Plugin returns `Err` from `download`. Same outcome as above; partial files are discarded.               |
 | Sessions cannot be closed before install  | Detail goes to the console, and to the application log where the backend refused. The install goes on.  |
 | Install or restart fails after the close  | Generic error dialog. The closed sessions stay closed, and the app may connect again.                   |

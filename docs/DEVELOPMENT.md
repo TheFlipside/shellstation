@@ -1328,6 +1328,8 @@ In the Forgejo workflow log:
 - Each build job should print `Signing <path>.AppImage (or .exe, or .app.tar.gz)` during `tauri build`.
 - The `Generate latest.json (updater manifest)` step should print a non-empty `platforms:` list. If the list is empty, the secrets are not reaching the build step (check spelling, runner scope, etc.).
 
+This shows that the artifacts are signed, not that an app would install them: the manifest of a throwaway tag announces the tag's version, while the build signs for the version in `tauri.conf.json`, and the app refuses an update whose two versions differ ([DESIGN.md §4.7.1](DESIGN.md#471-trust-model)).
+
 Delete the throwaway release and tag afterwards:
 
 ```bash
@@ -1352,7 +1354,7 @@ Skipping the transition release leaves existing installs stranded — they can n
 
 `cargo tauri dev` does not exercise the updater unless you explicitly trigger a check. The auto-check on app launch runs in production-style builds and against the configured endpoint (the GitHub Releases URL), which always returns the latest _real_ release manifest. If you want to test the updater UI against a fake manifest:
 
-1. Spin up a local HTTPS server with a self-signed cert and serve a hand-crafted `latest.json` plus a signed artifact.
+1. Spin up a local HTTPS server with a self-signed cert and serve a hand-crafted `latest.json` plus a signed artifact. Sign it for the version the manifest announces (`tauri signer sign --app-version <version>`), or the app refuses it.
 2. Temporarily change `plugins.updater.endpoints[0]` in `tauri.conf.json` to your local URL.
 3. **Do not commit either change.** Revert before pushing.
 

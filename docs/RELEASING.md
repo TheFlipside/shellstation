@@ -56,6 +56,13 @@ Update the version in **all four** locations to the new `X.Y.Z`:
 | `package.json`              | `version`              |
 | `package-lock.json`         | both top-level entries |
 
+The version in `tauri.conf.json` must be the one of the tag you push in
+step 3. The build signs each updater artifact for the version in
+`tauri.conf.json`, the manifest announces the version of the tag, and the
+app refuses an update whose two versions differ (`requireSignedVersion`,
+see [DESIGN.md §4.7.1](DESIGN.md#471-trust-model)). A release where they
+differ is one no installed app will update to.
+
 Refresh the lock files so they pick up the new version:
 
 ```bash
