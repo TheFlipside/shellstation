@@ -5,6 +5,12 @@ name: Release
 # controls the action's repository, and these jobs hold the key the updates
 # are signed with and the tokens the releases are published with.
 # docs/DEVELOPMENT.md (Updating Dependencies) has how to move to a newer one.
+#
+# No checkout leaves its token in the repository's git config
+# (persist-credentials: false): nothing here uses git after the checkout,
+# and what a job runs afterwards, npm ci and the build scripts among it,
+# could read it there. Whether the runner hands the same token to the
+# steps in their environment as well is the runner's doing, not this file's.
 
 on:
   push:
@@ -17,6 +23,8 @@ jobs:
     steps:
       - name: Checkout
         uses: https://github.com/actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
 
       - name: Reject placeholder updater pubkey
         # Releases shipped with the placeholder pubkey embedded will fail
@@ -63,6 +71,8 @@ jobs:
     steps:
       - name: Checkout
         uses: https://github.com/actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
 
       - name: Verify toolchain
         run: |
@@ -125,6 +135,8 @@ jobs:
     steps:
       - name: Checkout
         uses: https://github.com/actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
 
       - name: Verify toolchain
         shell: powershell
@@ -203,6 +215,8 @@ jobs:
     steps:
       - name: Checkout
         uses: https://github.com/actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
 
       - name: Verify toolchain
         run: |
@@ -264,6 +278,8 @@ jobs:
     steps:
       - name: Checkout
         uses: https://github.com/actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
 
       - name: Verify toolchain
         run: |
@@ -323,6 +339,8 @@ jobs:
     steps:
       - name: Checkout
         uses: https://github.com/actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
 
       - name: Package extras
         run: |
@@ -345,6 +363,8 @@ jobs:
     steps:
       - name: Checkout
         uses: https://github.com/actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
 
       - name: Download Linux artifacts
         uses: https://github.com/actions/download-artifact@9bc31d5ccc31df68ecc42ccf4149144866c47d8a # v3.0.2
