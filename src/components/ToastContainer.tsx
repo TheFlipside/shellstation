@@ -2,15 +2,20 @@ import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useToastStore, type Toast } from "../stores/toastStore";
 import { useSettingsStore } from "../stores/settingsStore";
+import { useDialogOver } from "./DialogKeys";
 
-function ToastItem({ toast }: { toast: Toast }): React.JSX.Element {
+/**
+ * A toast. Its time does not run while it `waits` under a dialog, where it
+ * may be hidden: it starts, in full, once nothing lies over the toast.
+ */
+function ToastItem({ toast, waits }: { toast: Toast; waits: boolean }): React.JSX.Element {
   const removeToast = useToastStore((s) => s.removeToast);
   const autoDismiss = useSettingsStore((s) => s.toastAutoDismiss);
   const dismissSeconds = useSettingsStore((s) => s.toastDismissSeconds);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
-    if (!toast.sticky && autoDismiss && dismissSeconds > 0) {
+    if (!toast.sticky && !waits && autoDismiss && dismissSeconds > 0) {
       timerRef.current = setTimeout(() => {
         removeToast(toast.id);
       }, dismissSeconds * 1000);
@@ -20,7 +25,7 @@ function ToastItem({ toast }: { toast: Toast }): React.JSX.Element {
         clearTimeout(timerRef.current);
       }
     };
-  }, [autoDismiss, dismissSeconds, removeToast, toast.id, toast.sticky]);
+  }, [autoDismiss, dismissSeconds, removeToast, toast.id, toast.sticky, waits]);
 
   return (
     <div className={`toast toast-${toast.level}`}>
@@ -42,15 +47,19 @@ function ToastItem({ toast }: { toast: Toast }): React.JSX.Element {
  * The sticky toasts, or the others, oldest first, in a list that scrolls
  * when it is too tall. With more than one toast in it that may be closed
  * with others, a button above the list, which does not scroll with it,
- * closes those: toasts of this group and no others, and none that is closed
- * alone.
+ * closes those: toasts of this group in this stack and no others, and none
+ * that is closed alone.
  */
 function ToastGroup({
   toasts,
   sticky,
+  layer,
+  waits,
 }: {
   toasts: Toast[];
   sticky: boolean;
+  layer: string | null;
+  waits: boolean;
 }): React.JSX.Element | null {
   const { t } = useTranslation();
   const clearToasts = useToastStore((s) => s.clearToasts);
@@ -104,7 +113,7 @@ function ToastGroup({
           type="button"
           className="toast-close-all"
           onClick={() => {
-            clearToasts(sticky);
+            clearToasts(sticky, layer);
           }}
         >
           {t("common.closeAllNotifications", { count: String(closedTogether) })}
@@ -112,30 +121,91 @@ function ToastGroup({
       )}
       <div ref={listRef} className={scrolls ? "toast-list toast-list-scrolls" : "toast-list"}>
         {toasts.map((toast) => (
-          <ToastItem key={toast.id} toast={toast} />
+          <ToastItem key={toast.id} toast={toast} waits={waits} />
         ))}
       </div>
     </div>
   );
 }
 
+function stopClick(event: React.MouseEvent): void {
+  event.stopPropagation();
+}
+
 /**
- * The stack of toasts. It is never taller than the window: its lists scroll
- * instead, so that every toast can be read and closed.
+ * A stack with toasts in it. It is never taller than the window: its lists
+ * scroll instead, so that every toast can be read and closed.
  *
  * The sticky toasts come first, in a group of their own, whatever came when.
  * However many other toasts arrive, such as an import's warnings, they then
  * neither push a sticky toast out of sight nor are closed together with one.
+ *
+ * While a dialog lies over the stack, it is inert: the pointer does not
+ * reach it through the dialog anyway, and the keyboard must not either. A
+ * button under a dialog would otherwise still take the focus, and with it a
+ * key meant for the dialog.
  */
-export function ToastContainer(): React.JSX.Element | null {
-  const toasts = useToastStore((s) => s.toasts);
-
-  if (toasts.length === 0) return null;
+function ToastStack({
+  toasts,
+  layer,
+}: {
+  toasts: Toast[];
+  layer: string | null;
+}): React.JSX.Element {
+  const stackRef = useRef<HTMLDivElement>(null);
+  const covered = useDialogOver(stackRef);
 
   return (
-    <div className="toast-container">
-      <ToastGroup toasts={toasts.filter((toast) => toast.sticky)} sticky={true} />
-      <ToastGroup toasts={toasts.filter((toast) => !toast.sticky)} sticky={false} />
+    <div
+      ref={stackRef}
+      className="toast-container"
+      inert={covered}
+      // A dialog that closes on a click beside it must not take a click on
+      // one of its own toasts for one.
+      onClick={layer === null ? undefined : stopClick}
+    >
+      <ToastGroup
+        toasts={toasts.filter((toast) => toast.sticky)}
+        sticky={true}
+        layer={layer}
+        waits={covered}
+      />
+      <ToastGroup
+        toasts={toasts.filter((toast) => !toast.sticky)}
+        sticky={false}
+        layer={layer}
+        waits={covered}
+      />
     </div>
   );
+}
+
+/** The toasts of the window's stack (`layer` null) or of one dialog's layer. */
+function ToastsOf({ layer }: { layer: string | null }): React.JSX.Element | null {
+  const toasts = useToastStore((s) => s.toasts);
+  const shown = toasts.filter((toast) => toast.layer === layer);
+
+  // The stack is there only with toasts in it, and asks what lies over it
+  // when it appears.
+  if (shown.length === 0) return null;
+  return <ToastStack toasts={shown} layer={layer} />;
+}
+
+/**
+ * The window's stack of toasts. Every dialog lies above it: its toasts show
+ * dimmed beside a dialog, take no input and wait there, and no toast covers
+ * a dialog or takes a click meant for it. It comes before every dialog in the
+ * document (see `useDialogOver`), so the app renders it first.
+ */
+export function ToastContainer(): React.JSX.Element | null {
+  return <ToastsOf layer={null} />;
+}
+
+/**
+ * The toasts a dialog raised itself, shown over that dialog: in its overlay,
+ * right after its `<DialogKeys>`, so that every dialog opened from it or
+ * lying on top of it covers them as well. See `useToastLayer`.
+ */
+export function ToastLayer({ layer }: { layer: string }): React.JSX.Element | null {
+  return <ToastsOf layer={layer} />;
 }

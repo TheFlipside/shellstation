@@ -226,6 +226,136 @@ describe("DialogKeys enter ownership", () => {
     expect(onKey).toHaveBeenCalledTimes(1);
   });
 
+  it("gives a dialog no Enter that a dialog without a claim on Enter lies over", () => {
+    // A host-key prompt, which accepts on Enter, under a dialog with a form
+    // of its own, as the keyboard-interactive prompt is: the Enter typed
+    // into that form is not the hidden prompt's.
+    const accept = vi.fn();
+    const onKey = vi.fn();
+    render(
+      <>
+        <DialogKeys onEscape={vi.fn()} onEnter={accept} />
+        <div>
+          <DialogKeys onEscape={vi.fn()} />
+          <input
+            data-testid="field"
+            ref={(el) => {
+              el?.addEventListener("keydown", onKey);
+            }}
+          />
+        </div>
+      </>,
+    );
+
+    fireEvent.keyDown(screen.getByTestId("field"), { key: "Enter" });
+
+    expect(accept).not.toHaveBeenCalled();
+    // The key is left alone, for the form to take.
+    expect(onKey).toHaveBeenCalledTimes(1);
+    expect((onKey.mock.calls[0][0] as KeyboardEvent).defaultPrevented).toBe(false);
+  });
+
+  it("gives a dialog no key that a dialog claiming neither key lies over", () => {
+    const below = vi.fn();
+    const onKey = vi.fn();
+    function Scenario({ covered }: { covered: boolean }): React.JSX.Element {
+      return (
+        <>
+          <DialogKeys onEscape={below} onEnter={below} />
+          {covered && ReactDOM.createPortal(<DialogKeys />, document.body)}
+          <TerminalStub onKey={onKey} />
+          <input data-testid="field" />
+        </>
+      );
+    }
+
+    const { rerender } = render(<Scenario covered={true} />);
+    pressEscape();
+    fireEvent.keyDown(screen.getByTestId("field"), { key: "Enter" });
+    expect(below).not.toHaveBeenCalled();
+    expect(onKey).toHaveBeenCalledTimes(1);
+
+    // With the dialog on top gone, the keys are the lower one's again.
+    rerender(<Scenario covered={false} />);
+    pressEscape();
+    fireEvent.keyDown(screen.getByTestId("field"), { key: "Enter" });
+    expect(below).toHaveBeenCalledTimes(2);
+    expect(onKey).toHaveBeenCalledTimes(1);
+  });
+
+  it("takes a held Enter for no second Enter", () => {
+    // Enter confirms a dialog, which closes, and the key is still down: its
+    // repeats must not accept what the dialog under it asks.
+    const accept = vi.fn();
+    const onKey = vi.fn();
+    render(
+      <>
+        <DialogKeys onEnter={accept} />
+        <input
+          data-testid="field"
+          ref={(el) => {
+            el?.addEventListener("keydown", onKey);
+          }}
+        />
+      </>,
+    );
+
+    fireEvent.keyDown(screen.getByTestId("field"), { key: "Enter", repeat: true });
+    expect(accept).not.toHaveBeenCalled();
+    // Nor does it reach a focused button, which it would press.
+    expect(onKey).not.toHaveBeenCalled();
+
+    fireEvent.keyDown(screen.getByTestId("field"), { key: "Enter" });
+    expect(accept).toHaveBeenCalledTimes(1);
+  });
+
+  it("makes the box of a dialog inert while another dialog lies over it", () => {
+    function Dialog({
+      name,
+      children,
+    }: {
+      name: string;
+      children?: React.ReactNode;
+    }): React.JSX.Element {
+      return (
+        <div className="dialog-overlay">
+          <DialogKeys onEscape={vi.fn()} />
+          <div className="dialog" data-testid={name}>
+            <button type="button">Accept</button>
+          </div>
+          {children}
+        </div>
+      );
+    }
+    function Scenario({ top, nested }: { top: boolean; nested: boolean }): React.JSX.Element {
+      return (
+        <>
+          <Dialog name="host-key" />
+          <Dialog name="settings">{nested && <Dialog name="nested" />}</Dialog>
+          {top && ReactDOM.createPortal(<Dialog name="update" />, document.body)}
+        </>
+      );
+    }
+
+    const { rerender } = render(<Scenario top={false} nested={false} />);
+    // The later of two is on top.
+    expect(screen.getByTestId("host-key")).toHaveAttribute("inert");
+    expect(screen.getByTestId("settings")).not.toHaveAttribute("inert");
+
+    // A dialog opened inside an overlay lies over that dialog's box alone.
+    rerender(<Scenario top={false} nested={true} />);
+    expect(screen.getByTestId("settings")).toHaveAttribute("inert");
+    expect(screen.getByTestId("nested")).not.toHaveAttribute("inert");
+
+    rerender(<Scenario top={true} nested={true} />);
+    expect(screen.getByTestId("nested")).toHaveAttribute("inert");
+    expect(screen.getByTestId("update")).not.toHaveAttribute("inert");
+
+    rerender(<Scenario top={false} nested={false} />);
+    expect(screen.getByTestId("host-key")).toHaveAttribute("inert");
+    expect(screen.getByTestId("settings")).not.toHaveAttribute("inert");
+  });
+
   it("leaves Enter alone while an IME is composing", () => {
     const onEnter = vi.fn();
     render(

@@ -1,6 +1,7 @@
 import React, { useEffect, useRef } from "react";
 import ReactDOM from "react-dom";
 import { useTranslation } from "react-i18next";
+import { DialogKeys } from "./DialogKeys";
 
 /**
  * Shown while the app closes its sessions before it quits: the backend tells
@@ -33,6 +34,9 @@ export function QuittingOverlay(): React.JSX.Element {
 
   return ReactDOM.createPortal(
     <div className="dialog-overlay dialog-overlay-quitting" role="presentation">
+      {/* The keys are swallowed above; the marker says that this lies over
+          every other dialog and every toast. */}
+      <DialogKeys />
       <div
         ref={dialogRef}
         className="dialog"

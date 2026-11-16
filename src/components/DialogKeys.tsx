@@ -1,4 +1,4 @@
-import React, { useEffect, useLayoutEffect, useRef } from "react";
+import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 /**
  * Escape / Enter handling for modal surfaces.
@@ -38,6 +38,19 @@ import React, { useEffect, useLayoutEffect, useRef } from "react";
  * take Enter from the dialog the user is actually looking at. For the host-key
  * prompt that means silently accepting an unseen key (TOFU) on a keystroke
  * meant for something else, so ownership follows what is painted on top.
+ *
+ * The dialog on top need not claim the key. `KbdInteractiveDialog` takes no
+ * Enter of its own, which its form is for, and `UpdateDialog` takes none
+ * either: a host-key prompt under one of them must not get the Enter typed
+ * into the dialog the user sees. So a claim counts only while no dialog lies
+ * over it, whatever that dialog claims, and the key is then left alone.
+ *
+ * For that the marker also says that a dialog is open at all, and where, so
+ * every dialog renders this, also one that takes neither key, as a direct
+ * child of its `.dialog-overlay`, beside the `.dialog` box. That box is made
+ * inert while another dialog lies over it (see `DialogKeys`). The toasts go
+ * by the markers as well (`useDialogOver`): a stack of them that a dialog
+ * lies over takes no input and lets no toast's time run.
  */
 
 /** One dialog's claim on a key: the handler plus where it sits in the DOM. */
@@ -52,11 +65,43 @@ interface KeyChannel {
   attached: boolean;
 }
 
+/** The markers of the dialogs that are open. */
+const markers = new Set<HTMLElement>();
+/** Called when a dialog opens or closes. */
+const markerListeners = new Set<() => void>();
+
+function markersChanged(): void {
+  for (const listener of [...markerListeners]) listener();
+}
+
+/**
+ * Whether a dialog lies over `element`: one whose marker comes after it in
+ * the document. That is the order dialogs are painted in (see above). For a
+ * dialog's own marker it says whether another dialog is on top of it. A
+ * stack of toasts is painted under every dialog that follows it: the window's
+ * stack comes before every dialog, and a dialog's own layer right after that
+ * dialog's marker, before any dialog opened from it.
+ */
+function dialogOver(element: HTMLElement | null): boolean {
+  if (element === null) return false;
+  for (const marker of markers) {
+    if (
+      marker.isConnected &&
+      (element.compareDocumentPosition(marker) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
 /**
  * The callback of the visually topmost claim — the one whose anchor comes
  * last in document order. Claims whose anchor is missing or detached are
  * skipped, and no claim at all means the key is left alone: passing a
- * keystroke through is always safer than swallowing it.
+ * keystroke through is always safer than swallowing it. So is a topmost
+ * claim that a dialog lies over, one that does not claim this key: the key
+ * is that dialog's to leave alone, not the hidden one's to take.
  */
 function topClaim(channel: KeyChannel): (() => void) | undefined {
   let top: Claim | undefined;
@@ -71,7 +116,8 @@ function topClaim(channel: KeyChannel): (() => void) | undefined {
       top = claim;
     }
   }
-  return top?.callback.current;
+  if (top === undefined || dialogOver(top.anchor.current)) return undefined;
+  return top.callback.current;
 }
 
 function handleEscapeKeyDown(event: KeyboardEvent): void {
@@ -94,6 +140,10 @@ function handleEnterKeyDown(event: KeyboardEvent): void {
   if (claim === undefined) return;
   event.preventDefault();
   event.stopPropagation();
+  // A key held down is one Enter, for the dialog it was pressed in. When
+  // that dialog closes on it, the repeats would go to the one under it: a
+  // confirmation's Enter must not also accept a host key.
+  if (event.repeat) return;
   claim();
 }
 
@@ -153,6 +203,27 @@ function useKeyClaim(
   }, [channel, claimed]);
 }
 
+/**
+ * Whether a dialog lies over the element, kept up to date as dialogs open
+ * and close. The element is there for as long as the caller is mounted.
+ */
+export function useDialogOver(element: { current: HTMLElement | null }): boolean {
+  const [over, setOver] = useState(false);
+  // A layout effect, as the markers are set in one: what is painted first
+  // already has the answer.
+  useLayoutEffect(() => {
+    const check = (): void => {
+      setOver(dialogOver(element.current));
+    };
+    check();
+    markerListeners.add(check);
+    return () => {
+      markerListeners.delete(check);
+    };
+  }, [element]);
+  return over;
+}
+
 interface DialogKeysProps {
   /** Called on Escape while this is the topmost dialog. */
   onEscape?: () => void;
@@ -170,5 +241,34 @@ export function DialogKeys({ onEscape, onEnter }: DialogKeysProps): React.JSX.El
   const anchor = useRef<HTMLSpanElement | null>(null);
   useKeyClaim(escapeChannel, onEscape, anchor);
   useKeyClaim(enterChannel, onEnter, anchor);
+  useLayoutEffect(() => {
+    const marker = anchor.current;
+    if (marker === null) return undefined;
+    markers.add(marker);
+    markersChanged();
+    return () => {
+      markers.delete(marker);
+      markersChanged();
+    };
+  }, []);
+
+  // A dialog that another lies over takes no input: its box is inert. No
+  // dialog keeps the focus to itself, so a button of this one can still have
+  // it when another dialog appears on top, and Enter or Space typed there,
+  // which no claim is asked about, would press it unseen: Accept, of a host
+  // key prompt. The box is the `.dialog` beside the marker. What else the
+  // overlay holds stays as it is: a dialog opened inside it, which is the
+  // one on top, and the dialog's own toasts, which see to themselves.
+  //
+  // After every render, since the dialog may have rendered another box.
+  const covered = useDialogOver(anchor);
+  useLayoutEffect(() => {
+    const overlay = anchor.current?.parentElement;
+    if (!overlay) return;
+    for (const child of overlay.children) {
+      if (child.classList.contains("dialog")) child.toggleAttribute("inert", covered);
+    }
+  });
+
   return <span ref={anchor} hidden data-dialog-keys="" />;
 }

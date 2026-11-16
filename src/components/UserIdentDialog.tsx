@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
 import { useAppStore } from "../stores/appStore";
+import { DialogKeys } from "./DialogKeys";
 
 interface UserIdentDialogProps {
   onDone: () => void;
@@ -45,6 +46,8 @@ export function UserIdentDialog({ onDone }: UserIdentDialogProps): React.JSX.Ele
 
   return (
     <div className="dialog-overlay" role="presentation">
+      {/* It takes neither key, but the toasts go by the marker. */}
+      <DialogKeys />
       <div
         className="dialog"
         onClick={(e) => {

@@ -18,10 +18,11 @@ import {
   type HighlightProfile,
   type HighlightRule,
 } from "../stores/highlightStore";
-import { useToastStore } from "../stores/toastStore";
+import { useToastLayer } from "../hooks/useToastLayer";
 import { HighlightProfileDialog } from "./HighlightProfileDialog";
 import { CustomSelect } from "./CustomSelect";
 import { ConfirmDialog } from "./ConfirmDialog";
+import { ToastLayer } from "./ToastContainer";
 import {
   DataExportDialog,
   DataImportDialog,
@@ -50,11 +51,6 @@ import {
 
 // eslint-disable-next-line @typescript-eslint/no-empty-function
 const noop = (): void => {};
-
-/** A setting the backend keeps could not be loaded from it or saved there. */
-function reportBackendError(err: unknown): void {
-  useToastStore.getState().addToast(String(err), "error");
-}
 
 const AVAILABLE_LANGUAGES = [
   { code: "en", label: "English" },
@@ -130,6 +126,15 @@ interface SettingsDialogProps {
 
 export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Element {
   const { t, i18n } = useTranslation();
+  // What Settings reports while it is open is shown over it.
+  const { layer, addToast } = useToastLayer();
+  /** A setting the backend keeps could not be loaded from it or saved there. */
+  const reportBackendError = useCallback(
+    (err: unknown): void => {
+      addToast(String(err), "error");
+    },
+    [addToast],
+  );
   const {
     language,
     setLanguage,
@@ -266,9 +271,9 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
         userIdentSavedTimer.current = null;
       }, 3000);
     } catch (err: unknown) {
-      useToastStore.getState().addToast(String(err));
+      addToast(String(err));
     }
-  }, [userIdentInput]);
+  }, [addToast, userIdentInput]);
 
   const [importProgress, setImportProgress] = useState<{
     phase: string;
@@ -330,7 +335,7 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
       // whole file is read into memory and sent over IPC.
       const MAX_HIGHLIGHT_IMPORT_SIZE = 10 * 1024 * 1024;
       if (file.size > MAX_HIGHLIGHT_IMPORT_SIZE) {
-        useToastStore.getState().addToast(t("highlighting.importTooLarge"), "error");
+        addToast(t("highlighting.importTooLarge"), "error");
         return;
       }
       try {
@@ -340,7 +345,7 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
           { content: text },
         );
         await loadHighlightProfiles();
-        useToastStore.getState().addToast(
+        addToast(
           t("highlighting.importSuccess", {
             count: String(result.profiles_created),
             rules: String(result.total_rules),
@@ -348,10 +353,10 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
           "success",
         );
       } catch (e) {
-        useToastStore.getState().addToast(String(e), "error");
+        addToast(String(e), "error");
       }
     })();
-  }, [loadHighlightProfiles, t]);
+  }, [addToast, loadHighlightProfiles, t]);
 
   useEffect(() => {
     invoke<AppConfig>("db_get_config")
@@ -378,7 +383,7 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
     loadConnectionSettings().then(() => {
       setConnectionLoaded(true);
     }, reportBackendError);
-  }, []);
+  }, [reportBackendError]);
 
   // Load logging config from backend on mount
   useEffect(() => {
@@ -636,16 +641,16 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
     // the whole file is read into memory and sent over IPC.
     const MAX_SIZE = 100 * 1024 * 1024;
     if (file.size > MAX_SIZE) {
-      useToastStore.getState().addToast(t("settings.importTooLarge"));
+      addToast(t("settings.importTooLarge"));
       return null;
     }
     try {
       return await file.text();
     } catch (e) {
-      useToastStore.getState().addToast(String(e));
+      addToast(String(e));
       return null;
     }
-  }, [t]);
+  }, [addToast, t]);
 
   /** Import the sessions of an mRemoteNG or SecureCRT file, with progress and a summary. */
   const runSessionImport = useCallback(
@@ -673,20 +678,18 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
           parts.push(`${String(result.skipped)} skipped`);
         }
         await useSessionStore.getState().loadAll();
-        useToastStore
-          .getState()
-          .addToast(t("settings.importSuccess", { summary: parts.join(", ") }), "success");
+        addToast(t("settings.importSuccess", { summary: parts.join(", ") }), "success");
         for (const w of result.warnings) {
-          useToastStore.getState().addToast(w, "warning");
+          addToast(w, "warning");
         }
       } catch (e) {
-        useToastStore.getState().addToast(String(e));
+        addToast(String(e));
       } finally {
         if (unlisten) unlisten();
         setImportProgress(null);
       }
     },
-    [t],
+    [addToast, t],
   );
 
   const handleImportMremoteng = useCallback((): void => {
@@ -707,15 +710,15 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
         if (hasSecureCrtContent(file)) {
           setSecureCrtFile(file);
         } else {
-          useToastStore.getState().addToast(t("settings.secureCrtNothingToImport"));
+          addToast(t("settings.secureCrtNothingToImport"));
         }
       } catch (e) {
-        useToastStore.getState().addToast(String(e));
+        addToast(String(e));
       } finally {
         setImportProgress(null);
       }
     })();
-  }, [pickExternalFile, t]);
+  }, [addToast, pickExternalFile, t]);
 
   const handleSecureCrtImport = useCallback(
     async (file: SecureCrtFile, selection: SecureCrtSelection): Promise<void> => {
@@ -726,7 +729,7 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
       try {
         const result = importSecureCrtButtons(file, selection);
         if (result === null) return;
-        useToastStore.getState().addToast(
+        addToast(
           t("settings.dataImportedCommandButtons", {
             added: result.added,
             skipped: result.skipped,
@@ -734,10 +737,10 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
           "success",
         );
         for (const w of result.warnings) {
-          useToastStore.getState().addToast(w, "warning");
+          addToast(w, "warning");
         }
       } catch (e) {
-        useToastStore.getState().addToast(
+        addToast(
           t("settings.dataSectionFailed", {
             section: t("settings.dataSectionCommandButtons"),
             error: errorText(e),
@@ -745,7 +748,7 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
         );
       }
     },
-    [runSessionImport, t],
+    [addToast, runSessionImport, t],
   );
 
   // Clear sensitive fields from state when the dialog unmounts.
@@ -758,8 +761,13 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
   return (
     <div className="dialog-overlay" role="presentation">
       <DialogKeys onEscape={onClose} />
+      <ToastLayer layer={layer} />
       {importProgress && (
         <div className="dialog-overlay" style={{ zIndex: 10000 }} role="presentation">
+          {/* It takes neither key, but lies over Settings and its toasts:
+              Escape must not close Settings under it, and a toast must not
+              run out of time there. */}
+          <DialogKeys />
           <div className="dialog" style={{ minWidth: 320, textAlign: "center" }}>
             <div className="dialog-title">
               {t("settings.importInProgress", { defaultValue: "Importing…" })}

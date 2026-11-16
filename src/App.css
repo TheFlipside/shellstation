@@ -481,6 +481,11 @@ body,
 
 /* ── Dialog / Modal ──────────────────────────────────────────────── */
 
+/* Every dialog has the same z-index, so the one that comes last in the
+   document is on top (see DialogKeys.tsx). It is above the toasts
+   (.toast-container), which must stay below it. Two overlays have a higher
+   one: the quitting overlay below, and the progress of an import, which is
+   inside the overlay of Settings and so above what is in that alone. */
 .dialog-overlay {
   position: fixed;
   inset: 0;
@@ -762,7 +767,8 @@ body,
 }
 
 /* While the app closes its sessions before quitting: above everything,
-   toasts included, since nothing else can be used any more. */
+   every other dialog and the toasts a dialog shows included, since nothing
+   else can be used any more. */
 .dialog-overlay-quitting {
   z-index: 10000;
 }
@@ -1324,12 +1330,20 @@ body,
 
    Only the toasts and the buttons take the pointer. The room around them is
    the stack's as well, and lies over the tab bar and a terminal's scroll
-   bar, but a click there goes to what is under it. */
+   bar, but a click there goes to what is under it.
+
+   The stack lies under every dialog (.dialog-overlay, 100): a toast can hold
+   text from a file or a host, and must neither cover a dialog nor take a
+   click meant for one. It shows dimmed beside the dialog, through the
+   overlay. The same goes for the stack a dialog shows in its own overlay,
+   with the toasts that dialog raised: it lies over that dialog's box, and
+   under a dialog opened inside the overlay. A menu (200, 300) lies over the
+   toasts for as long as it is open. */
 .toast-container {
   position: fixed;
   top: 0;
   right: 0;
-  z-index: 9999;
+  z-index: 90;
   display: flex;
   flex-direction: column;
   max-width: 452px;

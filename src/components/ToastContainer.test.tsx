@@ -4,13 +4,20 @@
  * toasts are a group of their own, above the others: each group has a button
  * that closes its toasts once there is more than one, and only the list of
  * the others scrolls to a new toast.
+ *
+ * Every dialog lies above the toasts. Under one, a stack takes no input and
+ * no toast's time runs. What a dialog raises itself is shown over it.
  */
+import React from "react";
+import ReactDOM from "react-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
+import { useToastLayer, type ToastLayerHandle } from "../hooks/useToastLayer";
 import i18n from "../i18n";
 import { useSettingsStore } from "../stores/settingsStore";
 import { useToastStore } from "../stores/toastStore";
-import { ToastContainer } from "./ToastContainer";
+import { DialogKeys } from "./DialogKeys";
+import { ToastContainer, ToastLayer } from "./ToastContainer";
 
 // The settings store imports invoke; nothing here may reach a backend.
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
@@ -214,5 +221,291 @@ describe("ToastContainer", () => {
       window.dispatchEvent(new Event("resize"));
     });
     expect(list).not.toHaveClass("toast-list-scrolls");
+  });
+});
+
+/** A dialog that raises no toasts, as most do not. */
+function Prompt({ name }: { name: string }): React.JSX.Element {
+  return (
+    <div className="dialog-overlay" data-testid={name}>
+      <DialogKeys />
+      <div className="dialog" />
+    </div>
+  );
+}
+
+/** What the dialog below raises its toasts with. */
+let raise: ToastLayerHandle["addToast"];
+
+/** A dialog that shows its own toasts, as Settings does, and closes on a click beside it. */
+function Manager({
+  onClose,
+  children,
+}: {
+  onClose?: () => void;
+  children?: React.ReactNode;
+}): React.JSX.Element {
+  const { layer, addToast } = useToastLayer();
+  raise = addToast;
+  return (
+    <div className="dialog-overlay" data-testid="manager" onClick={onClose} role="presentation">
+      <DialogKeys />
+      <ToastLayer layer={layer} />
+      <div className="dialog" />
+      {children}
+    </div>
+  );
+}
+
+function raiseOwn(message: string): void {
+  act(() => {
+    raise(message);
+  });
+}
+
+/** The stack a toast is shown in. */
+function stackOf(message: string): HTMLElement {
+  const stack = screen.getByText(message).closest<HTMLElement>(".toast-container");
+  if (stack === null) throw new Error("the toast is in no stack");
+  return stack;
+}
+
+describe("ToastContainer and dialogs", () => {
+  it("lets no time run under a dialog, and all of it once the dialog is gone", () => {
+    const { rerender } = render(
+      <>
+        <ToastContainer />
+      </>,
+    );
+    show("passing");
+    act(() => {
+      vi.advanceTimersByTime(3000);
+    });
+
+    rerender(
+      <>
+        <ToastContainer />
+        <Prompt name="host-key" />
+      </>,
+    );
+    expect(stackOf("passing")).toHaveAttribute("inert");
+    act(() => {
+      vi.advanceTimersByTime(60_000);
+    });
+    expect(screen.getByText("passing")).toBeInTheDocument();
+
+    rerender(
+      <>
+        <ToastContainer />
+      </>,
+    );
+    expect(stackOf("passing")).not.toHaveAttribute("inert");
+    act(() => {
+      vi.advanceTimersByTime(4999);
+    });
+    expect(screen.getByText("passing")).toBeInTheDocument();
+    act(() => {
+      vi.advanceTimersByTime(1);
+    });
+    expect(screen.queryByText("passing")).not.toBeInTheDocument();
+  });
+
+  it("puts a toast that arrives under a dialog into a stack that waits", () => {
+    render(
+      <>
+        <ToastContainer />
+        <Prompt name="host-key" />
+      </>,
+    );
+    show("import warning");
+    expect(stackOf("import warning")).toHaveAttribute("inert");
+    expect(within(screen.getByTestId("host-key")).queryByText("import warning")).toBeNull();
+    act(() => {
+      vi.advanceTimersByTime(60_000);
+    });
+    expect(screen.getByText("import warning")).toBeInTheDocument();
+  });
+
+  it("waits under a dialog that is rendered into the body, as a confirmation is", () => {
+    const { rerender } = render(
+      <>
+        <ToastContainer />
+        <Manager />
+      </>,
+    );
+    show("connection failed");
+    raiseOwn("delete failed");
+    expect(stackOf("delete failed")).not.toHaveAttribute("inert");
+
+    rerender(
+      <>
+        <ToastContainer />
+        <Manager>{ReactDOM.createPortal(<Prompt name="confirm" />, document.body)}</Manager>
+      </>,
+    );
+    expect(stackOf("connection failed")).toHaveAttribute("inert");
+    expect(stackOf("delete failed")).toHaveAttribute("inert");
+
+    rerender(
+      <>
+        <ToastContainer />
+        <Manager />
+      </>,
+    );
+    expect(stackOf("delete failed")).not.toHaveAttribute("inert");
+  });
+
+  it("shows a dialog's toasts over it in StrictMode, which mounts the dialog twice", () => {
+    render(
+      <React.StrictMode>
+        <ToastContainer />
+        <Manager />
+      </React.StrictMode>,
+    );
+    raiseOwn("save failed");
+    expect(within(screen.getByTestId("manager")).getByText("save failed")).toBeInTheDocument();
+    expect(useToastStore.getState().layers).toHaveLength(1);
+  });
+
+  it("shows what a dialog raises over that dialog, and nothing else there", () => {
+    render(
+      <>
+        <ToastContainer />
+        <Manager />
+      </>,
+    );
+    raiseOwn("save failed");
+    show("connection failed");
+
+    const manager = screen.getByTestId("manager");
+    expect(within(manager).getByText("save failed")).toBeInTheDocument();
+    expect(within(manager).queryByText("connection failed")).toBeNull();
+    // Its own dialog does not lie over it: it can be used, and its time runs.
+    expect(stackOf("save failed")).not.toHaveAttribute("inert");
+    expect(stackOf("connection failed")).toHaveAttribute("inert");
+
+    act(() => {
+      vi.advanceTimersByTime(5000);
+    });
+    expect(screen.queryByText("save failed")).not.toBeInTheDocument();
+    expect(screen.getByText("connection failed")).toBeInTheDocument();
+  });
+
+  it("covers a dialog's toasts with a dialog on top of it, not with one under it", () => {
+    const { rerender } = render(
+      <>
+        <ToastContainer />
+        <Prompt name="under" />
+        <Manager />
+      </>,
+    );
+    raiseOwn("save failed");
+    expect(stackOf("save failed")).not.toHaveAttribute("inert");
+
+    // A host key prompt arrives on top.
+    rerender(
+      <>
+        <ToastContainer />
+        <Prompt name="under" />
+        <Manager />
+        <Prompt name="host-key" />
+      </>,
+    );
+    expect(stackOf("save failed")).toHaveAttribute("inert");
+    expect(within(screen.getByTestId("host-key")).queryByText("save failed")).toBeNull();
+    act(() => {
+      vi.advanceTimersByTime(60_000);
+    });
+    expect(screen.getByText("save failed")).toBeInTheDocument();
+  });
+
+  it("covers a dialog's toasts with a dialog opened inside its overlay", () => {
+    const { rerender } = render(<Manager />);
+    raiseOwn("save failed");
+    rerender(
+      <Manager>
+        <Prompt name="nested" />
+      </Manager>,
+    );
+    expect(stackOf("save failed")).toHaveAttribute("inert");
+  });
+
+  it("hands a closing dialog's toasts to the window's stack, with their time in full", () => {
+    const { rerender, container } = render(
+      <>
+        <ToastContainer />
+        <Manager />
+      </>,
+    );
+    raiseOwn("imported");
+    act(() => {
+      vi.advanceTimersByTime(4000);
+    });
+
+    rerender(
+      <>
+        <ToastContainer />
+      </>,
+    );
+    expect(container.querySelectorAll(".toast-container")).toHaveLength(1);
+    expect(stackOf("imported")).not.toHaveAttribute("inert");
+    act(() => {
+      vi.advanceTimersByTime(4999);
+    });
+    expect(screen.getByText("imported")).toBeInTheDocument();
+    act(() => {
+      vi.advanceTimersByTime(1);
+    });
+    expect(screen.queryByText("imported")).not.toBeInTheDocument();
+  });
+
+  it("shows what a dialog reports after it has closed in the window's stack", () => {
+    const { rerender } = render(
+      <>
+        <ToastContainer />
+        <Manager />
+      </>,
+    );
+    rerender(
+      <>
+        <ToastContainer />
+      </>,
+    );
+    raiseOwn("import done");
+    expect(useToastStore.getState().toasts.map((t) => t.layer)).toEqual([null]);
+    expect(screen.getByText("import done")).toBeInTheDocument();
+  });
+
+  it("does not take a click on a dialog's toast for a click beside the dialog", () => {
+    const onClose = vi.fn();
+    render(<Manager onClose={onClose} />);
+    raiseOwn("delete failed");
+    fireEvent.click(screen.getByText("delete failed"));
+    fireEvent.click(screen.getByRole("button", { name: "×" }));
+    expect(screen.queryByText("delete failed")).not.toBeInTheDocument();
+    expect(onClose).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByTestId("manager"));
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("closes the toasts of one stack with that stack's button", () => {
+    render(
+      <>
+        <ToastContainer />
+        <Manager />
+      </>,
+    );
+    raiseOwn("warning a");
+    raiseOwn("warning b");
+    show("connection failed");
+    show("connection failed again");
+
+    const manager = screen.getByTestId("manager");
+    fireEvent.click(within(manager).getByRole("button", { name: "Close all (2)" }));
+    expect(useToastStore.getState().toasts.map((t) => t.message)).toEqual([
+      "connection failed",
+      "connection failed again",
+    ]);
   });
 });

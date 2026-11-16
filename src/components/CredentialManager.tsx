@@ -6,8 +6,9 @@ import {
   useCredentialProfilesStore,
   type CredentialProfile,
 } from "../stores/credentialProfilesStore";
-import { useToastStore } from "../stores/toastStore";
+import { useToastLayer } from "../hooks/useToastLayer";
 import { ConfirmDialog } from "./ConfirmDialog";
+import { ToastLayer } from "./ToastContainer";
 import { CustomSelect } from "./CustomSelect";
 
 // eslint-disable-next-line @typescript-eslint/no-empty-function
@@ -45,7 +46,8 @@ export function CredentialManager({ onClose }: CredentialManagerProps): React.JS
   const [edit, setEdit] = useState<EditState | null>(null);
   const [error, setError] = useState("");
   const [confirmDelete, setConfirmDelete] = useState<CredentialProfile | null>(null);
-  const addToast = useToastStore((s) => s.addToast);
+  // What this dialog reports while it is open is shown over it.
+  const { layer, addToast } = useToastLayer();
 
   // ESC closes the inline edit form if open, otherwise closes the whole
   // manager. ConfirmDialog handles its own ESC via the shared stack.
@@ -144,6 +146,7 @@ export function CredentialManager({ onClose }: CredentialManagerProps): React.JS
   return (
     <div className="dialog-overlay" onClick={onClose} role="presentation">
       <DialogKeys onEscape={handleEscape} />
+      <ToastLayer layer={layer} />
       <div
         className="dialog dialog-wide"
         onClick={(e) => {

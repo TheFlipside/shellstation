@@ -6,8 +6,9 @@ import {
   type LoginSequence,
   type LoginSequenceStep,
 } from "../stores/loginSequenceStore";
-import { useToastStore } from "../stores/toastStore";
+import { useToastLayer } from "../hooks/useToastLayer";
 import { ConfirmDialog } from "./ConfirmDialog";
+import { ToastLayer } from "./ToastContainer";
 
 interface LoginSequenceManagerProps {
   onClose: () => void;
@@ -41,7 +42,8 @@ export function LoginSequenceManager({ onClose }: LoginSequenceManagerProps): Re
   const [edit, setEdit] = useState<EditState | null>(null);
   const [error, setError] = useState("");
   const [confirmDelete, setConfirmDelete] = useState<LoginSequence | null>(null);
-  const addToast = useToastStore((s) => s.addToast);
+  // What this dialog reports while it is open is shown over it.
+  const { layer, addToast } = useToastLayer();
 
   const handleEscape = useCallback(() => {
     if (confirmDelete !== null) return;
@@ -151,6 +153,7 @@ export function LoginSequenceManager({ onClose }: LoginSequenceManagerProps): Re
   return (
     <div className="dialog-overlay" onClick={onClose} role="presentation">
       <DialogKeys onEscape={handleEscape} />
+      <ToastLayer layer={layer} />
       <div
         className="dialog dialog-wide"
         onClick={(e) => {
