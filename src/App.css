@@ -1335,9 +1335,8 @@ body,
    The stack lies under every dialog (.dialog-overlay, 100): a toast can hold
    text from a file or a host, and must neither cover a dialog nor take a
    click meant for one. It shows dimmed beside the dialog, through the
-   overlay. The same goes for the stack a dialog shows in its own overlay,
-   with the toasts that dialog raised: it lies over that dialog's box, and
-   under a dialog opened inside the overlay. A menu (200, 300) lies over the
+   overlay. What a dialog raises itself is not in this stack but in a strip
+   of the dialog's own (.toast-strip). A menu (200, 300) lies over the
    toasts for as long as it is open. */
 .toast-container {
   position: fixed;
@@ -1350,6 +1349,79 @@ body,
   max-height: 100vh;
   padding-top: 8px;
   pointer-events: none;
+}
+
+/* ── A dialog's own messages ──────────────────────────────────── */
+
+/* A dialog that raises toasts while it is open (Settings, the two managers)
+   shows them in a strip on top of its box. The overlay lays the two out one
+   above the other, so the strip covers nothing of the dialog: the box moves
+   down and gives up height as the strip grows, and the two are never taller
+   than the window together. They are of one width, the widest a dialog of
+   this kind gets, whatever the box holds. */
+.dialog-overlay-messages {
+  flex-direction: column;
+}
+
+.dialog-overlay-messages > .dialog,
+.toast-strip {
+  width: 520px;
+  max-width: 100%;
+  /* Not the least width of a dialog of this kind (.dialog-wide), which is
+     more than a small window has at a large UI scale: what does not fit
+     beside the middle of the overlay cannot be scrolled to. */
+  min-width: 0;
+}
+
+/* The box gives up height, and scrolls what it holds, as it always has. */
+.dialog-overlay-messages > .dialog {
+  flex: 0 1 auto;
+  min-height: 0;
+}
+
+/* The strip keeps its height, up to about a third of the window's, where
+   its lists scroll. It looks like the top of the box under it. */
+.toast-strip {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  max-height: calc(34vh / var(--ui-zoom, 1));
+  background: var(--color-surface0);
+  border: 1px solid var(--color-surface1);
+  border-bottom: none;
+  border-radius: 8px 8px 0 0;
+  /* In a window too low for a button and a line, nothing leaves the strip. */
+  overflow: hidden;
+  zoom: var(--ui-zoom, 1);
+}
+
+.toast-strip ~ .dialog {
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+}
+
+.toast-strip .toast-group-sticky {
+  max-height: calc(17vh / var(--ui-zoom, 1));
+}
+
+.toast-strip .toast-group-sticky:last-child {
+  max-height: none;
+}
+
+.toast-strip .toast-close-all {
+  margin: 8px 12px 0;
+  box-shadow: none;
+}
+
+.toast-strip .toast-list {
+  padding: 8px 12px;
+}
+
+/* A toast of the strip is a line of the dialog: it neither slides in from
+   the window's edge nor floats. */
+.toast-strip .toast {
+  box-shadow: none;
+  animation: none;
 }
 
 /* The sticky toasts, or the others: a button that closes them, above a list

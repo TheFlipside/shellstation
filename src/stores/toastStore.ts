@@ -15,7 +15,7 @@ export interface Toast {
    */
   closeAlone: boolean;
   /**
-   * The open dialog that raised it and shows it over itself, or null for the
+   * The open dialog that raised it and shows it with itself, or null for the
    * window's own stack, which lies under every dialog.
    */
   layer: string | null;
@@ -68,10 +68,10 @@ interface ToastState {
    *
    * A dialog lies above the window's stack of toasts, so that no toast can
    * cover a dialog or take a click meant for it: the host key prompt is a
-   * dialog, and a toast can hold text from a file or a host. The one toast
-   * that may lie over a dialog is one that dialog raised itself, as Settings
-   * does for an error. It is shown in the dialog's own layer, which any
-   * dialog on top of that one covers in turn.
+   * dialog, and a toast can hold text from a file or a host. A toast that a
+   * dialog raises itself, as Settings does for an error, would be hidden
+   * under it. It is shown in a strip on top of that dialog's box, which
+   * covers nothing and which any dialog on top of that one covers in turn.
    */
   layers: string[];
   addToast: (message: string, level?: ToastLevel, options?: ToastOptions) => string;

@@ -12,9 +12,11 @@ export interface ToastLayerHandle {
  * For a dialog that raises toasts while it stays open: Settings and the two
  * managers. A dialog lies above the window's toasts, so one it raised would
  * be under it, dimmed and partly hidden behind it. A toast raised through
- * this hook is shown in the dialog's own layer instead, which the dialog
- * renders with `<ToastLayer layer={layer} />` in its overlay, right after its
- * `<DialogKeys>`.
+ * this hook is shown with the dialog instead, in a strip on top of its box,
+ * which the dialog renders with `<ToastLayer layer={layer} />` in its
+ * overlay, right after its `<DialogKeys>`. The overlay gets the class
+ * `dialog-overlay-messages`. No toast floats over a dialog: the strip is
+ * part of the overlay's layout and covers nothing.
  *
  * Only what the dialog itself reports goes through here. A toast from
  * anywhere else, such as a tab's failed connect while the dialog is open, is

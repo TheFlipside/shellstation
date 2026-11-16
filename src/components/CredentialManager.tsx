@@ -46,7 +46,7 @@ export function CredentialManager({ onClose }: CredentialManagerProps): React.JS
   const [edit, setEdit] = useState<EditState | null>(null);
   const [error, setError] = useState("");
   const [confirmDelete, setConfirmDelete] = useState<CredentialProfile | null>(null);
-  // What this dialog reports while it is open is shown over it.
+  // What this dialog reports while it is open is shown in a strip on top of it.
   const { layer, addToast } = useToastLayer();
 
   // ESC closes the inline edit form if open, otherwise closes the whole
@@ -144,7 +144,7 @@ export function CredentialManager({ onClose }: CredentialManagerProps): React.JS
   const needsPassword = edit?.authType === "password";
 
   return (
-    <div className="dialog-overlay" onClick={onClose} role="presentation">
+    <div className="dialog-overlay dialog-overlay-messages" onClick={onClose} role="presentation">
       <DialogKeys onEscape={handleEscape} />
       <ToastLayer layer={layer} />
       <div

@@ -212,7 +212,7 @@ function watchBehind(): void {
  * the document. That is the order dialogs are painted in (see above). For a
  * dialog's own marker it says whether another dialog is on top of it. A
  * stack of toasts is painted under every dialog that follows it: the window's
- * stack comes before every dialog, and a dialog's own layer right after that
+ * stack comes before every dialog, and a dialog's own strip right after that
  * dialog's marker, before any dialog opened from it.
  */
 function dialogOver(element: HTMLElement | null): boolean {

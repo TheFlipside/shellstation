@@ -126,7 +126,7 @@ interface SettingsDialogProps {
 
 export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Element {
   const { t, i18n } = useTranslation();
-  // What Settings reports while it is open is shown over it.
+  // What Settings reports while it is open is shown in a strip on top of it.
   const { layer, addToast } = useToastLayer();
   /** A setting the backend keeps could not be loaded from it or saved there. */
   const reportBackendError = useCallback(
@@ -759,7 +759,7 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
   }, []);
 
   return (
-    <div className="dialog-overlay" role="presentation">
+    <div className="dialog-overlay dialog-overlay-messages" role="presentation">
       <DialogKeys onEscape={onClose} />
       <ToastLayer layer={layer} />
       {importProgress && (

@@ -42,7 +42,7 @@ export function LoginSequenceManager({ onClose }: LoginSequenceManagerProps): Re
   const [edit, setEdit] = useState<EditState | null>(null);
   const [error, setError] = useState("");
   const [confirmDelete, setConfirmDelete] = useState<LoginSequence | null>(null);
-  // What this dialog reports while it is open is shown over it.
+  // What this dialog reports while it is open is shown in a strip on top of it.
   const { layer, addToast } = useToastLayer();
 
   const handleEscape = useCallback(() => {
@@ -151,7 +151,7 @@ export function LoginSequenceManager({ onClose }: LoginSequenceManagerProps): Re
   };
 
   return (
-    <div className="dialog-overlay" onClick={onClose} role="presentation">
+    <div className="dialog-overlay dialog-overlay-messages" onClick={onClose} role="presentation">
       <DialogKeys onEscape={handleEscape} />
       <ToastLayer layer={layer} />
       <div

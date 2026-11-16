@@ -5,8 +5,10 @@ import { useSettingsStore } from "../stores/settingsStore";
 import { useDialogOver } from "./DialogKeys";
 
 /**
- * A toast. Its time does not run while it `waits` under a dialog, where it
- * may be hidden: it starts, in full, once nothing lies over the toast.
+ * A toast. Its time does not run while it `waits`: under a dialog, where it
+ * may be hidden, and in a dialog's own strip, which would move the dialog's
+ * content when a toast went by itself. It starts, in full, once the toast
+ * waits no longer.
  */
 function ToastItem({ toast, waits }: { toast: Toast; waits: boolean }): React.JSX.Element {
   const removeToast = useToastStore((s) => s.removeToast);
@@ -144,6 +146,11 @@ function stopClick(event: React.MouseEvent): void {
  * reach it through the dialog anyway, and the keyboard must not either. A
  * button under a dialog would otherwise still take the focus, and with it a
  * key meant for the dialog.
+ *
+ * The window's stack floats at the window's top right, under every dialog.
+ * A dialog's own is a strip on top of the dialog's box, in the overlay's
+ * layout (App.css): it covers nothing of the dialog, and the box makes room
+ * for it. Its toasts stay until they are closed or the dialog is.
  */
 function ToastStack({
   toasts,
@@ -158,7 +165,7 @@ function ToastStack({
   return (
     <div
       ref={stackRef}
-      className="toast-container"
+      className={layer === null ? "toast-stack toast-container" : "toast-stack toast-strip"}
       inert={covered}
       // A dialog that closes on a click beside it must not take a click on
       // one of its own toasts for one.
@@ -168,27 +175,16 @@ function ToastStack({
         toasts={toasts.filter((toast) => toast.sticky)}
         sticky={true}
         layer={layer}
-        waits={covered}
+        waits={covered || layer !== null}
       />
       <ToastGroup
         toasts={toasts.filter((toast) => !toast.sticky)}
         sticky={false}
         layer={layer}
-        waits={covered}
+        waits={covered || layer !== null}
       />
     </div>
   );
-}
-
-/** The toasts of the window's stack (`layer` null) or of one dialog's layer. */
-function ToastsOf({ layer }: { layer: string | null }): React.JSX.Element | null {
-  const toasts = useToastStore((s) => s.toasts);
-  const shown = toasts.filter((toast) => toast.layer === layer);
-
-  // The stack is there only with toasts in it, and asks what lies over it
-  // when it appears.
-  if (shown.length === 0) return null;
-  return <ToastStack toasts={shown} layer={layer} />;
 }
 
 /**
@@ -198,14 +194,89 @@ function ToastsOf({ layer }: { layer: string | null }): React.JSX.Element | null
  * document (see `useDialogOver`), so the app renders it first.
  */
 export function ToastContainer(): React.JSX.Element | null {
-  return <ToastsOf layer={null} />;
+  const toasts = useToastStore((s) => s.toasts);
+  const shown = toasts.filter((toast) => toast.layer === null);
+
+  // The stack is there only with toasts in it, and asks what lies over it
+  // when it appears.
+  if (shown.length === 0) return null;
+  return <ToastStack toasts={shown} layer={null} />;
 }
 
 /**
- * The toasts a dialog raised itself, shown over that dialog: in its overlay,
- * right after its `<DialogKeys>`, so that every dialog opened from it or
- * lying on top of it covers them as well. See `useToastLayer`.
+ * How long a dialog's box takes no click after its strip has changed, in
+ * milliseconds: longer than the second click of a double click takes.
  */
-export function ToastLayer({ layer }: { layer: string }): React.JSX.Element | null {
-  return <ToastsOf layer={layer} />;
+export const SETTLE_MS = 500;
+
+/** What the pointer does to what it is over. */
+const POINTER_EVENTS = [
+  "pointerdown",
+  "mousedown",
+  "pointerup",
+  "mouseup",
+  "click",
+  "dblclick",
+  "auxclick",
+  "contextmenu",
+] as const;
+
+function refuse(event: Event): void {
+  event.preventDefault();
+  event.stopPropagation();
+}
+
+/**
+ * The toasts a dialog raised itself, shown with that dialog: in its overlay,
+ * right after its `<DialogKeys>` and before its box, as a strip on top of the
+ * box. The overlay has the class `dialog-overlay-messages`, which lays the
+ * two out one above the other. Every dialog opened from it or lying on top
+ * of it covers the strip as it covers the box. See `useToastLayer`.
+ *
+ * The strip is as tall as what it holds, so the box under it moves when a
+ * toast comes or goes, and a control of the dialog comes to lie where the
+ * pointer is: under the button that closed the last toast, for the second
+ * click of a double click, or under a click that was on its way when a toast
+ * came. For a moment after the strip has changed, the box therefore takes no
+ * click. It is refused at the box, and not let through it: behind the box is
+ * the overlay, where a click closes some dialogs.
+ */
+export function ToastLayer({ layer }: { layer: string }): React.JSX.Element {
+  const toasts = useToastStore((s) => s.toasts);
+  const shown = toasts.filter((toast) => toast.layer === layer);
+  const anchor = useRef<HTMLSpanElement>(null);
+
+  // The toasts the strip holds decide how tall it is.
+  const held = shown.map((toast) => toast.id).join(" ");
+  const heldBefore = useRef(held);
+  useLayoutEffect(() => {
+    if (held === heldBefore.current) return undefined;
+    heldBefore.current = held;
+    const overlay = anchor.current?.parentElement;
+    if (!overlay) return undefined;
+    const boxes = Array.from(overlay.children).filter((child) =>
+      child.classList.contains("dialog"),
+    );
+    for (const box of boxes) {
+      for (const type of POINTER_EVENTS) box.addEventListener(type, refuse, true);
+    }
+    const release = (): void => {
+      for (const box of boxes) {
+        for (const type of POINTER_EVENTS) box.removeEventListener(type, refuse, true);
+      }
+    };
+    const timer = window.setTimeout(release, SETTLE_MS);
+    return () => {
+      window.clearTimeout(timer);
+      release();
+    };
+  }, [held]);
+
+  return (
+    <>
+      {/* Says where the dialog's box is, also while there is no strip. */}
+      <span ref={anchor} hidden />
+      {shown.length > 0 && <ToastStack toasts={shown} layer={layer} />}
+    </>
+  );
 }

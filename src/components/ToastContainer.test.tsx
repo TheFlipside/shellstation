@@ -6,7 +6,8 @@
  * the others scrolls to a new toast.
  *
  * Every dialog lies above the toasts. Under one, a stack takes no input and
- * no toast's time runs. What a dialog raises itself is shown over it.
+ * no toast's time runs. What a dialog raises itself is shown with it, in a
+ * strip on top of its box, until it is closed or the dialog is.
  */
 import React from "react";
 import ReactDOM from "react-dom";
@@ -17,7 +18,7 @@ import i18n from "../i18n";
 import { useSettingsStore } from "../stores/settingsStore";
 import { useToastStore } from "../stores/toastStore";
 import { DialogKeys } from "./DialogKeys";
-import { ToastContainer, ToastLayer } from "./ToastContainer";
+import { SETTLE_MS, ToastContainer, ToastLayer } from "./ToastContainer";
 
 // The settings store imports invoke; nothing here may reach a backend.
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
@@ -240,18 +241,30 @@ let raise: ToastLayerHandle["addToast"];
 /** A dialog that shows its own toasts, as Settings does, and closes on a click beside it. */
 function Manager({
   onClose,
+  onSave,
   children,
 }: {
   onClose?: () => void;
+  /** A click on the button in the dialog's box. */
+  onSave?: () => void;
   children?: React.ReactNode;
 }): React.JSX.Element {
   const { layer, addToast } = useToastLayer();
   raise = addToast;
   return (
-    <div className="dialog-overlay" data-testid="manager" onClick={onClose} role="presentation">
+    <div
+      className="dialog-overlay dialog-overlay-messages"
+      data-testid="manager"
+      onClick={onClose}
+      role="presentation"
+    >
       <DialogKeys />
       <ToastLayer layer={layer} />
-      <div className="dialog" />
+      <div className="dialog">
+        <button type="button" onClick={onSave}>
+          Save
+        </button>
+      </div>
       {children}
     </div>
   );
@@ -265,7 +278,7 @@ function raiseOwn(message: string): void {
 
 /** The stack a toast is shown in. */
 function stackOf(message: string): HTMLElement {
-  const stack = screen.getByText(message).closest<HTMLElement>(".toast-container");
+  const stack = screen.getByText(message).closest<HTMLElement>(".toast-stack");
   if (stack === null) throw new Error("the toast is in no stack");
   return stack;
 }
@@ -367,7 +380,7 @@ describe("ToastContainer and dialogs", () => {
     expect(useToastStore.getState().layers).toHaveLength(1);
   });
 
-  it("shows what a dialog raises over that dialog, and nothing else there", () => {
+  it("shows what a dialog raises with that dialog, and nothing else there", () => {
     render(
       <>
         <ToastContainer />
@@ -380,15 +393,106 @@ describe("ToastContainer and dialogs", () => {
     const manager = screen.getByTestId("manager");
     expect(within(manager).getByText("save failed")).toBeInTheDocument();
     expect(within(manager).queryByText("connection failed")).toBeNull();
-    // Its own dialog does not lie over it: it can be used, and its time runs.
+    // Its own dialog does not lie over it: it can be used.
     expect(stackOf("save failed")).not.toHaveAttribute("inert");
     expect(stackOf("connection failed")).toHaveAttribute("inert");
+    // It is a strip of the dialog, before its box, and not the stack that
+    // floats at the window's edge.
+    expect(stackOf("save failed")).toHaveClass("toast-strip");
+    expect(stackOf("save failed")).not.toHaveClass("toast-container");
+    expect(stackOf("save failed").nextElementSibling).toHaveClass("dialog");
+    expect(stackOf("connection failed")).toHaveClass("toast-container");
 
+    // The window's toast waits under the dialog for as long as it is open.
+    act(() => {
+      vi.advanceTimersByTime(60_000);
+    });
+    expect(screen.getByText("connection failed")).toBeInTheDocument();
+  });
+
+  it("takes no click in a dialog's box right after its strip has changed", () => {
+    // The box moves when a toast comes or goes, and a control of the dialog
+    // comes to lie where the pointer is.
+    const onSave = vi.fn();
+    const onClose = vi.fn();
+    render(<Manager onSave={onSave} onClose={onClose} />);
+    const save = screen.getByRole("button", { name: "Save" });
+    const settle = (): void => {
+      act(() => {
+        vi.advanceTimersByTime(SETTLE_MS);
+      });
+    };
+
+    // This box lets a click on to the overlay, which closes the dialog.
+    fireEvent.click(save);
+    expect(onSave).toHaveBeenCalledTimes(1);
+    expect(onClose).toHaveBeenCalledTimes(1);
+    onClose.mockClear();
+
+    // A toast comes: the click that was on its way is refused at the box,
+    // and reaches neither the button nor the overlay.
+    raiseOwn("save failed");
+    expect(fireEvent.mouseDown(save)).toBe(false);
+    expect(fireEvent.click(save)).toBe(false);
+    expect(onSave).toHaveBeenCalledTimes(1);
+    expect(onClose).not.toHaveBeenCalled();
+    act(() => {
+      vi.advanceTimersByTime(SETTLE_MS - 1);
+    });
+    fireEvent.click(save);
+    expect(onSave).toHaveBeenCalledTimes(1);
+    act(() => {
+      vi.advanceTimersByTime(1);
+    });
+    fireEvent.click(save);
+    expect(onSave).toHaveBeenCalledTimes(2);
+
+    // The last toast is closed: the second click of a double click on its
+    // button is on whatever has moved there.
+    fireEvent.click(screen.getByRole("button", { name: "×" }));
+    fireEvent.click(save);
+    expect(onSave).toHaveBeenCalledTimes(2);
+    settle();
+    fireEvent.click(save);
+    expect(onSave).toHaveBeenCalledTimes(3);
+
+    // A toast in the window's stack moves nothing in the dialog.
+    show("connection failed");
+    fireEvent.click(save);
+    expect(onSave).toHaveBeenCalledTimes(4);
+  });
+
+  it("keeps what a dialog raises until it is closed, or the dialog is", () => {
+    // A toast that went by itself would move what the dialog holds.
+    const { rerender } = render(
+      <>
+        <ToastContainer />
+        <Manager />
+      </>,
+    );
+    raiseOwn("save failed");
+    raiseOwn("imported");
+    act(() => {
+      vi.advanceTimersByTime(600_000);
+    });
+    expect(screen.getByText("save failed")).toBeInTheDocument();
+
+    // Its own button closes it.
+    fireEvent.click(within(stackOf("save failed")).getAllByRole("button", { name: "×" })[0]);
+    expect(screen.queryByText("save failed")).not.toBeInTheDocument();
+    expect(screen.getByText("imported")).toBeInTheDocument();
+
+    // In the window's stack it has its time, like any other.
+    rerender(
+      <>
+        <ToastContainer />
+      </>,
+    );
+    expect(stackOf("imported")).toHaveClass("toast-container");
     act(() => {
       vi.advanceTimersByTime(5000);
     });
-    expect(screen.queryByText("save failed")).not.toBeInTheDocument();
-    expect(screen.getByText("connection failed")).toBeInTheDocument();
+    expect(screen.queryByText("imported")).not.toBeInTheDocument();
   });
 
   it("covers a dialog's toasts with a dialog on top of it, not with one under it", () => {
