@@ -1350,6 +1350,76 @@ mod tests {
     }
 
     #[test]
+    fn parse_reads_the_session_tree_as_securecrt_exports_it() {
+        // Laid out as SecureCRT 9.7.3 exports a folder, a session beside it
+        // and its four templates, with the properties the parser reads, in
+        // the file's order. The templates sit directly under `Sessions`,
+        // between the user's own keys, and have no child keys.
+        let xml = wrap(
+            r#"
+            <key name="Prod">
+                <key name="srv1">
+                    <dword name="Is Session">1</dword>
+                    <string name="Protocol Name">SSH2</string>
+                    <string name="Hostname">192.0.2.10</string>
+                    <string name="Firewall Name">None</string>
+                    <string name="Username"/>
+                    <dword name="[SSH2] Port">22</dword>
+                </key>
+            </key>
+            <key name="Default">
+                <dword name="Is Session">1</dword>
+                <string name="Protocol Name">SSH2</string>
+                <string name="Hostname"/>
+                <string name="Firewall Name">None</string>
+                <string name="Username"/>
+                <dword name="[SSH2] Port">22</dword>
+            </key>
+            <key name="Default_LocalShell">
+                <dword name="Is Session">1</dword>
+                <string name="Protocol Name">Local Shell</string>
+            </key>
+            <key name="Default_RDP">
+                <dword name="Is Session">1</dword>
+                <string name="Protocol Name">RDP</string>
+                <string name="Hostname"/>
+                <string name="Firewall Name">None</string>
+                <string name="Username"/>
+                <dword name="Port">3389</dword>
+                <dword name="[SSH2] Port">22</dword>
+            </key>
+            <key name="Default_Serial">
+                <dword name="Is Session">1</dword>
+                <string name="Protocol Name">Serial</string>
+            </key>
+            <key name="host1">
+                <dword name="Is Session">1</dword>
+                <string name="Protocol Name">SSH2</string>
+                <string name="Hostname">192.0.2.20</string>
+                <string name="Firewall Name">None</string>
+                <string name="Username"/>
+                <dword name="[SSH2] Port">22</dword>
+            </key>"#,
+        );
+        let (folders, sessions, skipped, warnings) = parse(&xml).unwrap();
+        let folder_names: Vec<_> = folders.iter().map(|f| f.name.as_str()).collect();
+        assert_eq!(folder_names, ["Prod"]);
+        let session_names: Vec<_> = sessions.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(session_names, ["srv1", "host1"]);
+        assert_eq!(sessions[0].folder_temp_id, folders[0].temp_id);
+        // Directly under `Sessions`, whose own temp_id is 0.
+        assert_eq!(sessions[1].folder_temp_id, 0);
+        for s in &sessions {
+            assert_eq!((s.protocol.as_str(), s.port), ("ssh", 22));
+            assert_eq!(s.username, None);
+            // "None" is SecureCRT's own word for no firewall.
+            assert_eq!(s.jump_host_name, None);
+        }
+        assert!(skipped.is_empty());
+        assert_eq!(warnings, Vec::<String>::new());
+    }
+
+    #[test]
     fn parse_nameless_key_warns_and_counts_its_sessions_as_skipped() {
         // A `<key>` without a name is dropped with everything in it. Its
         // sessions still count toward jump host ambiguity, by name only,
