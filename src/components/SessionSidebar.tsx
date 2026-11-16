@@ -1238,7 +1238,9 @@ export function SessionSidebar(): React.JSX.Element {
             </div>
           )}
         </div>
-        <DragOverlay>
+        {/* Under the dialogs (100 in App.css), and not at the library's
+            999: a host-key prompt can appear while an item is dragged. */}
+        <DragOverlay zIndex={95}>
           {(() => {
             const { folder, session } = getActiveItemData();
             if (folder) {

@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { useOnDialogOpen } from "./DialogKeys";
 
 export interface SelectOption {
   value: string;
@@ -50,6 +51,10 @@ export function CustomSelect({
   useEffect(() => {
     if (disabled) close();
   }, [disabled, close]);
+
+  // A dialog that opens while the list is open closes it: the list is
+  // painted above a dialog opened inside the same overlay.
+  useOnDialogOpen(close);
 
   // Close on outside click or scroll
   useEffect(() => {

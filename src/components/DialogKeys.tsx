@@ -74,6 +74,83 @@ function markersChanged(): void {
   for (const listener of [...markerListeners]) listener();
 }
 
+/** Called when a dialog opens, and not when one closes. */
+const openListeners = new Set<() => void>();
+/** How many dialogs have opened so far. */
+let opened = 0;
+
+/**
+ * Call `callback` whenever a dialog opens while the caller is mounted. A menu
+ * and the list of a select close themselves by this: they are painted above
+ * the dialogs, to lie over the dialog they were opened in, and would lie
+ * over one that appears while they are open as well, as a host-key prompt
+ * can at any time.
+ */
+export function useOnDialogOpen(callback: () => void): void {
+  const callbackRef = useRef(callback);
+  useLayoutEffect(() => {
+    callbackRef.current = callback;
+  }, [callback]);
+  // What had opened when the caller was rendered. A dialog that appears in
+  // the same commit as the caller has said so before the caller listens, if
+  // it comes first in the tree.
+  const openedBefore = useRef(opened);
+  // A layout effect, as a dialog says that it is there in one.
+  useLayoutEffect(() => {
+    if (opened !== openedBefore.current) callbackRef.current();
+    const listener = (): void => {
+      callbackRef.current();
+    };
+    openListeners.add(listener);
+    return () => {
+      openListeners.delete(listener);
+    };
+  }, []);
+}
+
+/**
+ * The overlay of the dialog on top, or null with no dialog open: the parent
+ * of the marker that comes last in the document.
+ */
+function topDialog(): HTMLElement | null {
+  let top: HTMLElement | null = null;
+  for (const marker of markers) {
+    if (!marker.isConnected) continue;
+    if (
+      top === null ||
+      (top.compareDocumentPosition(marker) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0
+    ) {
+      top = marker;
+    }
+  }
+  return top?.parentElement ?? null;
+}
+
+/** Whether a dialog is open and the event is for something outside the one on top. */
+function behindDialog(event: Event): boolean {
+  const top = topDialog();
+  return top !== null && !(event.target instanceof Node && top.contains(event.target));
+}
+
+/**
+ * The pointer does not get past a dialog, which covers the window. The
+ * keyboard does: what had the focus when a dialog appeared still has it, and
+ * the menu key or Shift+F10 there asks for its context menu, which would
+ * open above the dialog. Taken at the document, before the app sees it.
+ */
+function handleContextMenu(event: Event): void {
+  if (behindDialog(event)) event.stopPropagation();
+}
+
+/** Watch for what is meant for the window behind a dialog, while one is open. */
+function watchBehind(): void {
+  if (markers.size > 0) {
+    document.addEventListener("contextmenu", handleContextMenu, true);
+  } else {
+    document.removeEventListener("contextmenu", handleContextMenu, true);
+  }
+}
+
 /**
  * Whether a dialog lies over `element`: one whose marker comes after it in
  * the document. That is the order dialogs are painted in (see above). For a
@@ -245,9 +322,13 @@ export function DialogKeys({ onEscape, onEnter }: DialogKeysProps): React.JSX.El
     const marker = anchor.current;
     if (marker === null) return undefined;
     markers.add(marker);
+    watchBehind();
     markersChanged();
+    opened += 1;
+    for (const listener of [...openListeners]) listener();
     return () => {
       markers.delete(marker);
+      watchBehind();
       markersChanged();
     };
   }, []);

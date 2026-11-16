@@ -1,6 +1,7 @@
 import React, { useEffect, useRef } from "react";
 import ReactDOM from "react-dom";
 import { useSettingsStore } from "../stores/settingsStore";
+import { useOnDialogOpen } from "./DialogKeys";
 
 export interface ContextMenuItem {
   label: string;
@@ -20,6 +21,10 @@ export function ContextMenu({ x, y, items, onClose }: ContextMenuProps): React.J
   const ref = useRef<HTMLDivElement>(null);
   const uiScale = useSettingsStore((s) => s.uiScale);
   const zoom = uiScale / 100;
+
+  // The menu is painted above the dialogs. One that appears while the menu
+  // is open, as a host-key prompt can, must not have it lying over it.
+  useOnDialogOpen(onClose);
 
   useEffect(() => {
     const handleClick = (e: MouseEvent): void => {
