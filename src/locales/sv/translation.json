@@ -29,7 +29,8 @@
     "bulkEdit": "Massredigera sessioner…",
     "makeShared": "Dela",
     "makePersonal": "Gör personlig",
-    "myLogin": "Min inloggning…"
+    "myLogin": "Min inloggning…",
+    "myHighlighting": "Min markering…"
   },
   "bulkEdit": {
     "title": "Massredigering — {{name}}",
@@ -181,6 +182,8 @@
     "tagsJumpHostNote": "Lägg till taggen \"jumphost\" för att göra denna session tillgänglig som jump host i egenskaperna för andra sessioner.",
     "highlightProfileLabel": "Markeringsprofil",
     "highlightProfileNone": "Ingen",
+    "myHighlightingTitle": "Min markering — {{name}}",
+    "myHighlightingInfo": "Välj vilken av dina markeringsprofiler som terminalutdata från den här sessionen visas med. Valet gäller bara dig: andra användare ser det inte, och själva sessionen ändras inte.",
     "credentialProfileLabel": "Inloggningsprofil",
     "credentialProfileNone": "(Ingen — tangentbord-interaktiv fallback)",
     "loginSequenceLabel": "Inloggningssekvens",
@@ -484,6 +487,7 @@
   "highlighting": {
     "sectionTitle": "Nyckelordsmarkering",
     "sectionHint": "Definiera regex-baserade markeringsregler för terminalutdata och tilldela profiler till sessioner.",
+    "ownHint": "Med en PostgreSQL-databas sparas markeringsprofiler på den här datorn och är bara dina. Andra användare ser dem inte, och inte heller dina andra datorer.",
     "addProfile": "Lägg till profil",
     "editProfile": "Redigera profil",
     "noProfiles": "Inga markeringsprofiler definierade.",

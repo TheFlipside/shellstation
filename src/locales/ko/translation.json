@@ -29,7 +29,8 @@
     "bulkEdit": "세션 일괄 편집…",
     "makeShared": "공유로 설정",
     "makePersonal": "개인으로 설정",
-    "myLogin": "내 로그인 설정…"
+    "myLogin": "내 로그인 설정…",
+    "myHighlighting": "내 하이라이트 설정…"
   },
   "bulkEdit": {
     "title": "일괄 편집 — {{name}}",
@@ -181,6 +182,8 @@
     "tagsJumpHostNote": "\"jumphost\" 태그를 추가하면 다른 세션의 속성에서 이 세션을 점프 호스트로 사용할 수 있습니다.",
     "highlightProfileLabel": "하이라이트 프로필",
     "highlightProfileNone": "없음",
+    "myHighlightingTitle": "내 하이라이트 설정 — {{name}}",
+    "myHighlightingInfo": "이 세션의 터미널 출력을 내 하이라이트 프로필 중 어느 것으로 표시할지 선택합니다. 이 선택은 본인에게만 적용되며, 다른 사용자에게는 보이지 않고 세션 자체도 변경되지 않습니다.",
     "credentialProfileLabel": "자격 증명 프로필",
     "credentialProfileNone": "(없음 — 키보드 대화형 폴백)",
     "loginSequenceLabel": "로그인 시퀀스",
@@ -484,6 +487,7 @@
   "highlighting": {
     "sectionTitle": "키워드 하이라이트",
     "sectionHint": "터미널 출력에 대한 정규식 기반 강조 규칙을 정의하고 프로필을 세션에 할당합니다.",
+    "ownHint": "PostgreSQL 데이터베이스를 사용하는 경우 하이라이트 프로필은 이 컴퓨터에 저장되며 본인만 사용합니다. 다른 사용자에게는 보이지 않으며, 본인의 다른 컴퓨터에도 보이지 않습니다.",
     "addProfile": "프로필 추가",
     "editProfile": "프로필 편집",
     "noProfiles": "정의된 하이라이트 프로필이 없습니다.",

@@ -1,5 +1,6 @@
 pub mod models;
 pub mod postgres;
+pub mod session_highlights;
 pub mod sqlite;
 pub mod update_builder;
 
@@ -53,6 +54,14 @@ pub struct CredentialDbState(pub Arc<dyn DatabaseProvider>);
 /// Tauri managed state wrapping the local login sequence provider.
 /// Login sequences are always stored locally, same as credentials.
 pub struct LoginSequenceDbState(pub Arc<dyn DatabaseProvider>);
+
+/// Tauri managed state wrapping the provider that keeps the highlight
+/// profiles. In `SQLite` mode that is the one database. In `PostgreSQL` mode
+/// it is the local one, as for credentials: a profile's patterns run in the
+/// window of whoever uses it, so each user keeps their own, out of reach of
+/// the other roles of a shared database. Which profile a session is shown
+/// with is then kept locally as well, see [`session_highlights`].
+pub struct HighlightDbState(pub Arc<dyn DatabaseProvider>);
 
 /// Direct access to the `PostgreSQL` connection pool for operations that
 /// bypass the `DatabaseProvider` trait (e.g. `session_credentials` table).

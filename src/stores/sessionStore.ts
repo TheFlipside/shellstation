@@ -183,6 +183,12 @@ interface SessionState {
   updateSession: (id: string, params: UpdateSessionParams) => Promise<void>;
   moveSession: (id: string, newFolderId: string) => Promise<void>;
   deleteSession: (id: string) => Promise<void>;
+  /**
+   * Choose the highlight profile a session is shown with, or none. In
+   * PostgreSQL mode that is the user's own choice, also for another user's
+   * shared session, and changes nothing for anyone else.
+   */
+  setSessionHighlightProfile: (id: string, profileId: string | null) => Promise<void>;
   searchSessions: (query: string) => Promise<void>;
   clearSearch: () => void;
 
@@ -390,6 +396,14 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
   deleteSession: async (id) => {
     await invoke("session_delete", { id });
+    await get().loadAll();
+  },
+
+  setSessionHighlightProfile: async (id, profileId) => {
+    await invoke("session_set_highlight_profile", {
+      sessionId: id,
+      highlightProfileId: profileId,
+    });
     await get().loadAll();
   },
 

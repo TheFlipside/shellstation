@@ -25,6 +25,7 @@ import { FolderCredentialDialog } from "./FolderCredentialDialog";
 import { BulkEditDialog } from "./BulkEditDialog";
 import { SessionDialog, type SessionFormData } from "./SessionDialog";
 import { SessionLoginDialog } from "./SessionLoginDialog";
+import { SessionHighlightDialog } from "./SessionHighlightDialog";
 import { FolderIcon, SessionIconComponent } from "./SessionIcons";
 import { SettingsDialog } from "./SettingsDialog";
 import { CredentialManager } from "./CredentialManager";
@@ -125,6 +126,8 @@ export function SessionSidebar(): React.JSX.Element {
   } | null>(null);
   // Another user's shared session whose login the user is assigning.
   const [loginSession, setLoginSession] = useState<Session | null>(null);
+  // Another user's shared session whose highlight profile the user is choosing.
+  const [highlightSession, setHighlightSession] = useState<Session | null>(null);
   const [bulkEditFolder, setBulkEditFolder] = useState<{
     id: string;
     name: string;
@@ -302,7 +305,8 @@ export function SessionSidebar(): React.JSX.Element {
       // Skip all tree key handling when a modal dialog is open — the dialog
       // captures Enter/Escape via its own hooks but cannot prevent the tree's
       // React onKeyDown from firing first.
-      if (confirmDialog || folderDialog || sessionDialog || loginSession) return;
+      if (confirmDialog || folderDialog || sessionDialog || loginSession || highlightSession)
+        return;
 
       const key = e.key;
 
@@ -475,6 +479,7 @@ export function SessionSidebar(): React.JSX.Element {
       folderDialog,
       sessionDialog,
       loginSession,
+      highlightSession,
       deleteFolder,
       deleteSession,
       clearSelection,
@@ -778,6 +783,20 @@ export function SessionSidebar(): React.JSX.Element {
               label: t("contextMenu.myLogin"),
               onClick: () => {
                 setLoginSession(session);
+              },
+            },
+          ]
+        : []),
+      // Nor is how its output is highlighted in the user's own window the
+      // owner's: highlight profiles are each user's own. For a session of
+      // the user's own that is in the session dialog. While the role is not
+      // known no session has that dialog, so all of them have this.
+      ...(isPg && !isSessionOwner && session
+        ? [
+            {
+              label: t("contextMenu.myHighlighting"),
+              onClick: () => {
+                setHighlightSession(session);
               },
             },
           ]
@@ -1333,6 +1352,26 @@ export function SessionSidebar(): React.JSX.Element {
           }}
           onManageLoginSequences={() => {
             setShowLoginSequenceManager(true);
+          }}
+        />
+      )}
+
+      {highlightSession && (
+        <SessionHighlightDialog
+          session={highlightSession}
+          onSubmit={(profileId) => {
+            store
+              .setSessionHighlightProfile(highlightSession.id, profileId)
+              .catch((err: unknown) => {
+                const msg = err instanceof Error ? err.message : String(err);
+                useToastStore.getState().addToast(msg);
+              });
+            setHighlightSession(null);
+            treeRef.current?.focus();
+          }}
+          onCancel={() => {
+            setHighlightSession(null);
+            treeRef.current?.focus();
           }}
         />
       )}

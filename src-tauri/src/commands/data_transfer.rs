@@ -20,7 +20,8 @@ use uuid::Uuid;
 
 use super::database::build_export_data;
 use crate::db::models::ExportData;
-use crate::db::{CredentialDbState, DbState, LoginSequenceDbState};
+use crate::db::session_highlights::SessionHighlightState;
+use crate::db::{CredentialDbState, DbState, HighlightDbState, LoginSequenceDbState};
 
 /// Marks a file as a `ShellStation` export. Files written before the
 /// envelope existed are a bare [`ExportData`] object; the import side still
@@ -271,7 +272,7 @@ fn build_export_file(
 /// section out; `include_database` does the same for the database, which
 /// the backend reads itself. `title` is the save dialog's (translated) title.
 #[tauri::command]
-// The window and the three states are injected by Tauri; the webview sends
+// The window and the five states are injected by Tauri; the webview sends
 // the other four.
 #[allow(clippy::too_many_arguments)]
 pub async fn data_export_file(
@@ -279,6 +280,8 @@ pub async fn data_export_file(
     state: State<'_, DbState>,
     cred_db: State<'_, CredentialDbState>,
     login_seq_db: State<'_, LoginSequenceDbState>,
+    highlight_db: State<'_, HighlightDbState>,
+    highlights: State<'_, SessionHighlightState>,
     title: String,
     include_database: bool,
     settings: Option<Map<String, Value>>,
@@ -295,7 +298,7 @@ pub async fn data_export_file(
     };
 
     let database = if include_database {
-        Some(build_export_data(&state, &cred_db, &login_seq_db).await?)
+        Some(build_export_data(&state, &cred_db, &login_seq_db, &highlight_db, &highlights).await?)
     } else {
         None
     };

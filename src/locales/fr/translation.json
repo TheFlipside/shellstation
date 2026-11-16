@@ -29,7 +29,8 @@
     "bulkEdit": "Édition en masse des sessions…",
     "makeShared": "Partager",
     "makePersonal": "Rendre personnel",
-    "myLogin": "Mes identifiants…"
+    "myLogin": "Mes identifiants…",
+    "myHighlighting": "Ma coloration…"
   },
   "bulkEdit": {
     "title": "Édition en masse — {{name}}",
@@ -181,6 +182,8 @@
     "tagsJumpHostNote": "Ajoutez le tag \"jumphost\" pour rendre cette session disponible comme hôte de saut dans les propriétés des autres sessions.",
     "highlightProfileLabel": "Profil de coloration",
     "highlightProfileNone": "Aucun",
+    "myHighlightingTitle": "Ma coloration — {{name}}",
+    "myHighlightingInfo": "Choisissez avec lequel de vos profils de coloration la sortie du terminal de cette session est affichée. Ce choix ne vaut que pour vous : les autres utilisateurs ne le voient pas, et la session elle-même n'est pas modifiée.",
     "credentialProfileLabel": "Profil d'identifiants",
     "credentialProfileNone": "(Aucun — repli clavier interactif)",
     "loginSequenceLabel": "Séquence de connexion",
@@ -484,6 +487,7 @@
   "highlighting": {
     "sectionTitle": "Coloration par mots-clés",
     "sectionHint": "Définissez des règles de mise en surbrillance basées sur des expressions régulières pour la sortie du terminal et attribuez des profils aux sessions.",
+    "ownHint": "Avec une base de données PostgreSQL, les profils de coloration sont conservés sur cet ordinateur et n'appartiennent qu'à vous. Les autres utilisateurs ne les voient pas, et vos autres ordinateurs non plus.",
     "addProfile": "Ajouter un profil",
     "editProfile": "Modifier le profil",
     "noProfiles": "Aucun profil de coloration défini.",

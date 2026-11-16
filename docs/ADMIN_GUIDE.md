@@ -540,6 +540,28 @@ Placeholders that nobody claims, such as those of a user who has left, can be de
 
 **My Login (the release that adds it):** A user can assign a credential profile and a login sequence of their own to another user's shared session, in **My Login** in that session's context menu ([DESIGN.md §4.5.1](DESIGN.md#451-how-rls-works)). The release has no migration and changes nothing in the database, so no start of the owning role is needed for it. What a user assigns to a session that is not theirs is used only for what they confirmed the session names: protocol, host, port, user name, jump host and the switch for legacy algorithms. Of a jump host on the way it is the host, the port and the jump host it goes on to. If the owner of a shared session changes one of these, each other user who has assigned something to it, or to a jump host it goes through, is refused at the next connect, with a message that says what changed, and opens **My Login** once to look at it and save. Tell the users of a shared session before changing where it connects to. What a user confirmed is kept on their own machine, in `session-logins.json` in ShellStation's config directory, so a user is asked once more on a machine that does not have it. A user who assigned a profile to another user's session before this release is asked in the same way; the session dialog offered that until 0.11.3 kept it to the user's own sessions. A session that names what **My Login** cannot show for what it is cannot be confirmed, and the save says which session and why: for example a protocol other than SSH or Telnet or a port outside 1 to 65535, which only a statement of its owner's own can have written, or a host with a space or a backslash in it, or a user name with a space at its end, which its owner can set right in the session dialog.
 
+**Highlight profiles (the release that makes them each user's own):** Until this release the highlight profiles were kept in the shared database, in the table `highlight_profiles`, which has no row-level security: every user saw all of them, and any user could change or delete any of them. A profile's patterns run in the window of every user who opens a session with that profile, and ShellStation's check for patterns that take very long does not catch every one, so a user could also bring other users' windows to a standstill. From this release on each user's highlight profiles are in their own local database, where credential profiles and login sequences already are, and so is the choice of a profile for a session ([DESIGN.md §4.5.1](DESIGN.md#451-how-rls-works)). The release has no migration and changes nothing in the shared database, so no start of the owning role is needed for it.
+
+Users keep their profiles, and the highlighting of their own sessions. At its first start of this release, each user's ShellStation copies the profiles that the shared table holds into the local database, once, together with the profile that each of the user's own sessions names. Another user's shared session starts without one: the profile its row names was its owner's choice, and each user now makes their own (below). The copy has limits, since every role can write the table: profiles with up to 500 rules and rules of up to 1 MiB, up to 1000 of them and up to 16 MiB in all, those that the user's own sessions name first. What is past a limit is not copied, and neither is it at a later start; the application log of that start then has a warning with how many profiles were not read (`not_read`) or were left out (`left_out`), such as one with more than 500 rules, which a SecureCRT highlight import could store and whose user imports that file again. Each of the copy's statements gives up after 10 seconds, so a table that has been filled with a very large number of rows is not taken over, at any start, until you have emptied it of them. A session whose owner is still the placeholder `'local'` counts as no one's own. Who wrote the profiles cannot be told. So before the users update, look the table over, and delete what nobody recognizes:
+
+```sql
+SELECT id, name, pg_catalog.octet_length(rules) AS bytes, rules
+FROM highlight_profiles ORDER BY sort_order, name;
+```
+
+After that first start a user's ShellStation reads nothing from the table any more, also not when it is pointed at another database later. What users will notice: other users' shared sessions are shown without highlighting until they choose a profile for them, and a profile is now on one machine and for one user. A change a colleague makes to "their" copy reaches no one else, and a second machine of the same user starts with what the shared table held at that machine's first start. A profile is passed on as a file, with **Settings → Data Export / Import**. For another user's shared session, a user chooses a profile of their own with **My Highlighting…** in that session's context menu.
+
+An older version still reads and writes the shared table, and its users are as exposed as before, so update everyone. And as long as the table holds anything, a first start of this release takes it over, whoever wrote it: that of a new user, of a user on a new machine or account, or of one whose local database was lost. Once every user has started this release, empty the table and take the right to write to it from the regular roles, as a superuser:
+
+```sql
+-- The foreign key clears the profile that session rows still name
+DELETE FROM highlight_profiles;
+-- For each role that was granted to
+REVOKE INSERT, UPDATE, DELETE ON highlight_profiles FROM shellstation_users;
+```
+
+ShellStation never writes there from this release on, so nothing it does needs the privilege.
+
 ---
 
 ## 6. Backup and Restore

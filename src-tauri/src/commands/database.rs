@@ -540,11 +540,18 @@ pub(crate) async fn build_export_data(
     state: &DbState,
     cred_db: &CredentialDbState,
     login_seq_db: &crate::db::LoginSequenceDbState,
+    highlight_db: &crate::db::HighlightDbState,
+    highlights: &crate::db::session_highlights::SessionHighlightState,
 ) -> Result<ExportData, String> {
     let folders = state.0.list_folders().await?;
-    let sessions = state.0.list_all_sessions().await?;
+    let mut sessions = state.0.list_all_sessions().await?;
+    // In PostgreSQL mode the profiles are the user's own, and so is the
+    // profile each session is shown with; what a row names is not exported.
+    if let Some(local) = highlights.0.as_ref() {
+        local.overlay(&mut sessions).await;
+    }
     let credentials = cred_db.0.list_all_credentials().await?;
-    let highlight_profiles = state.0.list_highlight_profiles().await?;
+    let highlight_profiles = highlight_db.0.list_highlight_profiles().await?;
     let credential_profiles = cred_db.0.list_credential_profiles().await?;
     let login_sequences = login_seq_db.0.list_login_sequences().await?;
 
@@ -565,8 +572,10 @@ pub async fn db_export(
     state: State<'_, DbState>,
     cred_db: State<'_, CredentialDbState>,
     login_seq_db: State<'_, crate::db::LoginSequenceDbState>,
+    highlight_db: State<'_, crate::db::HighlightDbState>,
+    highlights: State<'_, crate::db::session_highlights::SessionHighlightState>,
 ) -> Result<ExportData, String> {
-    build_export_data(&state, &cred_db, &login_seq_db).await
+    build_export_data(&state, &cred_db, &login_seq_db, &highlight_db, &highlights).await
 }
 
 // Writing export files lives in `data_transfer.rs`, which wraps this data
@@ -725,6 +734,7 @@ pub async fn db_import(
     state: State<'_, DbState>,
     cred_db: State<'_, CredentialDbState>,
     login_seq_db: State<'_, crate::db::LoginSequenceDbState>,
+    highlight_db: State<'_, crate::db::HighlightDbState>,
     data: ExportData,
 ) -> Result<String, String> {
     validate_import_data(&data)?;
@@ -894,8 +904,9 @@ pub async fn db_import(
         credential_count += 1;
     }
 
-    // Import highlight profiles — skip duplicates by name.
-    let existing_profiles = state
+    // Import highlight profiles — skip duplicates by name. They go where
+    // the app keeps them, which in PostgreSQL mode is the local database.
+    let existing_profiles = highlight_db
         .0
         .list_highlight_profiles()
         .await
@@ -909,7 +920,7 @@ pub async fn db_import(
             skipped_profiles += 1;
             continue;
         }
-        state
+        highlight_db
             .0
             .create_highlight_profile(crate::db::models::NewHighlightProfile {
                 name: profile.name.clone(),

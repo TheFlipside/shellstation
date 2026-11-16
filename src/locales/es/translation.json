@@ -29,7 +29,8 @@
     "bulkEdit": "Editar sesiones en masa…",
     "makeShared": "Compartir",
     "makePersonal": "Hacer personal",
-    "myLogin": "Mis credenciales…"
+    "myLogin": "Mis credenciales…",
+    "myHighlighting": "Mi resaltado…"
   },
   "bulkEdit": {
     "title": "Edición masiva — {{name}}",
@@ -181,6 +182,8 @@
     "tagsJumpHostNote": "Añada la etiqueta \"jumphost\" para que esta sesión esté disponible como host de salto en las propiedades de otras sesiones.",
     "highlightProfileLabel": "Perfil de resaltado",
     "highlightProfileNone": "Ninguno",
+    "myHighlightingTitle": "Mi resaltado — {{name}}",
+    "myHighlightingInfo": "Elija con cuál de sus perfiles de resaltado se muestra la salida del terminal de esta sesión. La elección es solo suya: los demás usuarios no la ven, y la sesión en sí no se modifica.",
     "credentialProfileLabel": "Perfil de credenciales",
     "credentialProfileNone": "(Ninguno — respaldo teclado interactivo)",
     "loginSequenceLabel": "Secuencia de inicio de sesión",
@@ -484,6 +487,7 @@
   "highlighting": {
     "sectionTitle": "Resaltado por palabras clave",
     "sectionHint": "Defina reglas de resaltado basadas en expresiones regulares para la salida del terminal y asigne perfiles a sesiones.",
+    "ownHint": "Con una base de datos PostgreSQL, los perfiles de resaltado se guardan en este equipo y son solo suyos. Los demás usuarios no los ven, y sus otros equipos tampoco.",
     "addProfile": "Añadir perfil",
     "editProfile": "Editar perfil",
     "noProfiles": "No hay perfiles de resaltado definidos.",

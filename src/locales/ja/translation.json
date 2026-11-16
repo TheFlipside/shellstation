@@ -29,7 +29,8 @@
     "bulkEdit": "セッションを一括編集…",
     "makeShared": "共有にする",
     "makePersonal": "個人用にする",
-    "myLogin": "自分のログイン設定…"
+    "myLogin": "自分のログイン設定…",
+    "myHighlighting": "自分のハイライト設定…"
   },
   "bulkEdit": {
     "title": "一括編集 — {{name}}",
@@ -181,6 +182,8 @@
     "tagsJumpHostNote": "タグ \"jumphost\" を追加すると、他のセッションのプロパティでこのセッションをジャンプホストとして選択できます。",
     "highlightProfileLabel": "ハイライトプロファイル",
     "highlightProfileNone": "なし",
+    "myHighlightingTitle": "自分のハイライト設定 — {{name}}",
+    "myHighlightingInfo": "このセッションのターミナル出力を、自分のどのハイライトプロファイルで表示するかを選択します。この選択はあなただけのもので、他のユーザーには表示されず、セッション自体も変更されません。",
     "credentialProfileLabel": "認証プロファイル",
     "credentialProfileNone": "(なし — キーボードインタラクティブにフォールバック)",
     "loginSequenceLabel": "ログインシーケンス",
@@ -484,6 +487,7 @@
   "highlighting": {
     "sectionTitle": "キーワードハイライト",
     "sectionHint": "正規表現ベースのハイライトルールを定義し、プロファイルを各セッションに割り当てます。",
+    "ownHint": "PostgreSQL データベースを使用している場合、ハイライトプロファイルはこのコンピューターに保存され、あなただけのものです。他のユーザーには表示されず、あなたの他のコンピューターにも表示されません。",
     "addProfile": "プロファイルを追加",
     "editProfile": "プロファイルを編集",
     "noProfiles": "ハイライトプロファイルが定義されていません。",

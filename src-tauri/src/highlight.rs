@@ -9,6 +9,11 @@ pub struct HighlightRule {
     pub bold: bool,
 }
 
+/// The most rules a profile saved in the app has, and one taken over from a
+/// shared database (`db::session_highlights`). The window runs every rule of
+/// a session's profile over everything its terminal shows.
+pub const MAX_RULES_PER_PROFILE: usize = 500;
+
 /// Parsed result from a `SecureCRT` keyword highlight `INI` file.
 pub struct ParsedHighlightProfile {
     pub name: String,

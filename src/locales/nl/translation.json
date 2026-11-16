@@ -29,7 +29,8 @@
     "bulkEdit": "Sessies bulkbewerken…",
     "makeShared": "Delen",
     "makePersonal": "Persoonlijk maken",
-    "myLogin": "Mijn aanmelding…"
+    "myLogin": "Mijn aanmelding…",
+    "myHighlighting": "Mijn markering…"
   },
   "bulkEdit": {
     "title": "Bulkbewerking — {{name}}",
@@ -181,6 +182,8 @@
     "tagsJumpHostNote": "Voeg de tag \"jumphost\" toe om deze sessie beschikbaar te maken als jump host in de eigenschappen van andere sessies.",
     "highlightProfileLabel": "Markeringsprofiel",
     "highlightProfileNone": "Geen",
+    "myHighlightingTitle": "Mijn markering — {{name}}",
+    "myHighlightingInfo": "Kies met welk van uw markeringsprofielen de terminaluitvoer van deze sessie wordt getoond. De keuze geldt alleen voor u: andere gebruikers zien haar niet, en de sessie zelf wordt niet gewijzigd.",
     "credentialProfileLabel": "Inloggegevensprofiel",
     "credentialProfileNone": "(Geen — toetsenbord-interactieve fallback)",
     "loginSequenceLabel": "Inlogsequentie",
@@ -484,6 +487,7 @@
   "highlighting": {
     "sectionTitle": "Trefwoordmarkering",
     "sectionHint": "Definieer regex-gebaseerde markeerregels voor terminaluitvoer en wijs profielen toe aan sessies.",
+    "ownHint": "Met een PostgreSQL-database worden markeringsprofielen op deze computer bewaard en zijn ze alleen van u. Andere gebruikers zien ze niet, en uw andere computers ook niet.",
     "addProfile": "Profiel toevoegen",
     "editProfile": "Profiel bewerken",
     "noProfiles": "Geen markeringsprofielen gedefinieerd.",

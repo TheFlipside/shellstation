@@ -48,8 +48,11 @@ use std::sync::Arc;
 use commands::{DbStatusState, TerminalReadyState};
 use config::{ConfigState, DbBackend};
 use db::postgres::PostgresProvider;
+use db::session_highlights::{SessionHighlightState, SessionHighlights};
 use db::sqlite::SqliteProvider;
-use db::{CredentialDbState, DbState, LoginSequenceDbState, PgPoolState, PgUserState};
+use db::{
+    CredentialDbState, DbState, HighlightDbState, LoginSequenceDbState, PgPoolState, PgUserState,
+};
 use pty::PtyState;
 use sha2::{Digest, Sha384};
 use sqlx::sqlite::SqliteConnectOptions;
@@ -310,6 +313,38 @@ async fn apply_postgres_migrations(pool: &sqlx::PgPool) -> Result<(), Box<dyn st
     fix_crlf_migration_checksums(pool).await?;
     sqlx::migrate!().run(pool).await?;
     Ok(())
+}
+
+/// Take over the highlight profiles that the shared database holds from
+/// before they were each user's own, and say in the application log what
+/// came of it; see [`SessionHighlights::take_over_central`].
+///
+/// A failure is not the start's: the app goes on with the profiles the local
+/// database has, and the next start tries again. It can quote what the
+/// database says, so it is logged escaped.
+async fn take_over_central_highlights(highlights: &SessionHighlights, pool: &sqlx::PgPool) {
+    match highlights.take_over_central(pool).await {
+        Ok(None) => {}
+        // Profiles that did not come over stay in the shared database and
+        // are not read again, so that is a warning.
+        Ok(Some(taken)) if taken.left_out > 0 || taken.not_read > 0 => tracing::warn!(
+            copied = taken.copied,
+            already_there = taken.already_there,
+            left_out = taken.left_out,
+            not_read = taken.not_read,
+            sessions = taken.sessions,
+            "Took over the highlight profiles of the shared database, but not all of them: some are no profile the app could have saved (left_out) or are past a limit of the take-over (not_read). From now on profiles are kept in the local database; see ADMIN_GUIDE.md §5"
+        ),
+        Ok(Some(taken)) => tracing::info!(
+            copied = taken.copied,
+            already_there = taken.already_there,
+            sessions = taken.sessions,
+            "Took over the highlight profiles of the shared database; from now on they are kept in the local database"
+        ),
+        Err(e) => tracing::warn!(
+            "Could not take over the highlight profiles of the shared database; the next start tries again: {e:?}"
+        ),
+    }
 }
 
 /// Strip connection `URLs` and credentials from `PostgreSQL` error messages
@@ -2348,8 +2383,14 @@ pub fn run() {
                         provider.clone() as Arc<dyn db::DatabaseProvider>
                     ));
                     app.manage(LoginSequenceDbState(
+                        provider.clone() as Arc<dyn db::DatabaseProvider>
+                    ));
+                    // One database: a session row names its highlight
+                    // profile, and the foreign key holds it to one.
+                    app.manage(HighlightDbState(
                         provider as Arc<dyn db::DatabaseProvider>,
                     ));
+                    app.manage(SessionHighlightState(None));
                     app.manage(PgPoolState(None));
                     app.manage(PgUserState(None));
                     app.manage(DbStatusState(commands::DbStatus {
@@ -2365,10 +2406,24 @@ pub fn run() {
                     // OFF because sessions live in PostgreSQL — the credentials
                     // table's FK to sessions would fail cross-database.
                     let local_pool = init_local_sqlite(&config_dir, false, None)?;
+                    // Highlight profiles stay local as well, and with them
+                    // which profile each session is shown with: a profile's
+                    // patterns run in the window of whoever uses it, so no
+                    // other role of the shared database gets to write them.
+                    // Without them the app does not start, as without the
+                    // local database itself: there is no going on without
+                    // the user's choices that would not fall back on what
+                    // the rows of the shared database name.
+                    let session_highlights = tauri::async_runtime::block_on(
+                        SessionHighlights::open(local_pool.clone()),
+                    )
+                    .map_err(std::io::Error::other)?;
                     let cred_provider =
                         Arc::new(SqliteProvider::new(local_pool)) as Arc<dyn db::DatabaseProvider>;
                     app.manage(CredentialDbState(cred_provider.clone()));
                     app.manage(LoginSequenceDbState(cred_provider.clone()));
+                    app.manage(HighlightDbState(cred_provider.clone()));
+                    app.manage(SessionHighlightState(Some(session_highlights.clone())));
 
                     // Host and database are whatever the config file holds,
                     // so they are logged escaped.
@@ -2440,6 +2495,12 @@ pub fn run() {
                                     claim_legacy_mappings_and_log(&pool, ident),
                                 );
                             }
+                            // Highlight profiles from before they were
+                            // each user's own, which the shared database
+                            // still holds: taken over once.
+                            tauri::async_runtime::block_on(
+                                take_over_central_highlights(&session_highlights, &pool),
+                            );
                             // Query current_user for ownership tracking.
                             let pg_user = tauri::async_runtime::block_on(async {
                                 sqlx::query_scalar::<_, String>("SELECT current_user")
@@ -2622,6 +2683,7 @@ pub fn run() {
             commands::highlight_profile_get,
             commands::highlight_profile_update,
             commands::highlight_profile_delete,
+            commands::session_set_highlight_profile,
             commands::import_securecrt_highlights,
             // Login Sequences
             commands::login_sequence_create,
@@ -3103,6 +3165,266 @@ mod tests {
     #[ignore = "needs a throwaway PostgreSQL server in SHELLSTATION_TEST_PG_URL"]
     async fn rls_setup_check_finds_what_is_missing() {
         with_rls_test_database(check_rls_setup_check_finds_what_is_missing).await;
+    }
+
+    /// The highlight profiles of the shared database, from before they were
+    /// each user's own, against a real server: what a user's first start
+    /// takes over, and that nothing written there afterwards is. Same server
+    /// as for `shared_rows_keep_their_owner`; run with
+    /// `--ignored central_highlight_profiles`.
+    #[tokio::test]
+    #[ignore = "needs a throwaway PostgreSQL server in SHELLSTATION_TEST_PG_URL"]
+    async fn central_highlight_profiles_are_taken_over_once() {
+        with_rls_test_database(check_central_highlight_profiles_are_taken_over_once).await;
+    }
+
+    async fn check_central_highlight_profiles_are_taken_over_once(
+        opts: sqlx::postgres::PgConnectOptions,
+        admin: String,
+        alice: String,
+        bob: String,
+    ) {
+        use db::DatabaseProvider;
+        use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+
+        const RULES: &str =
+            r##"[{"pattern":"error","color":"#ff0000","case_sensitive":false,"bold":true}]"##;
+
+        // A local database as PostgreSQL mode has it, for a first start.
+        async fn local_database() -> (SessionHighlights, SqliteProvider) {
+            let pool = SqlitePoolOptions::new()
+                .max_connections(1)
+                .connect_with(
+                    SqliteConnectOptions::new()
+                        .filename(":memory:")
+                        .pragma("foreign_keys", "OFF"),
+                )
+                .await
+                .unwrap();
+            sqlx::migrate!().run(&pool).await.unwrap();
+            let highlights = SessionHighlights::open(pool.clone()).await.unwrap();
+            (highlights, SqliteProvider::new(pool))
+        }
+
+        // One connection, so each SET ROLE holds for the statements after it.
+        let pool = PgPoolOptions::new()
+            .max_connections(1)
+            .connect_with(opts)
+            .await
+            .unwrap();
+        let database: String = sqlx::query_scalar("SELECT current_database()")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        for sql in [
+            format!("GRANT ALL PRIVILEGES ON DATABASE {database} TO {admin}"),
+            format!("GRANT ALL ON SCHEMA public TO {admin}"),
+            format!("GRANT USAGE ON SCHEMA public TO {alice}, {bob}"),
+            format!("SET ROLE {admin}"),
+        ] {
+            pg_exec(&pool, &sql).await.unwrap();
+        }
+        sqlx::migrate!().run(&pool).await.unwrap();
+
+        // A database as the version before left it: profiles that are
+        // nobody's, and session rows that name them. One profile is longer
+        // than the app saves, and one is named by no session.
+        let [cisco, linux, unused, oversized] = [(); 4].map(|()| uuid::Uuid::new_v4());
+        let long_rules = format!("[{}]", " ".repeat(1_048_576));
+        for (id, name, rules, order) in [
+            (cisco, "Cisco", RULES, 0),
+            (linux, "Linux", "[]", 1),
+            (unused, "Unused", "[]", 2),
+            (oversized, "Oversized", long_rules.as_str(), 3),
+        ] {
+            sqlx::query(
+                "INSERT INTO highlight_profiles (id, name, rules, sort_order) \
+                 VALUES ($1, $2, $3, $4)",
+            )
+            .bind(id.to_string())
+            .bind(name)
+            .bind(rules)
+            .bind(order)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+        let [of_alice, of_bob] = [(); 2].map(|()| uuid::Uuid::new_v4());
+        for (folder, owner) in [(of_alice, &alice), (of_bob, &bob)] {
+            pg_exec(
+                &pool,
+                &format!(
+                    "INSERT INTO folders (id, name, sort_order, owner, visibility) \
+                     VALUES ('{folder}', 'folder', 0, '{owner}', 'shared')"
+                ),
+            )
+            .await
+            .unwrap();
+        }
+        let [shared, personal, own, oversized_session] = [(); 4].map(|()| uuid::Uuid::new_v4());
+        for (id, folder, owner, visibility, profile) in [
+            (shared, of_alice, &alice, "shared", cisco),
+            (personal, of_alice, &alice, "personal", linux),
+            (own, of_bob, &bob, "personal", linux),
+            (oversized_session, of_bob, &bob, "personal", oversized),
+        ] {
+            pg_exec(
+                &pool,
+                &format!(
+                    "INSERT INTO sessions \
+                         (id, folder_id, name, hostname, username, owner, visibility, \
+                          highlight_profile_id) \
+                     VALUES ('{id}', '{folder}', 'session', 'host.example', '', '{owner}', \
+                             '{visibility}', '{profile}')"
+                ),
+            )
+            .await
+            .unwrap();
+        }
+        setup_postgres_rls(&pool).await.unwrap();
+        pg_exec(
+            &pool,
+            &format!(
+                "GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public \
+                 TO {alice}, {bob}"
+            ),
+        )
+        .await
+        .unwrap();
+
+        let (highlights, local) = local_database().await;
+
+        // Bob's first start. Every profile the app could have saved comes
+        // over, in the order the app showed them, and the one that was left
+        // where it is is counted. A choice comes over for his own session
+        // only: not for alice's shared one, where the profile was her
+        // choice, nor for the session whose profile was not read.
+        pg_exec(&pool, &format!("SET ROLE {bob}")).await.unwrap();
+        let taken = highlights.take_over_central(&pool).await.unwrap().unwrap();
+        assert_eq!(
+            (
+                taken.copied,
+                taken.already_there,
+                taken.left_out,
+                taken.sessions,
+                taken.not_read
+            ),
+            (3, 0, 0, 1, 1)
+        );
+        let profiles = local.list_highlight_profiles().await.unwrap();
+        assert_eq!(
+            profiles
+                .iter()
+                .map(|p| (p.id, p.name.as_str(), p.rules.as_str()))
+                .collect::<Vec<_>>(),
+            vec![
+                (cisco, "Cisco", RULES),
+                (linux, "Linux", "[]"),
+                (unused, "Unused", "[]")
+            ]
+        );
+        let chosen = highlights.all().await.unwrap();
+        assert_eq!(chosen, std::collections::HashMap::from([(own, linux)]));
+
+        // The shared table is still every role's to write. Alice changes a
+        // profile bob has, deletes another, adds one and has her shared
+        // session name it. And she puts sixteen profiles of the longest
+        // rules before all the others, more than a take-over reads.
+        pg_exec(&pool, &format!("SET ROLE {alice}")).await.unwrap();
+        let planted = uuid::Uuid::new_v4();
+        for sql in [
+            format!(
+                "UPDATE highlight_profiles SET rules = '[{{\"pattern\":\"(a|a)*$\",\
+                 \"color\":\"#000000\",\"case_sensitive\":true,\"bold\":false}}]' \
+                 WHERE id = '{cisco}'"
+            ),
+            format!("DELETE FROM highlight_profiles WHERE id = '{unused}'"),
+            format!(
+                "INSERT INTO highlight_profiles (id, name, rules, sort_order) \
+                 VALUES ('{planted}', 'Planted', '[]', 9)"
+            ),
+            format!("UPDATE sessions SET highlight_profile_id = '{planted}' WHERE id = '{shared}'"),
+        ] {
+            assert_eq!(
+                pg_exec(&pool, &sql).await.unwrap().rows_affected(),
+                1,
+                "{sql}"
+            );
+        }
+        let longest = format!("[{}]", " ".repeat(1_048_576 - 2));
+        for n in 0..16 {
+            sqlx::query(
+                "INSERT INTO highlight_profiles (id, name, rules, sort_order) \
+                 VALUES ($1, $2, $3, -1)",
+            )
+            .bind(uuid::Uuid::new_v4().to_string())
+            // Each with a name of its own: the same name and rules twice
+            // would be taken once.
+            .bind(format!("Filler {n}"))
+            .bind(&longest)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+
+        // None of it reaches bob: not at his next start, and not through
+        // what the app reads while it runs.
+        pg_exec(&pool, &format!("SET ROLE {bob}")).await.unwrap();
+        assert_eq!(highlights.take_over_central(&pool).await.unwrap(), None);
+        // The time limit of the take-over's statements ended with them.
+        let limit: String = sqlx::query_scalar("SHOW statement_timeout")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(limit, "0");
+        let after = local.list_highlight_profiles().await.unwrap();
+        assert_eq!(
+            after
+                .iter()
+                .map(|p| (p.id, p.rules.as_str()))
+                .collect::<Vec<_>>(),
+            vec![(cisco, RULES), (linux, "[]"), (unused, "[]")]
+        );
+        assert_eq!(highlights.all().await.unwrap(), chosen);
+        let provider = PostgresProvider::new(pool.clone());
+        let mut sessions = provider.list_all_sessions().await.unwrap();
+        // The row names what alice wrote; what bob's window gets is his own.
+        let row = |sessions: &[db::models::Session], id| {
+            sessions
+                .iter()
+                .find(|s| s.id == id)
+                .unwrap()
+                .highlight_profile_id
+        };
+        assert_eq!(row(&sessions, shared), Some(planted));
+        highlights.overlay(&mut sessions).await;
+        assert_eq!(row(&sessions, shared), None);
+        assert_eq!(row(&sessions, own), Some(linux));
+        assert_eq!(row(&sessions, oversized_session), None);
+
+        // A first start of bob's on another machine, against the table as
+        // alice left it. The profile his own session names is read before
+        // anything else, so her sixteen cannot keep it out: fifteen of them
+        // fit beside it, and what comes after them in the app's order is
+        // not read. The rules read come to no more than the limit.
+        let (elsewhere, elsewhere_local) = local_database().await;
+        let taken = elsewhere.take_over_central(&pool).await.unwrap().unwrap();
+        assert_eq!(
+            (taken.copied, taken.left_out, taken.sessions, taken.not_read),
+            // In the table: the sixteen, Cisco, Linux, Planted and Oversized.
+            (16, 0, 1, 4)
+        );
+        let read = elsewhere_local.list_highlight_profiles().await.unwrap();
+        assert!(read.iter().any(|p| p.id == linux));
+        assert_eq!(
+            read.iter().filter(|p| p.name.starts_with("Filler")).count(),
+            15
+        );
+        assert!(read.iter().map(|p| p.rules.len()).sum::<usize>() <= 16 * 1_048_576);
+        assert_eq!(
+            elsewhere.all().await.unwrap(),
+            std::collections::HashMap::from([(own, linux)])
+        );
     }
 
     /// Run `checks` with a database of its own on the throwaway server and

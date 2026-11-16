@@ -29,7 +29,8 @@
     "bulkEdit": "Edycja zbiorcza sesji…",
     "makeShared": "Udostępnij",
     "makePersonal": "Ustaw jako osobiste",
-    "myLogin": "Moje logowanie…"
+    "myLogin": "Moje logowanie…",
+    "myHighlighting": "Moje podświetlanie…"
   },
   "bulkEdit": {
     "title": "Edycja zbiorcza — {{name}}",
@@ -181,6 +182,8 @@
     "tagsJumpHostNote": "Dodaj tag \"jumphost\", aby ta sesja była dostępna jako host pośredni we właściwościach innych sesji.",
     "highlightProfileLabel": "Profil podświetlania",
     "highlightProfileNone": "Brak",
+    "myHighlightingTitle": "Moje podświetlanie — {{name}}",
+    "myHighlightingInfo": "Wybierz, z którym z twoich profili podświetlania jest pokazywane wyjście terminala tej sesji. Wybór dotyczy tylko ciebie: inni użytkownicy go nie widzą, a sama sesja nie jest zmieniana.",
     "credentialProfileLabel": "Profil poświadczeń",
     "credentialProfileNone": "(Brak — powrót do klawiatury interaktywnej)",
     "loginSequenceLabel": "Sekwencja logowania",
@@ -484,6 +487,7 @@
   "highlighting": {
     "sectionTitle": "Podświetlanie słów kluczowych",
     "sectionHint": "Zdefiniuj reguły podświetlania oparte na wyrażeniach regularnych dla wyjścia terminala i przypisz profile do sesji.",
+    "ownHint": "Przy bazie danych PostgreSQL profile podświetlania są przechowywane na tym komputerze i należą tylko do ciebie. Inni użytkownicy ich nie widzą, twoje inne komputery również.",
     "addProfile": "Dodaj profil",
     "editProfile": "Edytuj profil",
     "noProfiles": "Brak zdefiniowanych profili podświetlania.",

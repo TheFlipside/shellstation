@@ -1805,6 +1805,9 @@ export function SettingsDialog({ onClose }: SettingsDialogProps): React.JSX.Elem
             ?
           </span>
         </div>
+        {appDbBackend === "postgres" && (
+          <p className="settings-hint">{t("highlighting.ownHint")}</p>
+        )}
         {highlightProfiles.length === 0 ? (
           <p className="settings-hint">{t("highlighting.noProfiles")}</p>
         ) : (

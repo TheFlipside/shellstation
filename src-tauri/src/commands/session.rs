@@ -10,12 +10,14 @@ use tracing::debug;
 use crate::db::models::{
     CredentialProfile, DataFingerprint, Folder, NewFolder, NewSession, Session, UpdateSession,
 };
-use crate::db::{CredentialDbState, DatabaseProvider, DbState};
+use crate::db::session_highlights::{sessions_below, SessionHighlightState, SessionHighlights};
+use crate::db::{CredentialDbState, DatabaseProvider, DbState, HighlightDbState, PgUserState};
 use crate::login_pins::{needs_confirmation, LoginPinState, UsedAs};
 use crate::session_logger::SessionLogState;
 use crate::ssh::{establish_ssh_connection, SshConnectParams, SshState};
 use crate::telnet::{establish_telnet_connection, TelnetConnectParams, TelnetState};
 
+use super::highlight::require_highlight_profile;
 use super::session_credentials::CredentialMappings;
 use super::{
     connection, validate_dimensions, validate_port, validate_session_fields, ConnectSetup,
@@ -106,8 +108,69 @@ pub async fn folder_move(
 }
 
 #[tauri::command]
-pub async fn folder_delete(state: State<'_, DbState>, id: String) -> Result<(), String> {
-    state.0.delete_folder(parse_uuid(&id)?).await
+pub async fn folder_delete(
+    state: State<'_, DbState>,
+    highlights: State<'_, SessionHighlightState>,
+    id: String,
+) -> Result<(), String> {
+    let folder = parse_uuid(&id)?;
+    // The sessions that go with the folder, for the highlight profiles
+    // chosen for them (PostgreSQL mode): looked up before they are gone.
+    let gone = match highlights.0.as_ref() {
+        Some(_) => visible_sessions_below(&*state.0, folder).await,
+        None => Vec::new(),
+    };
+    state.0.delete_folder(folder).await?;
+    if let Some(local) = highlights.0.as_ref() {
+        forget_highlights(local, &gone).await;
+    }
+    Ok(())
+}
+
+/// The sessions in `folder` and below it that this user can see, whoever
+/// owns them. Empty if they cannot be listed, which is logged: what was
+/// chosen for them then stays behind.
+async fn visible_sessions_below(db: &dyn DatabaseProvider, folder: Uuid) -> Vec<Uuid> {
+    match (db.list_folders().await, db.list_all_sessions().await) {
+        (Ok(folders), Ok(sessions)) => sessions_below(folder, &folders, &sessions),
+        (Err(e), _) | (_, Err(e)) => {
+            tracing::warn!(
+                "Could not list the sessions of a folder that is being deleted; highlight profiles chosen for them are not dropped: {e:?}"
+            );
+            Vec::new()
+        }
+    }
+}
+
+/// Drop the highlight profiles chosen for sessions that have been deleted.
+/// The sessions are gone either way, so a failure is only logged: what stays
+/// is a row for a session that no longer exists.
+async fn forget_highlights(local: &SessionHighlights, sessions: &[Uuid]) {
+    if sessions.is_empty() {
+        return;
+    }
+    if let Err(e) = local.set(sessions, None).await {
+        tracing::warn!("Could not drop the highlight profiles of deleted sessions: {e:?}");
+    }
+}
+
+/// Of the sessions in `folder` and below it, those a Bulk Edit covers in
+/// `PostgreSQL` mode: the role's own, in a folder of the role's own and in
+/// the role's own folders below it, as the statements of
+/// `bulk_edit_sessions` have it. None while the role is not known.
+async fn own_sessions_below(
+    db: &dyn DatabaseProvider,
+    folder: Uuid,
+    role: Option<&str>,
+) -> Result<Vec<Uuid>, String> {
+    let Some(role) = role else {
+        return Ok(Vec::new());
+    };
+    let mut folders = db.list_folders().await?;
+    folders.retain(|f| f.owner == role);
+    let mut sessions = db.list_all_sessions().await?;
+    sessions.retain(|s| s.owner == role);
+    Ok(sessions_below(folder, &folders, &sessions))
 }
 
 /// Bulk-edit sessions in a folder (and its descendants). Each `set_*` flag
@@ -118,6 +181,9 @@ pub async fn folder_delete(state: State<'_, DbState>, id: String) -> Result<(), 
 #[allow(clippy::too_many_arguments)]
 pub async fn folder_bulk_edit_sessions(
     state: State<'_, DbState>,
+    profiles: State<'_, HighlightDbState>,
+    highlights: State<'_, SessionHighlightState>,
+    pg_user: State<'_, PgUserState>,
     folder_id: String,
     set_jump_host: bool,
     jump_host_id: Option<String>,
@@ -160,18 +226,58 @@ pub async fn folder_bulk_edit_sessions(
             ));
         }
     }
-    state
-        .0
-        .bulk_edit_sessions(
-            folder_uuid,
-            crate::db::BulkSessionEdit {
-                jump_host_id: jump_host,
-                highlight_profile_id: highlight,
-                login_sequence_id: login_seq,
-                icon,
-            },
-        )
+    bulk_edit_sessions(
+        &*state.0,
+        &profiles,
+        highlights.0.as_ref(),
+        pg_user.0.as_deref(),
+        folder_uuid,
+        crate::db::BulkSessionEdit {
+            jump_host_id: jump_host,
+            highlight_profile_id: highlight,
+            login_sequence_id: login_seq,
+            icon,
+        },
+    )
+    .await
+}
+
+/// A Bulk Edit of the sessions in `folder` and below it. `local` is `None`
+/// in `SQLite` mode, where all of `edit` goes to the session rows.
+///
+/// In `PostgreSQL` mode the highlight profile is one of the user's own, and
+/// the choice of it is kept locally, so it is taken out of what goes to the
+/// shared database, and chosen for the sessions that the rest of the edit
+/// covers: the role's own. It is checked first, so that a profile that is
+/// not there changes nothing.
+async fn bulk_edit_sessions(
+    db: &dyn DatabaseProvider,
+    profiles: &HighlightDbState,
+    local: Option<&SessionHighlights>,
+    role: Option<&str>,
+    folder: Uuid,
+    mut edit: crate::db::BulkSessionEdit,
+) -> Result<u32, String> {
+    let Some(local) = local else {
+        return db.bulk_edit_sessions(folder, edit).await;
+    };
+    let Some(profile) = edit.highlight_profile_id.take() else {
+        return db.bulk_edit_sessions(folder, edit).await;
+    };
+    if let Some(profile) = profile {
+        require_highlight_profile(profiles, profile).await?;
+    }
+    // Before anything is changed, so that a failure to list them changes
+    // nothing.
+    let own = own_sessions_below(db, folder, role).await?;
+    let edited = db.bulk_edit_sessions(folder, edit).await?;
+    let chosen = local
+        .set(&own, profile)
         .await
+        .map_err(|e| format!("The sessions were updated, but not their highlight profile: {e}"))?;
+    // The sessions touched, not the sum: both cover the same sessions, the
+    // jump host only those of them that are SSH.
+    Ok(edited.max(chosen))
 }
 
 // ── Session commands ─────────────────────────────────────────────────
@@ -180,6 +286,8 @@ pub async fn folder_bulk_edit_sessions(
 #[allow(clippy::too_many_arguments)]
 pub async fn session_create(
     state: State<'_, DbState>,
+    profiles: State<'_, HighlightDbState>,
+    highlights: State<'_, SessionHighlightState>,
     folder_id: String,
     name: String,
     hostname: String,
@@ -217,9 +325,11 @@ pub async fn session_create(
         .transpose()?;
     let login_seq = login_sequence_id.as_deref().map(parse_uuid).transpose()?;
 
-    state
-        .0
-        .create_session(NewSession {
+    create_session(
+        &*state.0,
+        &profiles,
+        highlights.0.as_ref(),
+        NewSession {
             folder_id: folder,
             name,
             hostname,
@@ -237,24 +347,72 @@ pub async fn session_create(
             credential_profile_id: credential,
             login_sequence_id: login_seq,
             legacy_algorithms: legacy_algorithms.unwrap_or(false),
-        })
-        .await
+        },
+    )
+    .await
+}
+
+/// Create a session. `local` is `None` in `SQLite` mode, where the row names
+/// its highlight profile.
+///
+/// In `PostgreSQL` mode the highlight profile is the user's own choice: it
+/// is kept in `local`, and the row, which every user of a shared session
+/// reads, names none. The session that is returned has the user's choice.
+async fn create_session(
+    db: &dyn DatabaseProvider,
+    profiles: &HighlightDbState,
+    local: Option<&SessionHighlights>,
+    mut session: NewSession,
+) -> Result<Session, String> {
+    let Some(local) = local else {
+        return db.create_session(session).await;
+    };
+    let highlight = session.highlight_profile_id.take();
+    if let Some(profile) = highlight {
+        require_highlight_profile(profiles, profile).await?;
+    }
+    let mut created = db.create_session(session).await?;
+    if let Some(profile) = highlight {
+        local
+            .set(&[created.id], Some(profile))
+            .await
+            .map_err(|e| format!("The session was saved, but not its highlight profile: {e}"))?;
+    }
+    created.highlight_profile_id = highlight;
+    Ok(created)
 }
 
 #[tauri::command]
-pub async fn session_get(state: State<'_, DbState>, id: String) -> Result<Option<Session>, String> {
-    state.0.get_session(parse_uuid(&id)?).await
+pub async fn session_get(
+    state: State<'_, DbState>,
+    highlights: State<'_, SessionHighlightState>,
+    id: String,
+) -> Result<Option<Session>, String> {
+    let mut session = state.0.get_session(parse_uuid(&id)?).await?;
+    if let (Some(local), Some(session)) = (highlights.0.as_ref(), session.as_mut()) {
+        local.overlay_one(session).await;
+    }
+    Ok(session)
 }
 
 #[tauri::command]
-pub async fn session_list_all(state: State<'_, DbState>) -> Result<Vec<Session>, String> {
-    state.0.list_all_sessions().await
+pub async fn session_list_all(
+    state: State<'_, DbState>,
+    highlights: State<'_, SessionHighlightState>,
+) -> Result<Vec<Session>, String> {
+    let mut sessions = state.0.list_all_sessions().await?;
+    if let Some(local) = highlights.0.as_ref() {
+        local.overlay(&mut sessions).await;
+    }
+    Ok(sessions)
 }
 
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 pub async fn session_update(
     state: State<'_, DbState>,
+    profiles: State<'_, HighlightDbState>,
+    highlights: State<'_, SessionHighlightState>,
     id: String,
     name: Option<String>,
     hostname: Option<String>,
@@ -307,27 +465,67 @@ pub async fn session_update(
         None => None,
     });
 
-    state
-        .0
-        .update_session(
-            session_id,
-            UpdateSession {
-                name,
-                hostname,
-                port,
-                protocol,
-                username,
-                auth_method: None,
-                jump_host_id: jump,
-                tags,
-                icon,
-                highlight_profile_id: highlight,
-                credential_profile_id: credential,
-                login_sequence_id: login_seq,
-                legacy_algorithms,
-            },
-        )
-        .await
+    update_session(
+        &*state.0,
+        &profiles,
+        highlights.0.as_ref(),
+        session_id,
+        UpdateSession {
+            name,
+            hostname,
+            port,
+            protocol,
+            username,
+            auth_method: None,
+            jump_host_id: jump,
+            tags,
+            icon,
+            highlight_profile_id: highlight,
+            credential_profile_id: credential,
+            login_sequence_id: login_seq,
+            legacy_algorithms,
+        },
+    )
+    .await
+}
+
+/// Update a session. `local` is `None` in `SQLite` mode, where the row names
+/// its highlight profile.
+///
+/// In `PostgreSQL` mode the highlight profile is the user's own choice: it
+/// is kept in `local`, once the row has been updated, and the row's own
+/// column is left as it is. Nothing reads that column any more; a version
+/// from before profiles were each user's own still does.
+async fn update_session(
+    db: &dyn DatabaseProvider,
+    profiles: &HighlightDbState,
+    local: Option<&SessionHighlights>,
+    id: Uuid,
+    mut update: UpdateSession,
+) -> Result<(), String> {
+    let Some(local) = local else {
+        return db.update_session(id, update).await;
+    };
+    let highlight = update.highlight_profile_id.take();
+    if let Some(profile) = highlight {
+        // An update of nothing else is no statement, which a session that is
+        // not there would fail. So that no choice is kept for an ID that is
+        // no session's, the session is looked for first.
+        if db.get_session(id).await?.is_none() {
+            return Err(format!("Session {id} not found"));
+        }
+        if let Some(profile) = profile {
+            require_highlight_profile(profiles, profile).await?;
+        }
+    }
+    db.update_session(id, update).await?;
+    if let Some(profile) = highlight {
+        local
+            .set(&[id], profile)
+            .await
+            .map_err(|e| format!("The session was saved, but not its highlight profile: {e}"))?;
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -343,8 +541,17 @@ pub async fn session_move(
 }
 
 #[tauri::command]
-pub async fn session_delete(state: State<'_, DbState>, id: String) -> Result<(), String> {
-    state.0.delete_session(parse_uuid(&id)?).await
+pub async fn session_delete(
+    state: State<'_, DbState>,
+    highlights: State<'_, SessionHighlightState>,
+    id: String,
+) -> Result<(), String> {
+    let session = parse_uuid(&id)?;
+    state.0.delete_session(session).await?;
+    if let Some(local) = highlights.0.as_ref() {
+        forget_highlights(local, &[session]).await;
+    }
+    Ok(())
 }
 
 /// Cap the search term length to bound LIKE-query cost and prevent a
@@ -354,6 +561,7 @@ const MAX_SEARCH_QUERY_LEN: usize = 200;
 #[tauri::command]
 pub async fn session_search(
     state: State<'_, DbState>,
+    highlights: State<'_, SessionHighlightState>,
     query: String,
 ) -> Result<Vec<Session>, String> {
     let trimmed = if query.len() > MAX_SEARCH_QUERY_LEN {
@@ -365,7 +573,11 @@ pub async fn session_search(
     } else {
         query.as_str()
     };
-    state.0.search_sessions(trimmed).await
+    let mut sessions = state.0.search_sessions(trimmed).await?;
+    if let Some(local) = highlights.0.as_ref() {
+        local.overlay(&mut sessions).await;
+    }
+    Ok(sessions)
 }
 
 #[tauri::command]
@@ -1637,5 +1849,475 @@ mod tests {
             error.starts_with("No credential profile assigned to jump host \"bastion\""),
             "{error}"
         );
+    }
+
+    // ── Highlight profiles in PostgreSQL mode ────────────────────────────
+
+    use crate::commands::highlight::set_session_highlight_profile;
+    use crate::db::models::NewHighlightProfile;
+
+    /// What the commands work with in `PostgreSQL` mode: a database that
+    /// stands for the shared one, and the user's local one with their
+    /// highlight profiles and the profile chosen for each session.
+    struct Highlighting {
+        shared: SqliteProvider,
+        profiles: HighlightDbState,
+        local: SessionHighlights,
+        folder: Uuid,
+    }
+
+    async fn memory_pool(foreign_keys: &'static str) -> sqlx::SqlitePool {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(
+                SqliteConnectOptions::new()
+                    .filename(":memory:")
+                    .pragma("foreign_keys", foreign_keys),
+            )
+            .await
+            .unwrap();
+        sqlx::migrate!().run(&pool).await.unwrap();
+        pool
+    }
+
+    async fn highlighting() -> Highlighting {
+        let shared = SqliteProvider::new(memory_pool("ON").await);
+        let local_pool = memory_pool("OFF").await;
+        let local = SessionHighlights::open(local_pool.clone()).await.unwrap();
+        let profiles = HighlightDbState(std::sync::Arc::new(SqliteProvider::new(local_pool)));
+        let folder = shared
+            .create_folder(NewFolder {
+                name: "folder".to_string(),
+                parent_id: None,
+            })
+            .await
+            .unwrap()
+            .id;
+        Highlighting {
+            shared,
+            profiles,
+            local,
+            folder,
+        }
+    }
+
+    async fn profile_in(db: &dyn DatabaseProvider, name: &str) -> Uuid {
+        db.create_highlight_profile(NewHighlightProfile {
+            name: name.to_string(),
+            rules: "[]".to_string(),
+        })
+        .await
+        .unwrap()
+        .id
+    }
+
+    fn new_session(folder_id: Uuid, name: &str, highlight_profile_id: Option<Uuid>) -> NewSession {
+        NewSession {
+            folder_id,
+            name: name.to_string(),
+            hostname: format!("{name}.example"),
+            port: 22,
+            protocol: "ssh".to_string(),
+            username: String::new(),
+            auth_method: "profile".to_string(),
+            jump_host_id: None,
+            tags: "[]".to_string(),
+            icon: "desktop".to_string(),
+            highlight_profile_id,
+            credential_profile_id: None,
+            login_sequence_id: None,
+            legacy_algorithms: false,
+        }
+    }
+
+    async fn row(db: &dyn DatabaseProvider, id: Uuid) -> Session {
+        db.get_session(id).await.unwrap().unwrap()
+    }
+
+    #[tokio::test]
+    async fn in_postgresql_mode_a_new_session_keeps_its_highlight_profile_locally() {
+        let h = highlighting().await;
+        let mine = profile_in(&*h.profiles.0, "mine").await;
+
+        let created = create_session(
+            &h.shared,
+            &h.profiles,
+            Some(&h.local),
+            new_session(h.folder, "router", Some(mine)),
+        )
+        .await
+        .unwrap();
+        // The window gets the user's choice; the row, which every user of a
+        // shared session reads, names no profile.
+        assert_eq!(created.highlight_profile_id, Some(mine));
+        assert_eq!(row(&h.shared, created.id).await.highlight_profile_id, None);
+        assert_eq!(h.local.get(created.id).await.unwrap(), Some(mine));
+
+        let plain = create_session(
+            &h.shared,
+            &h.profiles,
+            Some(&h.local),
+            new_session(h.folder, "switch", None),
+        )
+        .await
+        .unwrap();
+        assert_eq!(plain.highlight_profile_id, None);
+        assert_eq!(h.local.get(plain.id).await.unwrap(), None);
+
+        // A profile that is not one of the user's is refused before anything
+        // is created. One of the shared database is no such profile.
+        let central = profile_in(&h.shared, "central").await;
+        let error = create_session(
+            &h.shared,
+            &h.profiles,
+            Some(&h.local),
+            new_session(h.folder, "firewall", Some(central)),
+        )
+        .await
+        .unwrap_err();
+        assert!(error.contains("not found"), "{error}");
+        assert_eq!(h.shared.list_all_sessions().await.unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn in_postgresql_mode_an_update_leaves_the_rows_highlight_profile_alone() {
+        let h = highlighting().await;
+        let mine = profile_in(&*h.profiles.0, "mine").await;
+        // A row from before profiles were each user's own names one of the
+        // shared database.
+        let central = profile_in(&h.shared, "central").await;
+        let id = h
+            .shared
+            .create_session(new_session(h.folder, "router", Some(central)))
+            .await
+            .unwrap()
+            .id;
+
+        let update = |name: &str, highlight: Option<Uuid>| UpdateSession {
+            name: Some(name.to_string()),
+            highlight_profile_id: Some(highlight),
+            ..Default::default()
+        };
+        update_session(
+            &h.shared,
+            &h.profiles,
+            Some(&h.local),
+            id,
+            update("core", Some(mine)),
+        )
+        .await
+        .unwrap();
+        let after = row(&h.shared, id).await;
+        assert_eq!(after.name, "core");
+        assert_eq!(after.highlight_profile_id, Some(central));
+        assert_eq!(h.local.get(id).await.unwrap(), Some(mine));
+
+        // "None" clears the user's choice, and still not the row.
+        update_session(
+            &h.shared,
+            &h.profiles,
+            Some(&h.local),
+            id,
+            update("core", None),
+        )
+        .await
+        .unwrap();
+        assert_eq!(row(&h.shared, id).await.highlight_profile_id, Some(central));
+        assert_eq!(h.local.get(id).await.unwrap(), None);
+
+        // An update that says nothing about the profile keeps the choice.
+        h.local.set(&[id], Some(mine)).await.unwrap();
+        update_session(
+            &h.shared,
+            &h.profiles,
+            Some(&h.local),
+            id,
+            UpdateSession {
+                name: Some("edge".to_string()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(h.local.get(id).await.unwrap(), Some(mine));
+
+        // A profile that is not the user's changes nothing, the name included.
+        let error = update_session(
+            &h.shared,
+            &h.profiles,
+            Some(&h.local),
+            id,
+            update("renamed", Some(central)),
+        )
+        .await
+        .unwrap_err();
+        assert!(error.contains("not found"), "{error}");
+        assert_eq!(row(&h.shared, id).await.name, "edge");
+        assert_eq!(h.local.get(id).await.unwrap(), Some(mine));
+
+        // A session that is not there gets no choice either, also where the
+        // profile is all the update names, which is no statement that could
+        // fail.
+        let missing = Uuid::new_v4();
+        let error = update_session(
+            &h.shared,
+            &h.profiles,
+            Some(&h.local),
+            missing,
+            UpdateSession {
+                highlight_profile_id: Some(Some(mine)),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(error.contains("not found"), "{error}");
+        assert_eq!(h.local.get(missing).await.unwrap(), None);
+        update_session(
+            &h.shared,
+            &h.profiles,
+            Some(&h.local),
+            missing,
+            update("x", Some(mine)),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(h.local.get(missing).await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn in_sqlite_mode_the_row_names_the_highlight_profile() {
+        let h = highlighting().await;
+        let db: std::sync::Arc<dyn DatabaseProvider> = std::sync::Arc::new(h.shared);
+        let profiles = HighlightDbState(db.clone());
+        let (first, second) = (
+            profile_in(&*db, "first").await,
+            profile_in(&*db, "second").await,
+        );
+
+        let created = create_session(
+            &*db,
+            &profiles,
+            None,
+            new_session(h.folder, "router", Some(first)),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            row(&*db, created.id).await.highlight_profile_id,
+            Some(first)
+        );
+
+        update_session(
+            &*db,
+            &profiles,
+            None,
+            created.id,
+            UpdateSession {
+                highlight_profile_id: Some(Some(second)),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            row(&*db, created.id).await.highlight_profile_id,
+            Some(second)
+        );
+
+        set_session_highlight_profile(&*db, &profiles, None, created.id, None)
+            .await
+            .unwrap();
+        assert_eq!(row(&*db, created.id).await.highlight_profile_id, None);
+        set_session_highlight_profile(&*db, &profiles, None, created.id, Some(first))
+            .await
+            .unwrap();
+        assert_eq!(
+            row(&*db, created.id).await.highlight_profile_id,
+            Some(first)
+        );
+    }
+
+    #[tokio::test]
+    async fn in_postgresql_mode_a_highlight_profile_is_chosen_for_any_session_there_is() {
+        let h = highlighting().await;
+        let mine = profile_in(&*h.profiles.0, "mine").await;
+        let central = profile_in(&h.shared, "central").await;
+        let id = h
+            .shared
+            .create_session(new_session(h.folder, "router", Some(central)))
+            .await
+            .unwrap()
+            .id;
+
+        set_session_highlight_profile(&h.shared, &h.profiles, Some(&h.local), id, Some(mine))
+            .await
+            .unwrap();
+        assert_eq!(h.local.get(id).await.unwrap(), Some(mine));
+        // The row is another user's, as far as this goes: it is not written.
+        assert_eq!(row(&h.shared, id).await.highlight_profile_id, Some(central));
+
+        // Not a profile of the shared database, and not for an ID that is
+        // no session's.
+        set_session_highlight_profile(&h.shared, &h.profiles, Some(&h.local), id, Some(central))
+            .await
+            .unwrap_err();
+        let missing = Uuid::new_v4();
+        set_session_highlight_profile(&h.shared, &h.profiles, Some(&h.local), missing, Some(mine))
+            .await
+            .unwrap_err();
+        assert_eq!(h.local.get(id).await.unwrap(), Some(mine));
+        assert_eq!(h.local.get(missing).await.unwrap(), None);
+
+        set_session_highlight_profile(&h.shared, &h.profiles, Some(&h.local), id, None)
+            .await
+            .unwrap();
+        assert_eq!(h.local.get(id).await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn in_postgresql_mode_a_bulk_edit_chooses_the_highlight_profile_locally() {
+        let h = highlighting().await;
+        let mine = profile_in(&*h.profiles.0, "mine").await;
+        let central = profile_in(&h.shared, "central").await;
+        let below = h
+            .shared
+            .create_folder(NewFolder {
+                name: "below".to_string(),
+                parent_id: Some(h.folder),
+            })
+            .await
+            .unwrap()
+            .id;
+        let elsewhere = h
+            .shared
+            .create_folder(NewFolder {
+                name: "elsewhere".to_string(),
+                parent_id: None,
+            })
+            .await
+            .unwrap()
+            .id;
+        let mut ids = Vec::new();
+        for (folder, name) in [(h.folder, "a"), (below, "b"), (elsewhere, "c")] {
+            ids.push(
+                h.shared
+                    .create_session(new_session(folder, name, Some(central)))
+                    .await
+                    .unwrap()
+                    .id,
+            );
+        }
+        let (a, b, c) = (ids[0], ids[1], ids[2]);
+        let edit = |highlight: Option<Uuid>, icon: Option<&str>| crate::db::BulkSessionEdit {
+            highlight_profile_id: Some(highlight),
+            icon: icon.map(str::to_string),
+            ..Default::default()
+        };
+        // The SQLite provider writes the placeholder as every row's owner.
+        let role = Some("local");
+
+        let touched = bulk_edit_sessions(
+            &h.shared,
+            &h.profiles,
+            Some(&h.local),
+            role,
+            h.folder,
+            edit(Some(mine), Some("server")),
+        )
+        .await
+        .unwrap();
+        assert_eq!(touched, 2);
+        for id in [a, b] {
+            let session = row(&h.shared, id).await;
+            assert_eq!(session.icon, "server");
+            assert_eq!(session.highlight_profile_id, Some(central));
+            assert_eq!(h.local.get(id).await.unwrap(), Some(mine));
+        }
+        assert_eq!(row(&h.shared, c).await.icon, "desktop");
+        assert_eq!(h.local.get(c).await.unwrap(), None);
+
+        // The profile alone: nothing goes to the shared database.
+        let touched = bulk_edit_sessions(
+            &h.shared,
+            &h.profiles,
+            Some(&h.local),
+            role,
+            below,
+            edit(None, None),
+        )
+        .await
+        .unwrap();
+        assert_eq!(touched, 1);
+        assert_eq!(h.local.get(a).await.unwrap(), Some(mine));
+        assert_eq!(h.local.get(b).await.unwrap(), None);
+
+        // Only the role's own sessions, and none while the role is not known.
+        for role in [Some("someone else"), None] {
+            let touched = bulk_edit_sessions(
+                &h.shared,
+                &h.profiles,
+                Some(&h.local),
+                role,
+                h.folder,
+                edit(None, None),
+            )
+            .await
+            .unwrap();
+            assert_eq!(touched, 0);
+            assert_eq!(h.local.get(a).await.unwrap(), Some(mine));
+        }
+
+        // A profile that is not the user's changes nothing, the icon included.
+        bulk_edit_sessions(
+            &h.shared,
+            &h.profiles,
+            Some(&h.local),
+            role,
+            h.folder,
+            edit(Some(central), Some("router")),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(row(&h.shared, a).await.icon, "server");
+        assert_eq!(h.local.get(a).await.unwrap(), Some(mine));
+    }
+
+    #[tokio::test]
+    async fn the_sessions_that_go_with_a_folder_are_found_before_it_is_deleted() {
+        let h = highlighting().await;
+        let below = h
+            .shared
+            .create_folder(NewFolder {
+                name: "below".to_string(),
+                parent_id: Some(h.folder),
+            })
+            .await
+            .unwrap()
+            .id;
+        let a = h
+            .shared
+            .create_session(new_session(h.folder, "a", None))
+            .await
+            .unwrap()
+            .id;
+        let b = h
+            .shared
+            .create_session(new_session(below, "b", None))
+            .await
+            .unwrap()
+            .id;
+        let profile = Uuid::new_v4();
+        h.local.set(&[a, b], Some(profile)).await.unwrap();
+
+        let mut gone = visible_sessions_below(&h.shared, h.folder).await;
+        gone.sort();
+        let mut both = vec![a, b];
+        both.sort();
+        assert_eq!(gone, both);
+
+        forget_highlights(&h.local, &[b]).await;
+        assert_eq!(h.local.get(a).await.unwrap(), Some(profile));
+        assert_eq!(h.local.get(b).await.unwrap(), None);
     }
 }

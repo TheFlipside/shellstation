@@ -29,7 +29,8 @@
     "bulkEdit": "Editar sessões em massa…",
     "makeShared": "Compartilhar",
     "makePersonal": "Tornar pessoal",
-    "myLogin": "Minhas credenciais…"
+    "myLogin": "Minhas credenciais…",
+    "myHighlighting": "Meu destaque…"
   },
   "bulkEdit": {
     "title": "Edição em massa — {{name}}",
@@ -181,6 +182,8 @@
     "tagsJumpHostNote": "Adicione a tag \"jumphost\" para disponibilizar esta sessão como host de salto nas propriedades de outras sessões.",
     "highlightProfileLabel": "Perfil de destaque",
     "highlightProfileNone": "Nenhum",
+    "myHighlightingTitle": "Meu destaque — {{name}}",
+    "myHighlightingInfo": "Escolha com qual dos seus perfis de destaque a saída do terminal desta sessão é mostrada. A escolha é só sua: os outros usuários não a veem, e a sessão em si não é alterada.",
     "credentialProfileLabel": "Perfil de credenciais",
     "credentialProfileNone": "(Nenhum — fallback teclado interativo)",
     "loginSequenceLabel": "Sequência de login",
@@ -484,6 +487,7 @@
   "highlighting": {
     "sectionTitle": "Destaque por palavras-chave",
     "sectionHint": "Defina regras de destaque baseadas em expressões regulares para a saída do terminal e atribua perfis a sessões.",
+    "ownHint": "Com um banco de dados PostgreSQL, os perfis de destaque ficam guardados neste computador e são só seus. Os outros usuários não os veem, e seus outros computadores também não.",
     "addProfile": "Adicionar perfil",
     "editProfile": "Editar perfil",
     "noProfiles": "Nenhum perfil de destaque definido.",

@@ -29,7 +29,8 @@
     "bulkEdit": "Verbindungen bearbeiten…",
     "makeShared": "Freigeben",
     "makePersonal": "Persönlich machen",
-    "myLogin": "Meine Anmeldung…"
+    "myLogin": "Meine Anmeldung…",
+    "myHighlighting": "Meine Hervorhebung…"
   },
   "bulkEdit": {
     "title": "Massenbearbeitung — {{name}}",
@@ -181,6 +182,8 @@
     "tagsJumpHostNote": "Fügen Sie den Tag \"jumphost\" hinzu, damit diese Sitzung als Jump-Host in den Verbindungseigenschaften anderer Sitzungen verfügbar ist.",
     "highlightProfileLabel": "Hervorhebungsprofil",
     "highlightProfileNone": "Keines",
+    "myHighlightingTitle": "Meine Hervorhebung — {{name}}",
+    "myHighlightingInfo": "Wählen Sie, mit welchem Ihrer Hervorhebungsprofile die Terminalausgabe dieser Sitzung angezeigt wird. Die Auswahl gilt nur für Sie: Andere Benutzer sehen sie nicht, und die Sitzung selbst wird nicht geändert.",
     "credentialProfileLabel": "Anmeldeprofil",
     "credentialProfileNone": "(Keines — Tastatur-Interaktiv Fallback)",
     "loginSequenceLabel": "Login-Sequenz",
@@ -484,6 +487,7 @@
   "highlighting": {
     "sectionTitle": "Schlüsselwort-Hervorhebung",
     "sectionHint": "Definieren Sie regex-basierte Hervorhebungsregeln für die Terminalausgabe und weisen Sie Profile einzelnen Sitzungen zu.",
+    "ownHint": "Mit einer PostgreSQL-Datenbank werden Hervorhebungsprofile auf diesem Computer gespeichert und gehören nur Ihnen. Andere Benutzer sehen sie nicht, und Ihre anderen Computer auch nicht.",
     "addProfile": "Profil hinzufügen",
     "editProfile": "Profil bearbeiten",
     "noProfiles": "Keine Hervorhebungsprofile vorhanden.",

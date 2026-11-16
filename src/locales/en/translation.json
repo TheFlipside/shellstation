@@ -29,7 +29,8 @@
     "bulkEdit": "Bulk Edit Sessions…",
     "makeShared": "Make Shared",
     "makePersonal": "Make Personal",
-    "myLogin": "My Login…"
+    "myLogin": "My Login…",
+    "myHighlighting": "My Highlighting…"
   },
   "bulkEdit": {
     "title": "Bulk Edit — {{name}}",
@@ -182,6 +183,8 @@
     "tagsJumpHostNote": "Add the tag \"jumphost\" to make this session available as a jump host in the session properties of other sessions.",
     "highlightProfileLabel": "Highlight Profile",
     "highlightProfileNone": "None",
+    "myHighlightingTitle": "My Highlighting — {{name}}",
+    "myHighlightingInfo": "Choose which of your highlight profiles this session's terminal output is shown with. The choice is yours alone: other users do not see it, and the session itself is not changed.",
     "credentialProfileLabel": "Credential Profile",
     "credentialProfileNone": "(None — keyboard-interactive fallback)",
     "loginSequenceLabel": "Login Sequence",
@@ -485,6 +488,7 @@
   "highlighting": {
     "sectionTitle": "Keyword Highlighting",
     "sectionHint": "Define regex-based highlighting rules for terminal output and assign profiles to sessions.",
+    "ownHint": "With a PostgreSQL database, highlight profiles are kept on this computer and are yours alone. Other users do not see them, and neither do your other computers.",
     "addProfile": "Add Profile",
     "editProfile": "Edit Profile",
     "noProfiles": "No highlight profiles defined.",

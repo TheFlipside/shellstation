@@ -98,6 +98,7 @@ commands.allow = [
   "highlight_profile_get",
   "highlight_profile_update",
   "highlight_profile_delete",
+  "session_set_highlight_profile",
   "import_securecrt_highlights",
   # Login Sequences
   "login_sequence_create",

@@ -29,7 +29,8 @@
     "bulkEdit": "Oturumları toplu düzenle…",
     "makeShared": "Paylaş",
     "makePersonal": "Kişisel yap",
-    "myLogin": "Oturum açma bilgilerim…"
+    "myLogin": "Oturum açma bilgilerim…",
+    "myHighlighting": "Vurgulama ayarlarım…"
   },
   "bulkEdit": {
     "title": "Toplu Düzenleme — {{name}}",
@@ -181,6 +182,8 @@
     "tagsJumpHostNote": "Bu oturumu diğer oturumların özelliklerinde atlama sunucusu olarak kullanılabilir kılmak için \"jumphost\" etiketini ekleyin.",
     "highlightProfileLabel": "Vurgulama Profili",
     "highlightProfileNone": "Yok",
+    "myHighlightingTitle": "Vurgulama ayarlarım — {{name}}",
+    "myHighlightingInfo": "Bu oturumun terminal çıktısının vurgulama profillerinizden hangisiyle gösterileceğini seçin. Seçim yalnızca size aittir: diğer kullanıcılar bunu görmez ve oturumun kendisi değiştirilmez.",
     "credentialProfileLabel": "Kimlik profili",
     "credentialProfileNone": "(Yok — klavye etkileşimli geri dönüş)",
     "loginSequenceLabel": "Oturum açma sırası",
@@ -484,6 +487,7 @@
   "highlighting": {
     "sectionTitle": "Anahtar kelime vurgulama",
     "sectionHint": "Terminal çıktısı için regex tabanlı vurgulama kuralları tanımlayın ve profilleri oturumlara atayın.",
+    "ownHint": "PostgreSQL veritabanı kullanıldığında vurgulama profilleri bu bilgisayarda saklanır ve yalnızca size aittir. Diğer kullanıcılar bunları görmez, diğer bilgisayarlarınız da görmez.",
     "addProfile": "Profil ekle",
     "editProfile": "Profili düzenle",
     "noProfiles": "Tanımlanmış vurgulama profili yok.",

@@ -29,7 +29,8 @@
     "bulkEdit": "批量编辑会话…",
     "makeShared": "设为共享",
     "makePersonal": "设为个人",
-    "myLogin": "我的登录设置…"
+    "myLogin": "我的登录设置…",
+    "myHighlighting": "我的高亮设置…"
   },
   "bulkEdit": {
     "title": "批量编辑 — {{name}}",
@@ -181,6 +182,8 @@
     "tagsJumpHostNote": "添加 \"jumphost\" 标签，使此会话可在其他会话的属性中用作跳板主机。",
     "highlightProfileLabel": "高亮配置文件",
     "highlightProfileNone": "无",
+    "myHighlightingTitle": "我的高亮设置 — {{name}}",
+    "myHighlightingInfo": "选择用您的哪个高亮配置文件显示此会话的终端输出。此选择仅属于您：其他用户看不到，会话本身也不会被更改。",
     "credentialProfileLabel": "凭据配置文件",
     "credentialProfileNone": "(无 — 回退到键盘交互)",
     "loginSequenceLabel": "登录序列",
@@ -484,6 +487,7 @@
   "highlighting": {
     "sectionTitle": "关键词高亮",
     "sectionHint": "为终端输出定义基于正则表达式的高亮规则，并将配置文件分配给会话。",
+    "ownHint": "使用 PostgreSQL 数据库时，高亮配置文件保存在这台计算机上，仅属于您。其他用户看不到，您的其他计算机也看不到。",
     "addProfile": "添加配置文件",
     "editProfile": "编辑配置文件",
     "noProfiles": "未定义高亮配置文件。",
