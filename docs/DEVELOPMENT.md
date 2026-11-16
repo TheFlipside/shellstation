@@ -1713,6 +1713,24 @@ npx prettier --check "src/**/*.{ts,tsx,css,json}"
 
 The Tauri CLI is listed as a devDependency in `package.json` (`@tauri-apps/cli`) and is updated along with npm packages. Ensure the CLI version stays compatible with the `tauri` and `tauri-build` crate versions in `Cargo.toml` — they should track the same major.minor release line.
 
+### Actions of the release workflow
+
+`.forgejo/workflows/release.yml` names each action by commit, with the release that commit is in a comment:
+
+```yaml
+uses: https://github.com/actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+```
+
+A tag such as `v4` can be moved, and the jobs hold the updater's signing key and the release tokens ([DESIGN.md §4.7.6](DESIGN.md#476-ci-integration)). Nothing updates these by itself. To move to a newer release, look up its commit and replace the commit and the comment at every use of that action:
+
+```bash
+# The line that ends in ^{} is the commit of an annotated tag; use it if there is one.
+# For the two artifact actions the pattern is 'v3.*'.
+git ls-remote --tags https://github.com/actions/checkout 'v4.*'
+```
+
+Read what changed between the two releases first, and the security advisories of the action's repository: the lookup says which commit a release is, not whether its code is sound. Try the workflow with a throwaway tag afterwards (see [Verifying the setup](#verifying-the-setup)). `upload-artifact` and `download-artifact` are on v3, as they were before the commits were named; whether the runner in use serves what their v4 needs was not looked into.
+
 ### Recommended workflow
 
 1. Create a dedicated branch: `git checkout -b deps/update-YYYY-MM-DD`
