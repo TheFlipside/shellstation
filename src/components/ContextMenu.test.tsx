@@ -73,14 +73,17 @@ describe("ContextMenu", () => {
     }
 
     const { rerender } = render(<Scenario prompt={true} />);
-    fireEvent.contextMenu(screen.getByTestId("tab"));
+    // Refused too, so that the webview does not show a menu of its own:
+    // fireEvent says false where the event was refused.
+    expect(fireEvent.contextMenu(screen.getByTestId("tab"))).toBe(false);
     expect(behind).not.toHaveBeenCalled();
-    // What is in the dialog on top is asked as before.
-    fireEvent.contextMenu(screen.getByTestId("field"));
+    // What is in the dialog on top is asked as before, and nothing is
+    // refused on its behalf.
+    expect(fireEvent.contextMenu(screen.getByTestId("field"))).toBe(true);
     expect(inside).toHaveBeenCalledTimes(1);
 
     rerender(<Scenario prompt={false} />);
-    fireEvent.contextMenu(screen.getByTestId("tab"));
+    expect(fireEvent.contextMenu(screen.getByTestId("tab"))).toBe(true);
     expect(behind).toHaveBeenCalledTimes(1);
   });
 

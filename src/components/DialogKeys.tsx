@@ -163,9 +163,17 @@ export function dialogOpen(): boolean {
  * keyboard does: what had the focus when a dialog appeared still has it, and
  * the menu key or Shift+F10 there asks for its context menu, which would
  * open above the dialog. Taken at the document, before the app sees it.
+ *
+ * Refused as well as stopped: the listener that suppresses the webview's own
+ * menu for the whole window (`main.tsx`) is on the document for the bubble
+ * phase, which an event stopped here no longer reaches. Without the refusal
+ * the webview would show that menu, with its refresh of the page.
  */
 function handleContextMenu(event: Event): void {
-  if (behindDialog(event)) event.stopPropagation();
+  if (!behindDialog(event)) return;
+  event.preventDefault();
+  // Also from a listener that was put on the document after this one.
+  event.stopImmediatePropagation();
 }
 
 /**

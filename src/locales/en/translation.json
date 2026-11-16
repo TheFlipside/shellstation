@@ -30,7 +30,9 @@
     "makeShared": "Make Shared",
     "makePersonal": "Make Personal",
     "myLogin": "My Login…",
-    "myHighlighting": "My Highlighting…"
+    "myHighlighting": "My Highlighting…",
+    "copy": "Copy",
+    "paste": "Paste"
   },
   "bulkEdit": {
     "title": "Bulk Edit — {{name}}",

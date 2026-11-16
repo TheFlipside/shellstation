@@ -30,7 +30,9 @@
     "makeShared": "设为共享",
     "makePersonal": "设为个人",
     "myLogin": "我的登录设置…",
-    "myHighlighting": "我的高亮设置…"
+    "myHighlighting": "我的高亮设置…",
+    "copy": "复制",
+    "paste": "粘贴"
   },
   "bulkEdit": {
     "title": "批量编辑 — {{name}}",

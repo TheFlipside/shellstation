@@ -30,7 +30,9 @@
     "makeShared": "공유로 설정",
     "makePersonal": "개인으로 설정",
     "myLogin": "내 로그인 설정…",
-    "myHighlighting": "내 하이라이트 설정…"
+    "myHighlighting": "내 하이라이트 설정…",
+    "copy": "복사",
+    "paste": "붙여넣기"
   },
   "bulkEdit": {
     "title": "일괄 편집 — {{name}}",

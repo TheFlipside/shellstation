@@ -30,7 +30,9 @@
     "makeShared": "Freigeben",
     "makePersonal": "Persönlich machen",
     "myLogin": "Meine Anmeldung…",
-    "myHighlighting": "Meine Hervorhebung…"
+    "myHighlighting": "Meine Hervorhebung…",
+    "copy": "Kopieren",
+    "paste": "Einfügen"
   },
   "bulkEdit": {
     "title": "Massenbearbeitung — {{name}}",

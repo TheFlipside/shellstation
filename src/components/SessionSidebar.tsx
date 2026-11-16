@@ -21,6 +21,7 @@ import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { dialogOpen } from "./DialogKeys";
 import { FolderDialog } from "./FolderDialog";
 import { MoveDialog } from "./MoveDialog";
+import { SearchField } from "./SearchField";
 import { FolderCredentialDialog } from "./FolderCredentialDialog";
 import { BulkEditDialog } from "./BulkEditDialog";
 import { SessionDialog, type SessionFormData } from "./SessionDialog";
@@ -1097,24 +1098,19 @@ export function SessionSidebar(): React.JSX.Element {
         </div>
       </div>
       <div className="sidebar-search">
-        <input
-          type="text"
+        <SearchField
           placeholder={t("sidebar.searchPlaceholder")}
           value={searchQuery}
-          onChange={(e) => {
-            if (e.target.value) {
-              searchSessions(e.target.value).catch(noop);
+          onChange={(value) => {
+            if (value) {
+              searchSessions(value).catch(noop);
             } else {
               clearSearch();
             }
           }}
-          onKeyDown={(e) => {
-            if (e.key === "Escape") {
-              e.preventDefault();
-              e.stopPropagation();
-              clearSearch();
-              treeRef.current?.focus();
-            }
+          onEscape={() => {
+            clearSearch();
+            treeRef.current?.focus();
           }}
         />
         {searchQuery && (

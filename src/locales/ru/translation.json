@@ -30,7 +30,9 @@
     "makeShared": "Сделать общим",
     "makePersonal": "Сделать личным",
     "myLogin": "Мой вход…",
-    "myHighlighting": "Моя подсветка…"
+    "myHighlighting": "Моя подсветка…",
+    "copy": "Копировать",
+    "paste": "Вставить"
   },
   "bulkEdit": {
     "title": "Массовое редактирование — {{name}}",

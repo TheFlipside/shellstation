@@ -30,7 +30,9 @@
     "makeShared": "共有にする",
     "makePersonal": "個人用にする",
     "myLogin": "自分のログイン設定…",
-    "myHighlighting": "自分のハイライト設定…"
+    "myHighlighting": "自分のハイライト設定…",
+    "copy": "コピー",
+    "paste": "貼り付け"
   },
   "bulkEdit": {
     "title": "一括編集 — {{name}}",

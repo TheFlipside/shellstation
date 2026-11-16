@@ -30,7 +30,9 @@
     "makeShared": "Delen",
     "makePersonal": "Persoonlijk maken",
     "myLogin": "Mijn aanmelding…",
-    "myHighlighting": "Mijn markering…"
+    "myHighlighting": "Mijn markering…",
+    "copy": "Kopiëren",
+    "paste": "Plakken"
   },
   "bulkEdit": {
     "title": "Bulkbewerking — {{name}}",

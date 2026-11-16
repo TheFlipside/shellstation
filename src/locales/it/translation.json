@@ -30,7 +30,9 @@
     "makeShared": "Condividi",
     "makePersonal": "Rendi personale",
     "myLogin": "Le mie credenziali…",
-    "myHighlighting": "La mia evidenziazione…"
+    "myHighlighting": "La mia evidenziazione…",
+    "copy": "Copia",
+    "paste": "Incolla"
   },
   "bulkEdit": {
     "title": "Modifica in blocco — {{name}}",

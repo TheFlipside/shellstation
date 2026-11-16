@@ -30,7 +30,9 @@
     "makeShared": "Compartir",
     "makePersonal": "Hacer personal",
     "myLogin": "Mis credenciales…",
-    "myHighlighting": "Mi resaltado…"
+    "myHighlighting": "Mi resaltado…",
+    "copy": "Copiar",
+    "paste": "Pegar"
   },
   "bulkEdit": {
     "title": "Edición masiva — {{name}}",
