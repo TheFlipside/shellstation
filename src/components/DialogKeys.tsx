@@ -11,8 +11,8 @@ import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
  *         <DialogKeys onEscape={onCancel} onEnter={onSubmit} />
  *         ...
  *
- * Why a component and not a hook: these handlers are registered on `document`
- * in the capture phase and stop propagation, so whoever holds the topmost
+ * Why a component and not a hook: the keys are taken at `document` in the
+ * capture phase, and propagation is stopped, so whoever holds the topmost
  * claim takes the key away from everything below — including the terminal,
  * where Escape is a meaningful keystroke (vim's mode switch, among others).
  * A hook called at the top of a component keeps that claim for as long as the
@@ -51,6 +51,18 @@ import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
  * inert while another dialog lies over it (see `DialogKeys`). The toasts go
  * by the markers as well (`useDialogOver`): a stack of them that a dialog
  * lies over takes no input and lets no toast's time run.
+ *
+ * A dialog is modal for the keyboard as it is for the pointer. It covers the
+ * window, so no click gets past it, but it does not take the focus: what had
+ * it when the dialog appeared still has it, a terminal for one. While a
+ * dialog is open, what is typed at something outside the dialog on top
+ * therefore reaches nothing: not the terminal and its remote host, not a
+ * shortcut of the window behind. Escape and Enter typed there still go to
+ * the dialog's claims, as before, so that a prompt can be answered without a
+ * click into it, except an Enter typed into a terminal, which is no answer
+ * to a prompt that appeared meanwhile. Tab goes into the dialog and stays in
+ * it. The focus itself is left where it is: a prompt that took it from a
+ * terminal would get the Enter that ends the line being typed there.
  */
 
 /** One dialog's claim on a key: the handler plus where it sits in the DOM. */
@@ -61,8 +73,6 @@ interface Claim {
 
 interface KeyChannel {
   claims: Claim[];
-  handler: (event: KeyboardEvent) => void;
-  attached: boolean;
 }
 
 /** The markers of the dialogs that are open. */
@@ -126,10 +136,26 @@ function topDialog(): HTMLElement | null {
   return top?.parentElement ?? null;
 }
 
-/** Whether a dialog is open and the event is for something outside the one on top. */
+/**
+ * Whether a dialog is open and the event is for something outside the one on
+ * top. With the focus on nothing, a key is for the page as a whole, and that
+ * is not behind the dialog: a click on text in the dialog, to select a
+ * fingerprint, leaves the focus there, and the keys that copy the selection
+ * or scroll the dialog must go on working. Nothing behind the dialog gets a
+ * key that way, since nothing has the focus.
+ */
 function behindDialog(event: Event): boolean {
   const top = topDialog();
-  return top !== null && !(event.target instanceof Node && top.contains(event.target));
+  if (top === null) return false;
+  const target = event.target;
+  if (!(target instanceof Element)) return false;
+  if (target === document.body || target === document.documentElement) return false;
+  return !top.contains(target);
+}
+
+/** Whether a dialog is open. What is behind one takes no shortcut either. */
+export function dialogOpen(): boolean {
+  return topDialog() !== null;
 }
 
 /**
@@ -142,12 +168,42 @@ function handleContextMenu(event: Event): void {
   if (behindDialog(event)) event.stopPropagation();
 }
 
+/**
+ * What else the keyboard does to what has the focus, besides a key going
+ * down: the key coming up, text put in by a key, by a paste from the app's
+ * menu or by an input method, and a cut. None of it is for what is behind a
+ * dialog. An input method's text cannot be refused, so it is kept from
+ * whoever would send it on, as a terminal does.
+ */
+const BEHIND_EVENTS = [
+  "keypress",
+  "keyup",
+  "beforeinput",
+  "input",
+  "paste",
+  "cut",
+  "compositionstart",
+  "compositionupdate",
+  "compositionend",
+] as const;
+
+function handleBehind(event: Event): void {
+  if (!behindDialog(event)) return;
+  event.preventDefault();
+  // Also from a listener that was put on the document after this one.
+  event.stopImmediatePropagation();
+}
+
 /** Watch for what is meant for the window behind a dialog, while one is open. */
 function watchBehind(): void {
   if (markers.size > 0) {
+    document.addEventListener("keydown", handleKeyDown, true);
     document.addEventListener("contextmenu", handleContextMenu, true);
+    for (const type of BEHIND_EVENTS) document.addEventListener(type, handleBehind, true);
   } else {
+    document.removeEventListener("keydown", handleKeyDown, true);
     document.removeEventListener("contextmenu", handleContextMenu, true);
+    for (const type of BEHIND_EVENTS) document.removeEventListener(type, handleBehind, true);
   }
 }
 
@@ -197,44 +253,127 @@ function topClaim(channel: KeyChannel): (() => void) | undefined {
   return top.callback.current;
 }
 
-function handleEscapeKeyDown(event: KeyboardEvent): void {
-  if (event.key !== "Escape") return;
+const escapeChannel: KeyChannel = { claims: [] };
+const enterChannel: KeyChannel = { claims: [] };
+
+/** Give Escape to the claim on top, if there is one. Says whether it was taken. */
+function takeEscape(event: KeyboardEvent): boolean {
   const claim = topClaim(escapeChannel);
-  if (claim === undefined) return;
+  if (claim === undefined) return false;
   // No preventDefault: Escape has no default browser action worth blocking,
   // and intercepting it would interfere with native dialog / IME behavior.
   event.stopPropagation();
   claim();
+  return true;
 }
 
-function handleEnterKeyDown(event: KeyboardEvent): void {
-  if (event.key !== "Enter") return;
+/** Give Enter to the claim on top, if there is one. Says whether it was taken. */
+function takeEnter(event: KeyboardEvent): boolean {
   // Let an IME candidate selection through, and let multi-line inputs insert
-  // their newline.
-  if (event.isComposing) return;
-  if (event.target instanceof HTMLTextAreaElement) return;
+  // their newline. In a terminal behind the dialog, Enter ends a line that
+  // was being typed there, and is no answer to the dialog either.
+  if (event.isComposing) return false;
+  if (event.target instanceof HTMLTextAreaElement) return false;
   const claim = topClaim(enterChannel);
-  if (claim === undefined) return;
+  if (claim === undefined) return false;
   event.preventDefault();
   event.stopPropagation();
   // A key held down is one Enter, for the dialog it was pressed in. When
   // that dialog closes on it, the repeats would go to the one under it: a
   // confirmation's Enter must not also accept a host key.
-  if (event.repeat) return;
+  if (event.repeat) return true;
   claim();
+  return true;
 }
 
-const escapeChannel: KeyChannel = {
-  claims: [],
-  handler: handleEscapeKeyDown,
-  attached: false,
-};
+const FOCUSABLE =
+  "a[href], button, input, select, textarea, [tabindex], [contenteditable=''], [contenteditable='true']";
 
-const enterChannel: KeyChannel = {
-  claims: [],
-  handler: handleEnterKeyDown,
-  attached: false,
-};
+/** Whether the element is laid out and shown, as far as the webview can say. */
+function isShown(element: HTMLElement): boolean {
+  // An older webview has no checkVisibility: there, what has no box is not
+  // shown, which leaves out what `visibility` hides.
+  return typeof element.checkVisibility === "function"
+    ? element.checkVisibility({ checkVisibilityCSS: true })
+    : element.getClientRects().length > 0;
+}
+
+/** What Tab stops at in the dialog, in the order of the document. */
+function tabStops(dialog: HTMLElement): HTMLElement[] {
+  return Array.from(dialog.querySelectorAll<HTMLElement>(FOCUSABLE)).filter((element) => {
+    if (element.tabIndex < 0 || element.matches(":disabled, input[type='hidden']")) return false;
+    if (element.closest("[inert], [hidden]") !== null) return false;
+    return isShown(element);
+  });
+}
+
+/**
+ * Keep Tab in the dialog on top: from its last stop to its first and back,
+ * and from anything behind it into it. Says whether the key was taken.
+ *
+ * Between two stops of the dialog the key is left to the webview. From
+ * something in the dialog that is no stop itself, such as its list of a
+ * select or a piece of text that was clicked, the webview would go on to
+ * whatever comes next in the document, the window behind the dialog if no
+ * stop of the dialog does: so the next stop is found here.
+ *
+ * The key still reaches what it was typed at in the dialog, which may have
+ * something to do on Tab, as a select has with its open list.
+ */
+function keepTab(event: KeyboardEvent, dialog: HTMLElement): boolean {
+  if (event.ctrlKey || event.altKey || event.metaKey) return false;
+  const stops = tabStops(dialog);
+  const first = stops.length > 0 ? stops[0] : undefined;
+  const last = stops.length > 0 ? stops[stops.length - 1] : undefined;
+  const target = event.target;
+  // With the focus on nothing, the webview would start at the top of the
+  // page, which is behind the dialog.
+  const from = target instanceof HTMLElement && dialog.contains(target) ? target : null;
+  let to: HTMLElement | undefined;
+  if (from === null) {
+    to = event.shiftKey ? last : first;
+  } else if (stops.includes(from)) {
+    if (!event.shiftKey && from === last) {
+      to = first;
+    } else if (event.shiftKey && from === first) {
+      to = last;
+    } else {
+      return false;
+    }
+  } else if (event.shiftKey) {
+    const before = stops.filter(
+      (stop) => (from.compareDocumentPosition(stop) & Node.DOCUMENT_POSITION_PRECEDING) !== 0,
+    );
+    to = before.length > 0 ? before[before.length - 1] : last;
+  } else {
+    to =
+      stops.find(
+        (stop) => (from.compareDocumentPosition(stop) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0,
+      ) ?? first;
+  }
+  event.preventDefault();
+  // What is behind the dialog gets no key; what is in it gets its own.
+  if (from === null) event.stopImmediatePropagation();
+  to?.focus();
+  return true;
+}
+
+/**
+ * Every key that goes down while a dialog is open: Escape and Enter for the
+ * claims, Tab to stay in the dialog, and nothing for what is behind it.
+ */
+function handleKeyDown(event: KeyboardEvent): void {
+  const dialog = topDialog();
+  if (dialog === null) return;
+  if (event.key === "Escape") {
+    if (takeEscape(event)) return;
+  } else if (event.key === "Enter") {
+    if (takeEnter(event)) return;
+  } else if (event.key === "Tab") {
+    if (keepTab(event, dialog)) return;
+  }
+  handleBehind(event);
+}
 
 /**
  * Claim a key for as long as this element is mounted. The callback is held in
@@ -265,17 +404,9 @@ function useKeyClaim(
     const claim = claimRef.current;
     if (!claimed || claim === null) return undefined;
     channel.claims.push(claim);
-    if (!channel.attached) {
-      document.addEventListener("keydown", channel.handler, true);
-      channel.attached = true;
-    }
     return () => {
       const idx = channel.claims.lastIndexOf(claim);
       if (idx !== -1) channel.claims.splice(idx, 1);
-      if (channel.claims.length === 0) {
-        document.removeEventListener("keydown", channel.handler, true);
-        channel.attached = false;
-      }
     };
   }, [channel, claimed]);
 }

@@ -21,6 +21,14 @@ globalThis.ResizeObserver = vi.fn(function (): ResizeObserver {
 // in view whenever the active tab changes.
 Element.prototype.scrollIntoView = vi.fn();
 
+// jsdom lays nothing out, and ships no checkVisibility. DialogKeys asks it
+// which elements of a dialog Tab stops at; without it, it goes by an
+// element's boxes, of which jsdom has none. Everything counts as shown but
+// what a test marks with `data-not-shown`.
+Element.prototype.checkVisibility = function (this: Element): boolean {
+  return this.closest("[data-not-shown]") === null;
+};
+
 // jsdom ships no matchMedia. useTheme() subscribes to the OS dark-mode
 // preference through it; report "light" and never emit changes.
 Object.defineProperty(window, "matchMedia", {

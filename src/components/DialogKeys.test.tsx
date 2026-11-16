@@ -10,7 +10,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 import ReactDOM from "react-dom";
-import { DialogKeys } from "./DialogKeys";
+import { DialogKeys, dialogOpen } from "./DialogKeys";
 import { UpdateDialog } from "./UpdateDialog";
 
 vi.mock("react-i18next", () => ({
@@ -388,5 +388,262 @@ describe("UpdateDialog key ownership", () => {
     pressEscape();
 
     expect(onKey).toHaveBeenCalledTimes(1);
+  });
+});
+
+const watched = new WeakSet<HTMLElement>();
+
+/**
+ * A window with a terminal, a field and a tab in it, and a dialog over it
+ * that did not take the focus from any of them.
+ */
+function Window({
+  dialog,
+  seen,
+  onEscape,
+  onEnter,
+  onLastKey,
+}: {
+  dialog: boolean;
+  /** Called with the type of every event that reaches something in the window. */
+  seen: (type: string, where: string) => void;
+  onEscape?: () => void;
+  onEnter?: () => void;
+  /** What the dialog's last stop does on a key itself, as a select does on Tab. */
+  onLastKey?: () => void;
+}): React.JSX.Element {
+  const watch =
+    (where: string) =>
+    (el: HTMLElement | null): void => {
+      // Once for each element, however often the window renders.
+      if (el === null || watched.has(el)) return;
+      watched.add(el);
+      for (const type of ["keydown", "keyup", "input", "paste", "compositionend", "contextmenu"]) {
+        el.addEventListener(type, () => {
+          seen(type, where);
+        });
+      }
+    };
+  return (
+    <>
+      <textarea data-testid="terminal" ref={watch("terminal")} />
+      <input data-testid="search" ref={watch("search")} />
+      <button type="button" data-testid="tab" ref={watch("tab")} />
+      {dialog && (
+        <div className="dialog-overlay">
+          <DialogKeys onEscape={onEscape} onEnter={onEnter} />
+          <div className="dialog">
+            <p data-testid="text" tabIndex={-1} />
+            <input type="hidden" />
+            <input data-testid="first" ref={watch("first")} />
+            <textarea data-testid="note" ref={watch("note")} />
+            <button type="button" data-testid="middle" />
+            <button type="button" disabled />
+            <button type="button" data-testid="last" onKeyDown={onLastKey} />
+            <button type="button" data-not-shown="" />
+            <span data-testid="list" tabIndex={-1} />
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
+describe("the window behind a dialog", () => {
+  it("gets no key that is typed at it, and every key without a dialog", () => {
+    const seen = vi.fn();
+    const { rerender } = render(<Window dialog={true} seen={seen} onEscape={vi.fn()} />);
+    const terminal = screen.getByTestId("terminal");
+
+    // fireEvent says false where the key was refused.
+    expect(fireEvent.keyDown(terminal, { key: "a" })).toBe(false);
+    expect(fireEvent.keyDown(terminal, { key: "c", ctrlKey: true })).toBe(false);
+    expect(fireEvent.keyDown(screen.getByTestId("search"), { key: "x" })).toBe(false);
+    fireEvent.keyUp(terminal, { key: "a" });
+    expect(seen).not.toHaveBeenCalled();
+
+    rerender(<Window dialog={false} seen={seen} />);
+    expect(fireEvent.keyDown(terminal, { key: "a" })).toBe(true);
+    fireEvent.keyUp(terminal, { key: "a" });
+    expect(seen.mock.calls).toEqual([
+      ["keydown", "terminal"],
+      ["keyup", "terminal"],
+    ]);
+  });
+
+  it("gets no text either: none pasted, put in or composed", () => {
+    const seen = vi.fn();
+    render(<Window dialog={true} seen={seen} onEscape={vi.fn()} />);
+    const terminal = screen.getByTestId("terminal");
+
+    fireEvent.paste(terminal);
+    fireEvent.input(terminal, { target: { value: "rm -rf" } });
+    fireEvent.compositionEnd(terminal, { data: "かな" });
+    expect(seen).not.toHaveBeenCalled();
+
+    // What is in the dialog takes all of it as before.
+    const first = screen.getByTestId("first");
+    expect(fireEvent.keyDown(first, { key: "a" })).toBe(true);
+    fireEvent.paste(first);
+    fireEvent.input(first, { target: { value: "name" } });
+    expect(seen.mock.calls).toEqual([
+      ["keydown", "first"],
+      ["paste", "first"],
+      ["input", "first"],
+    ]);
+  });
+
+  it("still answers the dialog with Escape and Enter, without a click into it", () => {
+    const seen = vi.fn();
+    const onEscape = vi.fn();
+    const onEnter = vi.fn();
+    render(<Window dialog={true} seen={seen} onEscape={onEscape} onEnter={onEnter} />);
+
+    // The focus is where a double click on a session left it.
+    fireEvent.keyDown(screen.getByTestId("tab"), { key: "Enter" });
+    fireEvent.keyDown(screen.getByTestId("tab"), { key: "Escape" });
+    expect(onEnter).toHaveBeenCalledTimes(1);
+    expect(onEscape).toHaveBeenCalledTimes(1);
+    expect(seen).not.toHaveBeenCalled();
+  });
+
+  it("does not take the Enter of a line typed into a terminal for an answer", () => {
+    const seen = vi.fn();
+    const onEnter = vi.fn();
+    render(<Window dialog={true} seen={seen} onEscape={vi.fn()} onEnter={onEnter} />);
+
+    expect(fireEvent.keyDown(screen.getByTestId("terminal"), { key: "Enter" })).toBe(false);
+    expect(onEnter).not.toHaveBeenCalled();
+    // Nor does the terminal get it, and with it the remote host.
+    expect(seen).not.toHaveBeenCalled();
+  });
+
+  it("gets no Escape that the dialog on top does not claim", () => {
+    const seen = vi.fn();
+    render(<Window dialog={true} seen={seen} />);
+
+    expect(fireEvent.keyDown(screen.getByTestId("terminal"), { key: "Escape" })).toBe(false);
+    expect(fireEvent.keyDown(screen.getByTestId("tab"), { key: "Enter" })).toBe(false);
+    expect(seen).not.toHaveBeenCalled();
+  });
+
+  it("is not gone back to with Tab, which stays in the dialog", () => {
+    render(<Window dialog={true} seen={vi.fn()} onEscape={vi.fn()} />);
+    const first = screen.getByTestId("first");
+    const middle = screen.getByTestId("middle");
+    const last = screen.getByTestId("last");
+
+    // From behind the dialog into it, at either end.
+    screen.getByTestId("terminal").focus();
+    expect(fireEvent.keyDown(screen.getByTestId("terminal"), { key: "Tab" })).toBe(false);
+    expect(first).toHaveFocus();
+    screen.getByTestId("tab").focus();
+    fireEvent.keyDown(screen.getByTestId("tab"), { key: "Tab", shiftKey: true });
+    expect(last).toHaveFocus();
+
+    // Around at the ends: the stop that takes no input is no end.
+    expect(fireEvent.keyDown(last, { key: "Tab" })).toBe(false);
+    expect(first).toHaveFocus();
+    expect(fireEvent.keyDown(first, { key: "Tab", shiftKey: true })).toBe(false);
+    expect(last).toHaveFocus();
+
+    // Between two stops of the dialog the key is left alone.
+    middle.focus();
+    expect(fireEvent.keyDown(middle, { key: "Tab" })).toBe(true);
+    expect(fireEvent.keyDown(middle, { key: "Tab", shiftKey: true })).toBe(true);
+    expect(fireEvent.keyDown(first, { key: "Tab" })).toBe(true);
+    expect(middle).toHaveFocus();
+  });
+
+  it("is not what a key is for while nothing has the focus", () => {
+    // A click on text in the dialog, to select a fingerprint, leaves the
+    // focus on nothing: the keys that copy it or scroll the dialog go on.
+    const onEscape = vi.fn();
+    const onEnter = vi.fn();
+    render(<Window dialog={true} seen={vi.fn()} onEscape={onEscape} onEnter={onEnter} />);
+
+    expect(fireEvent.keyDown(document.body, { key: "c", ctrlKey: true })).toBe(true);
+    expect(fireEvent.keyDown(document.body, { key: "PageDown" })).toBe(true);
+    // Escape and Enter answer the dialog from there as from anywhere.
+    fireEvent.keyDown(document.body, { key: "Escape" });
+    fireEvent.keyDown(document.body, { key: "Enter" });
+    expect(onEscape).toHaveBeenCalledTimes(1);
+    expect(onEnter).toHaveBeenCalledTimes(1);
+    // Tab does not start at the top of the page, which is behind the dialog.
+    expect(fireEvent.keyDown(document.body, { key: "Tab" })).toBe(false);
+    expect(screen.getByTestId("first")).toHaveFocus();
+  });
+
+  it("leaves a line's Enter to a field of the dialog that takes lines", () => {
+    const seen = vi.fn();
+    const onEnter = vi.fn();
+    render(<Window dialog={true} seen={seen} onEscape={vi.fn()} onEnter={onEnter} />);
+
+    expect(fireEvent.keyDown(screen.getByTestId("note"), { key: "Enter" })).toBe(true);
+    expect(onEnter).not.toHaveBeenCalled();
+    expect(seen.mock.calls).toEqual([["keydown", "note"]]);
+  });
+
+  it("keeps Tab in the dialog from something in it that is no stop itself", () => {
+    render(<Window dialog={true} seen={vi.fn()} onEscape={vi.fn()} />);
+    const text = screen.getByTestId("text");
+    const list = screen.getByTestId("list");
+
+    // After the last stop: the webview would go on behind the dialog.
+    list.focus();
+    expect(fireEvent.keyDown(list, { key: "Tab" })).toBe(false);
+    expect(screen.getByTestId("first")).toHaveFocus();
+    // The button that is not shown is no stop to go back to.
+    list.focus();
+    fireEvent.keyDown(list, { key: "Tab", shiftKey: true });
+    expect(screen.getByTestId("last")).toHaveFocus();
+
+    // Before the first stop, the other way round.
+    text.focus();
+    fireEvent.keyDown(text, { key: "Tab", shiftKey: true });
+    expect(screen.getByTestId("last")).toHaveFocus();
+    text.focus();
+    fireEvent.keyDown(text, { key: "Tab" });
+    expect(screen.getByTestId("first")).toHaveFocus();
+  });
+
+  it("lets a stop of the dialog see the Tab that takes the focus around", () => {
+    // A select closes its open list on Tab.
+    const onLastKey = vi.fn();
+    render(<Window dialog={true} seen={vi.fn()} onEscape={vi.fn()} onLastKey={onLastKey} />);
+
+    fireEvent.keyDown(screen.getByTestId("last"), { key: "Tab" });
+    expect(screen.getByTestId("first")).toHaveFocus();
+    expect(onLastKey).toHaveBeenCalledTimes(1);
+  });
+
+  it("includes a dialog that another dialog lies over", () => {
+    const seen = vi.fn();
+    render(
+      <>
+        <Window dialog={true} seen={seen} onEscape={vi.fn()} />
+        <div className="dialog-overlay">
+          <DialogKeys />
+          <div className="dialog">
+            <button type="button" data-testid="top" />
+          </div>
+        </div>
+      </>,
+    );
+
+    // The lower dialog's field is behind the one on top.
+    expect(fireEvent.keyDown(screen.getByTestId("first"), { key: "a" })).toBe(false);
+    expect(seen).not.toHaveBeenCalled();
+    fireEvent.keyDown(screen.getByTestId("first"), { key: "Tab" });
+    expect(screen.getByTestId("top")).toHaveFocus();
+  });
+
+  it("says whether a dialog is open", () => {
+    const { rerender } = render(<Window dialog={false} seen={vi.fn()} />);
+    expect(dialogOpen()).toBe(false);
+    rerender(<Window dialog={true} seen={vi.fn()} />);
+    expect(dialogOpen()).toBe(true);
+    rerender(<Window dialog={false} seen={vi.fn()} />);
+    expect(dialogOpen()).toBe(false);
   });
 });

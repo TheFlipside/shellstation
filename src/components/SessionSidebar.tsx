@@ -18,6 +18,7 @@ import { useToastStore } from "../stores/toastStore";
 import { SessionTree, parseDndId, flattenVisibleItems } from "./SessionTree";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
+import { dialogOpen } from "./DialogKeys";
 import { FolderDialog } from "./FolderDialog";
 import { MoveDialog } from "./MoveDialog";
 import { FolderCredentialDialog } from "./FolderCredentialDialog";
@@ -235,6 +236,8 @@ export function SessionSidebar(): React.JSX.Element {
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent): void => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "d") {
+        // Typed into a dialog, it is not for the tree behind it.
+        if (dialogOpen()) return;
         if (selectedItemType !== "session" || !selectedItemId) return;
         const session = sessions.find((s) => s.id === selectedItemId);
         if (!session) return;
