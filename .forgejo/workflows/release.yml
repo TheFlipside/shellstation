@@ -409,7 +409,18 @@ jobs:
         run: |
           set -euo pipefail
           api="$FORGEJO_URL/api/v1/repos/$REPO"
-          auth="Authorization: token $TOKEN"
+
+          # What this step keeps on disk goes into a directory of its own,
+          # which only this user can enter and which is removed when the
+          # step ends: the server's answers, and the token. curl reads the
+          # token from a file there, so that it is not among the arguments
+          # of each curl, which other users of the runner can read. curl
+          # reads a header from a file since 7.55.
+          umask 077
+          tmp=$(mktemp -d)
+          trap 'rm -rf "$tmp"' EXIT
+          printf 'Authorization: token %s\n' "$TOKEN" > "$tmp/auth"
+          auth="@$tmp/auth"
 
           # Helper: perform an API call and capture status + body separately
           # so failures can be diagnosed instead of silently swallowed.
@@ -418,7 +429,7 @@ jobs:
             local url="$2"
             shift 2
             local body_file status
-            body_file=$(mktemp)
+            body_file=$(mktemp "$tmp/answer.XXXXXX")
             status=$(curl -sS -o "$body_file" -w '%{http_code}' \
               -X "$method" -H "$auth" "$@" "$url")
             printf '%s\n' "$status"
@@ -426,8 +437,20 @@ jobs:
             rm -f "$body_file"
           }
 
+          # The tag and the names of the files go into URLs and into a JSON
+          # body. Both are only ever what a maintainer pushed and what the
+          # build named, but neither is taken for safe to paste in: a quote
+          # in a tag would end the JSON string, and an "&" or "#" would end
+          # the value in a URL. A "/" in a tag is encoded as well; no tag
+          # that is the app's version has one. python3 runs with -I, so
+          # that it loads nothing from the checkout it is started in.
+          urlencode() {
+            python3 -I -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1], safe=""))' "$1"
+          }
+
           # Look up existing release by tag. 404 is expected on first run.
-          lookup=$(api_call GET "$api/releases/tags/$TAG")
+          tag_in_url=$(urlencode "$TAG")
+          lookup=$(api_call GET "$api/releases/tags/$tag_in_url")
           lookup_status=$(printf '%s' "$lookup" | head -n1)
           lookup_body=$(printf '%s' "$lookup" | tail -n +2)
 
@@ -444,9 +467,10 @@ jobs:
             echo "Reusing existing release $TAG (id=$release_id)"
           elif [ "$lookup_status" = "404" ]; then
             echo "Creating release $TAG"
+            payload=$(python3 -I -c 'import json, sys; print(json.dumps({"tag_name": sys.argv[1], "name": sys.argv[1]}))' "$TAG")
             create=$(api_call POST "$api/releases" \
               -H "Content-Type: application/json" \
-              -d "{\"tag_name\":\"$TAG\",\"name\":\"$TAG\"}")
+              --data-raw "$payload")
             create_status=$(printf '%s' "$create" | head -n1)
             create_body=$(printf '%s' "$create" | tail -n +2)
             if [ "$create_status" != "201" ]; then
@@ -479,6 +503,7 @@ jobs:
           for f in release-files/*; do
             [ -f "$f" ] || continue
             name=$(basename "$f")
+            name_in_url=$(urlencode "$name")
             # Split assets_json into one object per line, then find the line
             # with matching name and extract its id. Works on compact JSON.
             existing_id=$(printf '%s' "$assets_json" | \
@@ -492,13 +517,25 @@ jobs:
                 "$api/releases/$release_id/assets/$existing_id"
             fi
             echo "Uploading $name"
-            upload=$(curl -sS -o /tmp/upload-body -w '%{http_code}' \
+            # In the file name of a form field, curl reads ";" and "," as
+            # its own syntax unless the name is in double quotes, where a
+            # quote and a backslash have a backslash before them. The
+            # server's answer is kept for the error message, in this
+            # step's own directory and not at a fixed name in /tmp, where
+            # someone else on the runner could have put a link.
+            # The two characters are in variables, which reads plainer than
+            # the same substitutions with each of them escaped in place.
+            backslash='\'
+            quote='"'
+            f_quoted=${f//"$backslash"/"$backslash$backslash"}
+            f_quoted=${f_quoted//"$quote"/"$backslash$quote"}
+            upload=$(curl -sS -o "$tmp/upload" -w '%{http_code}' \
               -X POST -H "$auth" \
-              -F "attachment=@$f" \
-              "$api/releases/$release_id/assets?name=$name")
+              -F "attachment=@\"$f_quoted\"" \
+              "$api/releases/$release_id/assets?name=$name_in_url")
             if [ "$upload" != "201" ]; then
               echo "Upload of $name failed: HTTP $upload" >&2
-              cat /tmp/upload-body >&2
+              cat "$tmp/upload" >&2
               exit 1
             fi
           done
