@@ -5,6 +5,7 @@ import { listen } from "@tauri-apps/api/event";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { DialogKeys } from "./DialogKeys";
+import { closeSessionsForUpdate, updateInstallFailed } from "../page";
 import { useSettingsStore } from "../stores/settingsStore";
 import { useToastStore } from "../stores/toastStore";
 
@@ -19,8 +20,8 @@ interface PendingUpdate {
 /**
  * Owns the entire app-update flow: auto-checks on mount (if the user
  * hasn't opted out), listens for manual checks from the native Help menu,
- * shows a dialog when an update is available, drives the download, and
- * triggers a relaunch when ready.
+ * shows a dialog when an update is available, drives the download, has the
+ * backend close every session, installs, and triggers a relaunch.
  *
  * Mounted once at the App root; no props.
  */
@@ -36,11 +37,18 @@ export function UpdateDialog(): React.JSX.Element | null {
     total: null,
   });
 
+  // Set from the click on "Install and restart" until the install has
+  // failed. A ref, since it is read by handlers that outlive a render.
+  const installing = React.useRef(false);
+
   // Manual check: invoked from the Help menu via a backend-emitted event,
   // and on mount if the user has auto-check enabled. `manual` controls the
   // up-to-date UX — silent for background checks, toast for menu-triggered.
   const runCheck = React.useCallback(
     async (manual: boolean): Promise<void> => {
+      // Not while an update installs: the check would take the dialog away,
+      // with the sessions closing behind it, and offer the update again.
+      if (installing.current) return;
       setPhase("checking");
       try {
         const update = await check();
@@ -104,10 +112,15 @@ export function UpdateDialog(): React.JSX.Element | null {
   };
 
   const install = async (): Promise<void> => {
-    if (!pending) return;
+    if (!pending || installing.current) return;
+    installing.current = true;
+    const { update } = pending;
     setPhase("downloading");
+    // Whether the backend was asked to close the sessions, after which this
+    // page opens none until it is told that the install failed.
+    let sessionsClosed = false;
     try {
-      await pending.update.downloadAndInstall((event) => {
+      await update.download((event) => {
         if (event.event === "Started") {
           setProgress({ downloaded: 0, total: event.data.contentLength ?? null });
         } else if (event.event === "Progress") {
@@ -115,11 +128,24 @@ export function UpdateDialog(): React.JSX.Element | null {
             downloaded: p.downloaded + event.data.chunkLength,
             total: p.total,
           }));
-        } else {
-          // "Finished"
-          setPhase("ready");
         }
       });
+      setPhase("ready");
+      // Installing ends the app with every session in it: on Windows the
+      // plugin starts the installer and exits the process, and elsewhere
+      // relaunch() restarts it. So the sessions are closed first, the way a
+      // quit closes them, and only now: the download is complete and its
+      // signature checked, so a download that fails costs no session.
+      sessionsClosed = true;
+      try {
+        await closeSessionsForUpdate();
+      } catch (e) {
+        // Not a reason to stay on this version: install all the same, and
+        // leave the sessions to the operating system, as before.
+        // eslint-disable-next-line no-console -- diagnostic detail goes to devtools, not the UI
+        console.warn("closing the sessions before the update failed:", e);
+      }
+      await update.install();
       // On macOS + Linux the plugin doesn't auto-relaunch; the NSIS passive
       // installer on Windows hands control back, then exits. relaunch()
       // works on all three.
@@ -128,6 +154,20 @@ export function UpdateDialog(): React.JSX.Element | null {
       // Same generic-error policy as the check path: detail to console only.
       // eslint-disable-next-line no-console -- diagnostic detail goes to devtools, not the UI
       console.warn("update install failed:", e);
+      if (sessionsClosed) {
+        // The app stays, so it has to be able to connect again, and by the
+        // time the dialog says that the update failed. Should the backend
+        // not hear of it, a reload of the window lets the page connect.
+        try {
+          await updateInstallFailed();
+        } catch (failed) {
+          // eslint-disable-next-line no-console -- diagnostic detail goes to devtools, not the UI
+          console.warn("update_install_failed failed:", failed);
+        }
+      }
+      // Give back the downloaded update, which install() keeps on failure.
+      update.close().catch(() => undefined);
+      installing.current = false;
       setPhase("error");
     }
   };
@@ -141,7 +181,10 @@ export function UpdateDialog(): React.JSX.Element | null {
     <div className="dialog-overlay" role="presentation">
       <DialogKeys
         onEscape={() => {
-          if (phase !== "downloading") dismiss();
+          // Not while it downloads, nor while the sessions close and the
+          // update installs: the dialog would go and leave an app that
+          // refuses to connect and restarts a moment later.
+          if (phase === "available" || phase === "error") dismiss();
         }}
       />
       <div className="dialog dialog-update" role="dialog" aria-modal="true">

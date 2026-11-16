@@ -17,6 +17,9 @@ commands.allow = [
   "page_announce",
   # Quitting, once every session is closed
   "app_quit",
+  # Installing an update, once every session is closed
+  "update_install_begin",
+  "update_install_failed",
   # PTY
   "pty_spawn",
   "pty_write",

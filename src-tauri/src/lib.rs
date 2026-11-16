@@ -2613,6 +2613,9 @@ pub fn run() {
             commands::page_announce,
             // Quitting, once every session is closed
             commands::app_quit,
+            // Installing an update, once every session is closed
+            commands::update_install_begin,
+            commands::update_install_failed,
             // PTY
             commands::pty_spawn,
             commands::pty_write,

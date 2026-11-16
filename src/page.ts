@@ -46,6 +46,33 @@ export async function invokeConnect(
   return invoke<string>(command, { ...args, page: token });
 }
 
+/**
+ * Close every session before an update is installed, which ends the app: on
+ * Windows the installer ends the process itself, and elsewhere the app is
+ * restarted, and neither closes a session. The backend closes them as it
+ * does when the app quits, so each SSH server is told the session has ended,
+ * and from then on opens none for this page. Resolves once they are closed
+ * or the backend's time limit of a few seconds is up, when what is left goes
+ * on closing in the background.
+ *
+ * Announces the page first, as a connect does: the backend closes the
+ * sessions only for the page that is the announced one.
+ */
+export async function closeSessionsForUpdate(): Promise<void> {
+  await announcePage();
+  await invoke("update_install_begin", { page: token });
+}
+
+/**
+ * Tell the backend that the update was not installed, so the app stays and
+ * this page may open sessions again. The sessions that were closed for the
+ * update stay closed. Should this fail, the page opens none until the window
+ * is reloaded.
+ */
+export function updateInstallFailed(): Promise<void> {
+  return invoke("update_install_failed", { page: token });
+}
+
 /** How long after a failed announcement at startup the one retry follows. */
 const STARTUP_RETRY_MS = 1000;
 

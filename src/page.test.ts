@@ -99,6 +99,62 @@ describe("invokeConnect", () => {
   });
 });
 
+describe("closing the sessions for an update", () => {
+  it("announces the page, then has the backend close its sessions", async () => {
+    const { closeSessionsForUpdate } = await loadPage();
+    await closeSessionsForUpdate();
+
+    const [token] = announcedTokens();
+    expect(calls()).toEqual([
+      ["page_announce", { page: token }],
+      ["update_install_begin", { page: token }],
+    ]);
+  });
+
+  it("fails, and closes nothing, when the announcement fails", async () => {
+    const { closeSessionsForUpdate } = await loadPage();
+    vi.mocked(invoke).mockImplementationOnce(() => Promise.reject(new Error("refused")));
+    await expect(closeSessionsForUpdate()).rejects.toThrow("refused");
+    expect(calls().map(([cmd]) => cmd)).toEqual(["page_announce"]);
+  });
+
+  it("fails when the closing does", async () => {
+    const { closeSessionsForUpdate } = await loadPage();
+    vi.mocked(invoke).mockImplementation((cmd: string) =>
+      cmd === "update_install_begin"
+        ? Promise.reject(new Error("quitting"))
+        : Promise.resolve(undefined as never),
+    );
+    await expect(closeSessionsForUpdate()).rejects.toThrow("quitting");
+
+    const [token] = announcedTokens();
+    expect(calls()).toEqual([
+      ["page_announce", { page: token }],
+      ["update_install_begin", { page: token }],
+    ]);
+  });
+
+  it("says that the install failed with the same token, without announcing", async () => {
+    const { closeSessionsForUpdate, updateInstallFailed } = await loadPage();
+    await closeSessionsForUpdate();
+    await updateInstallFailed();
+
+    const [token] = announcedTokens();
+    expect(calls().slice(2)).toEqual([["update_install_failed", { page: token }]]);
+  });
+
+  it("says that the install failed by itself as well, and fails when that is refused", async () => {
+    const { updateInstallFailed } = await loadPage();
+    await updateInstallFailed();
+    expect(calls()).toEqual([
+      ["update_install_failed", { page: expect.stringMatching(/^[0-9a-f]{32}$/) as unknown }],
+    ]);
+
+    vi.mocked(invoke).mockImplementationOnce(() => Promise.reject(new Error("refused")));
+    await expect(updateInstallFailed()).rejects.toThrow("refused");
+  });
+});
+
 describe("page token", () => {
   it("is one the backend accepts: letters, digits and hyphens, at most 64", async () => {
     const { announcePage } = await loadPage();

@@ -91,6 +91,10 @@ struct AnnouncedPage {
     token: String,
     /// [`PageState::loads`] when the page announced itself.
     load: u64,
+    /// The page is installing an update: its sessions are closed, and it
+    /// opens no more until the install has failed. See
+    /// [`update_install_begin`].
+    installing_update: bool,
 }
 
 /// Longest page token accepted. The frontend sends a `UUID`, 36 characters.
@@ -145,11 +149,28 @@ impl TerminalReadyState {
         page.current = Some(AnnouncedPage {
             token: token.to_string(),
             load: page.loads,
+            installing_update: false,
         });
         true
     }
 
+    /// Note that the page with `token` is installing an update, or with
+    /// `installing` false that its install has failed, returning whether
+    /// that changed anything. It changes nothing for a page that is not the
+    /// announced one: the note is that page's, and goes with it.
+    fn set_installing_update(&self, token: &str, installing: bool) -> bool {
+        let mut page = lock_or_recover(&self.page);
+        match page.current.as_mut() {
+            Some(current) if current.token == token && current.installing_update != installing => {
+                current.installing_update = installing;
+                true
+            }
+            _ => false,
+        }
+    }
+
     /// Whether the page with `token` is the one announced last.
+    #[cfg(test)]
     fn is_current_page(&self, token: &str) -> bool {
         lock_or_recover(&self.page)
             .current
@@ -161,7 +182,8 @@ impl TerminalReadyState {
     /// page announced last, as otherwise its tabs are gone and nothing would
     /// ever show or close the session.
     ///
-    /// Fail as well once the app is quitting: [`quit_app`] has taken, or is
+    /// Fail as well while that page installs an update, and once the app is
+    /// quitting: [`update_install_begin`] or [`quit_app`] has taken, or is
     /// about to take, the sessions it closes, and one registered after that
     /// would be left to the operating system.
     ///
@@ -169,8 +191,14 @@ impl TerminalReadyState {
     /// page never reaches the remote host, and [`ConnectSetup`] calls it
     /// again right before registering.
     fn check_page(&self, token: &str) -> Result<(), String> {
-        if !self.is_current_page(token) {
-            return Err("The window was reloaded while the session was connecting".to_string());
+        {
+            let page = lock_or_recover(&self.page);
+            let Some(current) = page.current.as_ref().filter(|page| page.token == token) else {
+                return Err("The window was reloaded while the session was connecting".to_string());
+            };
+            if current.installing_update {
+                return Err("An update is being installed".to_string());
+            }
         }
         if self.quitting.load(Ordering::SeqCst) {
             return Err("The app is quitting".to_string());
@@ -179,13 +207,16 @@ impl TerminalReadyState {
     }
 }
 
-/// A change of the announced page, which leaves the sessions of the page
-/// before it with nothing to show or close them.
+/// A change that the sessions there do not outlast. A change of the
+/// announced page leaves the sessions of the page before it with nothing to
+/// show or close them, and a page that installs an update ends with the app.
 enum PageChange {
     /// The main webview started page load number `.0`.
     Load(u64),
     /// The page with this token announced itself.
     Announce(String),
+    /// The page with this token is about to install an update.
+    InstallUpdate(String),
 }
 
 impl PageChange {
@@ -194,6 +225,7 @@ impl PageChange {
         match self {
             Self::Load(load) => ready.leave_page(*load),
             Self::Announce(token) => ready.enter_page(token),
+            Self::InstallUpdate(token) => ready.set_installing_update(token, true),
         }
     }
 }
@@ -445,8 +477,10 @@ async fn change_page(
 /// The page changes while both manager locks are held. A connect checks its
 /// page under its manager's lock right before registering, so one of the
 /// page before is either taken here or refused, and one of the page after is
-/// neither. Pending prompts belong to connects from before this too; dropping
-/// them ends those connects now rather than at their timeout.
+/// neither. A page that is about to install an update is noted the same way,
+/// and its connects from then on are refused. Pending prompts belong to
+/// connects from before this too; dropping them ends those connects now
+/// rather than at their timeout.
 async fn take_remote_sessions(
     ready: &TerminalReadyState,
     ssh: &SshState,
@@ -681,6 +715,27 @@ async fn close_sessions_for_quit(app: &tauri::AppHandle) -> usize {
         }
     }
 
+    let close_local = async {
+        let shells = take_local_shells(&pty, None).await;
+        shut_down_shells(&ready, &logger, shells).await
+    };
+    let ((), shells) = tokio::join!(
+        close_remote_sessions(&ready, &logger, (ssh_sessions, telnet_sessions)),
+        close_local
+    );
+    wait_for_session_logs(&logger).await;
+    remote + shells
+}
+
+/// Close the SSH and Telnet sessions taken out of their managers, all at the
+/// same time, and wait until each has closed: an SSH session until its
+/// server and jump hosts have been sent `SSH_MSG_DISCONNECT` and have closed,
+/// or [`DISCONNECT_TIMEOUT`] is up.
+async fn close_remote_sessions(
+    ready: &TerminalReadyState,
+    logger: &SessionLogState,
+    (ssh_sessions, telnet_sessions): RemoteSessions,
+) {
     let mut closing = tokio::task::JoinSet::new();
     for (id, session) in ssh_sessions {
         closing.spawn(async move {
@@ -694,21 +749,12 @@ async fn close_sessions_for_quit(app: &tauri::AppHandle) -> usize {
             id
         });
     }
-    let close_remote = async {
-        while let Some(closed) = closing.join_next().await {
-            match closed {
-                Ok(id) => release_session(&id, &ready, &logger),
-                Err(e) => tracing::warn!(error = %e, "Closing a session failed"),
-            }
+    while let Some(closed) = closing.join_next().await {
+        match closed {
+            Ok(id) => release_session(&id, ready, logger),
+            Err(e) => tracing::warn!(error = %e, "Closing a session failed"),
         }
-    };
-    let close_local = async {
-        let shells = take_local_shells(&pty, None).await;
-        shut_down_shells(&ready, &logger, shells).await
-    };
-    let ((), shells) = tokio::join!(close_remote, close_local);
-    wait_for_session_logs(&logger).await;
-    remote + shells
+    }
 }
 
 /// Close every session log and wait until what the sessions put out is
@@ -716,18 +762,162 @@ async fn close_sessions_for_quit(app: &tauri::AppHandle) -> usize {
 /// stop wherever it is. Closing them all takes in the log of a connection
 /// still being set up, whose writer would otherwise never end. The wait is on
 /// a blocking thread, and ends with [`QUIT_TIMEOUT`] at the latest: a log
-/// directory that does not answer must not keep the app from quitting. It
-/// comes after the sessions have closed, and [`quit_app`] gives the two
-/// [`QUIT_TIMEOUT`] between them: after an SSH close that took its three
-/// seconds, the logs have what is left. Most are written by then, as a log
-/// is closed as soon as its session is.
+/// directory that does not answer must not keep the app from quitting, or
+/// from installing an update. It comes after the sessions have closed, and
+/// [`quit_app`] and [`update_install_begin`] give the two [`QUIT_TIMEOUT`]
+/// between them: after an SSH close that took its three seconds, the logs
+/// have what is left. Most are written by then, as a log is closed as soon
+/// as its session is.
 async fn wait_for_session_logs(logger: &SessionLogState) {
     let writers = lock_or_recover(&logger.0).close_all();
     let written =
         tauri::async_runtime::spawn_blocking(move || writers.wait_until_done(QUIT_TIMEOUT)).await;
     if !matches!(written, Ok(true)) {
-        tracing::warn!("Session logs still being written at quit; quitting anyway");
+        tracing::warn!("Session logs still being written; not waiting for them any longer");
     }
+}
+
+/// Close every session before the page with token `page` installs an update.
+/// The frontend calls this once the update is downloaded and checked, and
+/// right before it has the updater plugin install it: on Windows the plugin
+/// starts the installer and ends the process itself, and elsewhere the
+/// frontend restarts the app once the files are replaced, and neither is
+/// anything the app could hold to close its sessions.
+///
+/// The sessions are closed as [`quit_app`] closes them: each SSH connection,
+/// the jump hosts included, is sent `SSH_MSG_DISCONNECT` and waited for, each
+/// Telnet socket is closed, each local shell killed, and each session log
+/// closed and waited for until it is written. From here on the page opens no
+/// session, so that a connect still on its way is not left to the operating
+/// system: until [`update_install_failed`] says that the install has failed,
+/// or another page takes this one's place.
+///
+/// Returns within [`QUIT_TIMEOUT`], whatever is still closing then, and that
+/// goes on closing while the update installs. A session still closing when
+/// the process ends gets only what the operating system does for it.
+///
+/// An error means that no session was closed for this call: the page is not
+/// the announced one, is installing an update already, or the app is
+/// quitting, which closes the sessions itself.
+///
+/// Two things can still leave a connection to the operating system. A page
+/// load takes the refusal with it, since the page that comes knows nothing
+/// of the update and would never take it back, so that page can connect
+/// while the installer runs. And a quit that begins while this is closing
+/// finds no session left to wait for, and exits whatever is still closing.
+#[tauri::command]
+pub async fn update_install_begin(app: tauri::AppHandle, page: String) -> Result<(), String> {
+    if !is_page_token(&page) {
+        return Err("Invalid page token".to_string());
+    }
+    let started = std::time::Instant::now();
+    // On a task of its own, so that it goes on closing once the wait is over.
+    let closing = tauri::async_runtime::spawn(async move {
+        let (Some(ready), Some(logger), Some(ssh), Some(telnet), Some(pty)) = (
+            app.try_state::<TerminalReadyState>(),
+            app.try_state::<SessionLogState>(),
+            app.try_state::<SshState>(),
+            app.try_state::<TelnetState>(),
+            app.try_state::<PtyState>(),
+        ) else {
+            return Err("Terminal state not set up yet".to_string());
+        };
+        let closed = close_sessions_for_update(&ready, &logger, &ssh, &telnet, &pty, &page).await?;
+        // A session closed from here has its reader stopped, which is what
+        // tells its tab that the session has ended. Should the install
+        // fail, the tabs are still there and have to show it. Before the
+        // wait for the logs, which a slow log directory can draw out.
+        for id in &closed {
+            if let Err(e) = app.emit(&format!("terminal-exit-{id}"), ()) {
+                tracing::warn!(error = %e, "Failed to tell a tab that its session was closed");
+            }
+        }
+        wait_for_session_logs(&logger).await;
+        Ok(closed.len())
+    });
+    match tokio::time::timeout(QUIT_TIMEOUT, closing).await {
+        Ok(Ok(Ok(0))) => {}
+        Ok(Ok(Ok(count))) => {
+            tracing::info!(count, elapsed = ?started.elapsed(), "Closed the sessions before installing an update");
+        }
+        Ok(Ok(Err(reason))) => {
+            tracing::warn!(%reason, "Sessions not closed before installing an update");
+            return Err(reason);
+        }
+        // Neither keeps the update from being installed: a version that
+        // could not close its sessions must still be able to replace itself.
+        Ok(Err(e)) => {
+            tracing::warn!(
+                error = %e,
+                "Closing the sessions before an update failed; the page may open none until the install has failed"
+            );
+        }
+        Err(_) => {
+            tracing::warn!(timeout = ?QUIT_TIMEOUT, "Sessions still closing before an update; not waiting any longer");
+        }
+    }
+    Ok(())
+}
+
+/// Let the page with token `page` open sessions again: the update it closed
+/// them for ([`update_install_begin`]) was not installed, so the app stays.
+/// The sessions that were closed stay closed. Does nothing for a page that
+/// is not installing an update.
+#[tauri::command]
+pub fn update_install_failed(
+    ready: tauri::State<'_, TerminalReadyState>,
+    page: String,
+) -> Result<(), String> {
+    if !is_page_token(&page) {
+        return Err("Invalid page token".to_string());
+    }
+    if ready.set_installing_update(&page, false) {
+        tracing::info!("The update was not installed; sessions can be opened again");
+    }
+    Ok(())
+}
+
+/// Close every session for [`update_install_begin`], and wait until they
+/// have closed. Returns the `ID`s of the sessions that were there, or why
+/// none was closed. The logs are left to the caller
+/// ([`wait_for_session_logs`]).
+///
+/// The page is noted as installing an update while both manager locks are
+/// held, as a change of page is made, so a connect of the page is either
+/// taken here or refused. It takes its turn among the changes of page as
+/// well ([`change_page`]), until it has the local shells, so that it takes
+/// no shell of a page that comes after. The shells' lock is waited for as a
+/// change of page waits for it, while the SSH and Telnet sessions close; a
+/// shell that is not got hold of is left to the end of the process.
+async fn close_sessions_for_update(
+    ready: &TerminalReadyState,
+    logger: &SessionLogState,
+    ssh: &SshState,
+    telnet: &TelnetState,
+    pty: &PtyState,
+    token: &str,
+) -> Result<Vec<String>, String> {
+    let change = PageChange::InstallUpdate(token.to_string());
+    let turn = ready.page_change.lock().await;
+    let Some(remote) = take_remote_sessions(ready, ssh, telnet, Some(&change)).await else {
+        // Whatever kept the page from being noted keeps it from connecting.
+        return Err(ready
+            .check_page(token)
+            .err()
+            .unwrap_or_else(|| "The sessions were not closed".to_string()));
+    };
+    let mut closed: Vec<String> = remote.0.iter().map(|(id, _)| id.clone()).collect();
+    closed.extend(remote.1.iter().map(|(id, _)| id.clone()));
+    let close_local = async move {
+        let shells = take_local_shells(pty, Some(SHELL_LOCK_TIMEOUT)).await;
+        drop(turn);
+        let ids: Vec<String> = shells.iter().map(|(id, _)| id.clone()).collect();
+        shut_down_shells(ready, logger, shells).await;
+        ids
+    };
+    let ((), shells) = tokio::join!(close_remote_sessions(ready, logger, remote), close_local);
+    closed.extend(shells);
+    Ok(closed)
 }
 
 /// Maximum terminal dimensions to prevent resource exhaustion.
@@ -1008,6 +1198,23 @@ mod tests {
             .await
         }
 
+        /// Close the sessions and the logs for an update that the page
+        /// `token` installs, as `update_install_begin` does, returning how
+        /// many sessions there were.
+        async fn begin_update(&self, fx: &Fixture, token: &str) -> Result<usize, String> {
+            let closed = close_sessions_for_update(
+                &fx.ready,
+                &fx.logger,
+                &self.ssh,
+                &self.telnet,
+                &self.pty,
+                token,
+            )
+            .await?;
+            wait_for_session_logs(&fx.logger).await;
+            Ok(closed.len())
+        }
+
         /// Hold the local shells' lock on a thread of its own until the
         /// returned sender is dropped, as a stuck write to a shell does.
         fn hold_shells(&self) -> std::sync::mpsc::Sender<()> {
@@ -1129,6 +1336,116 @@ mod tests {
         assert!(begin_quit(&fx.ready));
         assert!(setup.check_page_unchanged().is_err());
         assert!(fx.begin("d").check_page_unchanged().is_err());
+    }
+
+    #[test]
+    fn connect_while_an_update_installs_is_refused() {
+        // `update_install_begin` closes the sessions registered so far; one
+        // registered after it would be left to the operating system when the
+        // installer ends the process.
+        let fx = Fixture::new();
+        let setup = fx.begin("c");
+        assert!(setup.check_page_unchanged().is_ok());
+
+        assert!(PageChange::InstallUpdate(PAGE.to_string()).apply(&fx.ready));
+        assert!(setup.check_page_unchanged().is_err());
+        assert!(fx.begin("d").check_page_unchanged().is_err());
+        // Announcing the page again, as every connect does first, changes
+        // nothing about that.
+        assert!(!PageChange::Announce(PAGE.to_string()).apply(&fx.ready));
+        assert!(fx.ready.check_page(PAGE).is_err());
+
+        // An install that failed leaves an app that has to connect again.
+        assert!(fx.ready.set_installing_update(PAGE, false));
+        assert!(setup.check_page_unchanged().is_ok());
+        assert!(!fx.ready.set_installing_update(PAGE, false));
+    }
+
+    #[test]
+    fn update_of_an_earlier_page_does_not_keep_the_next_from_connecting() {
+        // The note is the page's own. A reload in the middle of an install
+        // brings a page that knows nothing of it and would never take it
+        // back, and what the page before still sends must not set it again.
+        let fx = Fixture::new();
+        assert!(fx.ready.set_installing_update(PAGE, true));
+
+        fx.load_page();
+        assert!(fx.ready.enter_page("page-b"));
+        assert!(fx.ready.check_page("page-b").is_ok());
+
+        assert!(!fx.ready.set_installing_update(PAGE, true));
+        assert!(!fx.ready.set_installing_update(PAGE, false));
+        assert!(fx.ready.check_page("page-b").is_ok());
+        assert!(fx.ready.check_page(PAGE).is_err());
+    }
+
+    #[tokio::test]
+    async fn closing_for_an_update_is_for_the_announced_page_and_once() {
+        let fx = Fixture::new();
+        let managers = Managers::default();
+
+        // Not for a page that is not the announced one, whose request would
+        // close the sessions of the page that is.
+        assert!(managers.begin_update(&fx, "page-b").await.is_err());
+        assert!(fx.ready.check_page(PAGE).is_ok());
+
+        assert_eq!(managers.begin_update(&fx, PAGE).await, Ok(0));
+        assert!(fx.ready.check_page(PAGE).is_err());
+
+        // A second request must not return as if the sessions were closed
+        // while the first is still closing them.
+        assert!(managers.begin_update(&fx, PAGE).await.is_err());
+
+        // After a failed install the next try closes what was opened since.
+        assert!(fx.ready.set_installing_update(PAGE, false));
+        assert_eq!(managers.begin_update(&fx, PAGE).await, Ok(0));
+    }
+
+    #[tokio::test]
+    async fn closing_for_an_update_closes_the_logs_of_connects_under_way() {
+        // A connect still being set up has a log already, whose writer the
+        // end of the process would stop wherever it is.
+        let fx = Fixture::new();
+        let managers = Managers::default();
+        let setup = fx.begin("c");
+        assert!(fx.has_log("c"));
+
+        assert_eq!(managers.begin_update(&fx, PAGE).await, Ok(0));
+        assert!(!fx.has_log("c"));
+        assert!(setup.check_page_unchanged().is_err());
+    }
+
+    #[tokio::test]
+    async fn update_leaves_the_sessions_to_a_quit_that_has_begun() {
+        // Quitting closes the sessions itself; the update takes none of
+        // them, and does not note a page that will not connect again.
+        let fx = Fixture::new();
+        let managers = Managers::default();
+        assert!(begin_quit(&fx.ready));
+
+        assert!(managers.begin_update(&fx, PAGE).await.is_err());
+        assert!(!fx.ready.set_installing_update(PAGE, false));
+    }
+
+    #[tokio::test]
+    async fn closing_for_an_update_does_not_wait_out_a_held_shell_lock() {
+        // A stuck write to a local shell holds the shells' lock. The update
+        // waits for it as a change of page does and then goes on: the end
+        // of the process takes the shells with it.
+        let fx = Fixture::new();
+        let managers = Managers::default();
+        let release = managers.hold_shells();
+
+        let closing =
+            tokio::time::timeout(SHELL_LOCK_TIMEOUT * 3, managers.begin_update(&fx, PAGE));
+        assert_eq!(closing.await, Ok(Ok(0)));
+        assert!(fx.ready.check_page(PAGE).is_err());
+
+        // It has given up its turn: the next page is not kept waiting.
+        let next = tokio::time::timeout(SHELL_LOCK_TIMEOUT * 3, managers.announce(&fx, "page-b"));
+        assert_eq!(next.await, Ok(0));
+        assert!(fx.ready.check_page("page-b").is_ok());
+        drop(release);
     }
 
     #[test]
