@@ -33,7 +33,7 @@ pub use ssh::*;
 pub use telnet::*;
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicU8, Ordering};
 
 use tauri::{Emitter, Manager};
 
@@ -61,9 +61,27 @@ pub struct TerminalReadyState {
     /// Held while the announced page changes and the sessions it leaves
     /// behind are taken out of their managers: see [`change_page`].
     page_change: tokio::sync::Mutex<()>,
-    /// Set once the app has begun to quit, and never cleared; see
+    /// How the app ends, once it has begun to: an [`AppEnd`],
+    /// [`RESTART_SETTLED`], or [`RUNNING`]. Never back to that; see
     /// [`quit_app`].
-    quitting: AtomicBool,
+    ending: AtomicU8,
+}
+
+/// [`TerminalReadyState::ending`] while the app has not begun to quit.
+const RUNNING: u8 = 0;
+
+/// [`TerminalReadyState::ending`] once a restart is being handed to Tauri,
+/// which no quit takes back: see [`settle_end`].
+const RESTART_SETTLED: u8 = 3;
+
+/// How the app ends once its sessions are closed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
+enum AppEnd {
+    /// It exits: [`quit_app`].
+    Exit = 1,
+    /// It starts again: [`restart_app`].
+    Restart = 2,
 }
 
 /// The page of the main webview that terminal sessions may belong to.
@@ -178,6 +196,22 @@ impl TerminalReadyState {
             .is_some_and(|current| current.token == token)
     }
 
+    /// Whether the app has begun to quit, to exit or to start again.
+    fn is_quitting(&self) -> bool {
+        self.ending.load(Ordering::SeqCst) != RUNNING
+    }
+
+    /// How the app is to end, once it has begun to quit.
+    #[cfg(test)]
+    fn app_end(&self) -> Option<AppEnd> {
+        match self.ending.load(Ordering::SeqCst) {
+            RUNNING => None,
+            RESTART_SETTLED => Some(AppEnd::Restart),
+            end if end == AppEnd::Restart as u8 => Some(AppEnd::Restart),
+            _ => Some(AppEnd::Exit),
+        }
+    }
+
     /// Fail unless the page with `token` may open a session: it must be the
     /// page announced last, as otherwise its tabs are gone and nothing would
     /// ever show or close the session.
@@ -200,7 +234,7 @@ impl TerminalReadyState {
                 return Err("An update is being installed".to_string());
             }
         }
-        if self.quitting.load(Ordering::SeqCst) {
+        if self.is_quitting() {
             return Err("The app is quitting".to_string());
         }
         Ok(())
@@ -490,7 +524,7 @@ async fn take_remote_sessions(
     let mut ssh_manager = ssh.manager.lock().await;
     let mut telnet_manager = telnet.0.lock().await;
     if let Some(change) = change {
-        if ready.quitting.load(Ordering::SeqCst) || !change.apply(ready) {
+        if ready.is_quitting() || !change.apply(ready) {
             return None;
         }
     }
@@ -647,13 +681,36 @@ pub fn app_quit(app: tauri::AppHandle) {
 /// Returns at once; the closing runs on a task of its own, and the app exits
 /// within [`QUIT_TIMEOUT`], whatever is still closing then. A session still
 /// closing at that point gets only what its `Drop` can send before the
-/// process ends. A second call while this runs does nothing.
+/// process ends. A second call while this runs does nothing, unless the
+/// app was closing its sessions for a restart: it then exits instead (see
+/// [`restart_app`]).
 pub fn quit_app(app: &tauri::AppHandle) {
+    end_app(app, AppEnd::Exit);
+}
+
+/// Start the app again once its sessions are closed, as [`quit_app`] closes
+/// them before it exits: a restart ends the process with every session in
+/// it, and a device must see those end as well. Called by `app_restart`,
+/// which Settings uses after a change of database.
+///
+/// Returns at once, and the app starts again within [`QUIT_TIMEOUT`]. It is
+/// a quit like any other until then: every connect is refused, and the
+/// frontend is told while SSH or Telnet sessions close. A quit asked for
+/// while the sessions close is kept to, and the app exits instead; a restart
+/// asked for while the app quits changes nothing. While the frontend shows
+/// that the sessions are closing, it passes no quit on, so by then only the
+/// menu's quit item gets here.
+pub fn restart_app(app: &tauri::AppHandle) {
+    end_app(app, AppEnd::Restart);
+}
+
+/// End the app, for [`quit_app`] and [`restart_app`].
+fn end_app(app: &tauri::AppHandle, end: AppEnd) {
     let Some(ready) = app.try_state::<TerminalReadyState>() else {
-        app.exit(0);
+        finish_app(app, end);
         return;
     };
-    if !begin_quit(&ready) {
+    if !begin_quit(&ready, end) {
         return;
     }
     let app = app.clone();
@@ -677,15 +734,66 @@ pub fn quit_app(app: &tauri::AppHandle) {
                 tracing::warn!(timeout = ?QUIT_TIMEOUT, "Sessions still closing at quit; quitting anyway");
             }
         }
-        app.exit(0);
+        // Settled now, not when the quit began: a quit asked for since then
+        // has taken a restart back.
+        let end = app
+            .try_state::<TerminalReadyState>()
+            .map_or(end, |ready| settle_end(&ready));
+        finish_app(&app, end);
     });
 }
 
-/// Mark the app as quitting, returning whether this call did so. The mark is
-/// never taken back, since the app exits after it: from then on every
-/// connect is refused (see [`TerminalReadyState::check_page`]).
-fn begin_quit(ready: &TerminalReadyState) -> bool {
-    !ready.quitting.swap(true, Ordering::SeqCst)
+/// Settle how the app ends, now that its sessions are closed, and return
+/// it. A restart is final from here on: a quit asked for later finds it
+/// settled and changes nothing, where it would otherwise be noted and then
+/// not read by anyone.
+fn settle_end(ready: &TerminalReadyState) -> AppEnd {
+    let settled = ready.ending.compare_exchange(
+        AppEnd::Restart as u8,
+        RESTART_SETTLED,
+        Ordering::SeqCst,
+        Ordering::SeqCst,
+    );
+    match settled {
+        Ok(_) | Err(RESTART_SETTLED) => AppEnd::Restart,
+        Err(_) => AppEnd::Exit,
+    }
+}
+
+/// Exit, or start again, now.
+fn finish_app(app: &tauri::AppHandle, end: AppEnd) {
+    match end {
+        AppEnd::Exit => app.exit(0),
+        // Not `restart`, which off the main thread never returns, and would
+        // keep the thread it is called on.
+        AppEnd::Restart => app.request_restart(),
+    }
+}
+
+/// Mark the app as quitting, to end as `end` says, returning whether this
+/// call did so. The mark is never taken back, since the app ends after it:
+/// from then on every connect is refused (see
+/// [`TerminalReadyState::check_page`]).
+///
+/// Once the app is quitting, only how it ends can still change, and only
+/// one way: a quit is kept to over a restart that was asked for before it,
+/// since whoever quits wants the app gone. That holds until the restart is
+/// settled ([`settle_end`]), when the sessions are closed.
+fn begin_quit(ready: &TerminalReadyState, end: AppEnd) -> bool {
+    let began = ready
+        .ending
+        .compare_exchange(RUNNING, end as u8, Ordering::SeqCst, Ordering::SeqCst)
+        .is_ok();
+    if !began && end == AppEnd::Exit {
+        // Only a restart that is not settled yet: nothing else changes.
+        let _ = ready.ending.compare_exchange(
+            AppEnd::Restart as u8,
+            AppEnd::Exit as u8,
+            Ordering::SeqCst,
+            Ordering::SeqCst,
+        );
+    }
+    began
 }
 
 /// Close every session for [`quit_app`], all at the same time, so quitting
@@ -1262,7 +1370,7 @@ mod tests {
         // change of page then must not take them first and drop them.
         let fx = Fixture::new();
         let managers = Managers::default();
-        assert!(begin_quit(&fx.ready));
+        assert!(begin_quit(&fx.ready, AppEnd::Exit));
 
         assert_eq!(managers.announce(&fx, "page-b").await, 0);
         assert!(fx.ready.is_current_page(PAGE));
@@ -1333,7 +1441,7 @@ mod tests {
         let setup = fx.begin("c");
         assert!(setup.check_page_unchanged().is_ok());
 
-        assert!(begin_quit(&fx.ready));
+        assert!(begin_quit(&fx.ready, AppEnd::Exit));
         assert!(setup.check_page_unchanged().is_err());
         assert!(fx.begin("d").check_page_unchanged().is_err());
     }
@@ -1421,7 +1529,7 @@ mod tests {
         // them, and does not note a page that will not connect again.
         let fx = Fixture::new();
         let managers = Managers::default();
-        assert!(begin_quit(&fx.ready));
+        assert!(begin_quit(&fx.ready, AppEnd::Exit));
 
         assert!(managers.begin_update(&fx, PAGE).await.is_err());
         assert!(!fx.ready.set_installing_update(PAGE, false));
@@ -1453,7 +1561,70 @@ mod tests {
         // A second request — the menu item and Ctrl+Q together, say — must
         // not start a second closing.
         let ready = TerminalReadyState::default();
-        assert!(begin_quit(&ready));
-        assert!(!begin_quit(&ready));
+        assert_eq!(ready.app_end(), None);
+        assert!(begin_quit(&ready, AppEnd::Exit));
+        assert!(!begin_quit(&ready, AppEnd::Exit));
+        assert_eq!(ready.app_end(), Some(AppEnd::Exit));
+    }
+
+    #[tokio::test]
+    async fn restart_is_a_quit_that_ends_in_a_start() {
+        // Settings restarts the app after a change of database. Its
+        // sessions are closed first, as for a quit, so from then on no
+        // connect may register, and no change of page take the sessions.
+        let fx = Fixture::new();
+        let managers = Managers::default();
+        let setup = fx.begin("c");
+        assert!(setup.check_page_unchanged().is_ok());
+
+        assert!(begin_quit(&fx.ready, AppEnd::Restart));
+        assert_eq!(fx.ready.app_end(), Some(AppEnd::Restart));
+        assert!(setup.check_page_unchanged().is_err());
+        assert_eq!(managers.announce(&fx, "page-b").await, 0);
+        assert!(fx.ready.is_current_page(PAGE));
+
+        // A second click on the button changes nothing.
+        assert!(!begin_quit(&fx.ready, AppEnd::Restart));
+        assert_eq!(fx.ready.app_end(), Some(AppEnd::Restart));
+    }
+
+    #[test]
+    fn quit_is_kept_to_over_a_restart() {
+        // Whoever quits while the app closes its sessions for a restart
+        // wants it gone, not back: the app ends as an exit.
+        let ready = TerminalReadyState::default();
+        assert!(begin_quit(&ready, AppEnd::Restart));
+        assert!(!begin_quit(&ready, AppEnd::Exit));
+        assert_eq!(ready.app_end(), Some(AppEnd::Exit));
+        assert_eq!(settle_end(&ready), AppEnd::Exit);
+
+        // And a restart asked for while the app quits does not bring it
+        // back either.
+        let ready = TerminalReadyState::default();
+        assert!(begin_quit(&ready, AppEnd::Exit));
+        assert!(!begin_quit(&ready, AppEnd::Restart));
+        assert_eq!(ready.app_end(), Some(AppEnd::Exit));
+        assert_eq!(settle_end(&ready), AppEnd::Exit);
+    }
+
+    #[test]
+    fn restart_is_settled_once_the_sessions_are_closed() {
+        // The app ends the way that is settled then. A quit that comes
+        // later still must not be noted where nobody reads it any more,
+        // as if it had been kept to.
+        let ready = TerminalReadyState::default();
+        assert!(begin_quit(&ready, AppEnd::Restart));
+        assert_eq!(settle_end(&ready), AppEnd::Restart);
+
+        assert!(!begin_quit(&ready, AppEnd::Exit));
+        assert_eq!(ready.app_end(), Some(AppEnd::Restart));
+        assert_eq!(settle_end(&ready), AppEnd::Restart);
+        assert!(ready.is_quitting());
+
+        // A quit is settled as an exit, also where it never began.
+        let ready = TerminalReadyState::default();
+        assert!(begin_quit(&ready, AppEnd::Exit));
+        assert_eq!(settle_end(&ready), AppEnd::Exit);
+        assert_eq!(settle_end(&TerminalReadyState::default()), AppEnd::Exit);
     }
 }

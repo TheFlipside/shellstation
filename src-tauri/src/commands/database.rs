@@ -53,11 +53,12 @@ pub enum RlsSetupStatus {
 /// Tauri managed state for DB health status.
 pub struct DbStatusState(pub DbStatus);
 
-/// Relaunch the current application binary. Used by settings after a
-/// change that requires a fresh process (e.g. swapping DB backends).
+/// Relaunch the current application binary, once its sessions are closed:
+/// see [`super::restart_app`]. Used by settings after a change that requires
+/// a fresh process (e.g. swapping DB backends).
 #[tauri::command]
 pub fn app_restart(app: AppHandle) {
-    app.restart();
+    super::restart_app(&app);
 }
 
 // ── Config commands ──────────────────────────────────────────────────
