@@ -19,6 +19,32 @@ use models::{
 
 pub type DbResult<T> = Result<T, String>;
 
+/// The `LIKE` pattern of a session search: `query` anywhere in the text, and
+/// taken as written. `%` and `_` are a pattern's wildcards, and `\` is the
+/// character the search statements name as its escape, so each of the three
+/// gets a `\` before it. Without one before the `\` itself, a query with a
+/// backslash in it, as a user name with a domain has (`CORP\admin`), was read
+/// as an escape of the character after it and found nothing.
+///
+/// `None` for a query with a NUL in it, which finds nothing. `PostgreSQL` has
+/// no text with one and refuses it as a parameter, and `SQLite` reads a
+/// pattern up to its first NUL, so it would search for the part before it.
+pub(crate) fn search_pattern(query: &str) -> Option<String> {
+    if query.contains('\0') {
+        return None;
+    }
+    let mut pattern = String::with_capacity(query.len() + 2);
+    pattern.push('%');
+    for c in query.chars() {
+        if matches!(c, '\\' | '%' | '_') {
+            pattern.push('\\');
+        }
+        pattern.push(c);
+    }
+    pattern.push('%');
+    Some(pattern)
+}
+
 /// Compare two hostnames with numeric IP-address awareness.
 /// IPv4 addresses sort before IPv6 (enum variant order of `IpAddr`), both
 /// sort before non-IP hostnames.  Among IPs, octets/hextets are compared

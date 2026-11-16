@@ -13,7 +13,7 @@ use super::models::{
     UpdateSession,
 };
 use super::update_builder::{BindVal, Dialect, SessionColumn, UpdateBuilder};
-use super::{cmp_hostname, BulkSessionEdit, DatabaseProvider, DbResult};
+use super::{cmp_hostname, search_pattern, BulkSessionEdit, DatabaseProvider, DbResult};
 
 /// The limits every connection of the app sets for itself, as `name` and
 /// value pairs: how long a statement waits for a lock, how long a statement
@@ -721,8 +721,9 @@ impl DatabaseProvider for PostgresProvider {
     }
 
     async fn search_sessions(&self, query: &str) -> DbResult<Vec<Session>> {
-        let escaped = query.replace('%', "\\%").replace('_', "\\_");
-        let pattern = format!("%{escaped}%");
+        let Some(pattern) = search_pattern(query) else {
+            return Ok(Vec::new());
+        };
         let rows = sqlx::query(
             "SELECT id, folder_id, name, hostname, port, protocol, username, auth_method, jump_host_id, tags, icon, sort_order, highlight_profile_id, credential_profile_id, legacy_algorithms, owner, visibility, login_sequence_id \
              FROM sessions \

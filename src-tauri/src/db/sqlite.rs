@@ -13,7 +13,7 @@ use super::models::{
     UpdateSession,
 };
 use super::update_builder::{BindVal, Dialect, SessionColumn, UpdateBuilder};
-use super::{cmp_hostname, BulkSessionEdit, DatabaseProvider, DbResult};
+use super::{cmp_hostname, search_pattern, BulkSessionEdit, DatabaseProvider, DbResult};
 
 pub struct SqliteProvider {
     pool: SqlitePool,
@@ -410,8 +410,9 @@ impl DatabaseProvider for SqliteProvider {
 
     // SQLite LIKE is case-insensitive for ASCII; PostgreSQL uses ILIKE.
     async fn search_sessions(&self, query: &str) -> DbResult<Vec<Session>> {
-        let escaped = query.replace('%', "\\%").replace('_', "\\_");
-        let pattern = format!("%{escaped}%");
+        let Some(pattern) = search_pattern(query) else {
+            return Ok(Vec::new());
+        };
         let rows = sqlx::query(
             "SELECT id, folder_id, name, hostname, port, protocol, username, auth_method, jump_host_id, tags, icon, sort_order, highlight_profile_id, credential_profile_id, legacy_algorithms, owner, visibility, login_sequence_id \
              FROM sessions \
@@ -1278,5 +1279,119 @@ impl DatabaseProvider for SqliteProvider {
         Ok(DataFingerprint {
             hash: format!("{:x}", hasher.finish()),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+
+    #[test]
+    fn a_search_pattern_takes_the_query_as_written() {
+        assert_eq!(search_pattern("core").as_deref(), Some("%core%"));
+        assert_eq!(search_pattern("").as_deref(), Some("%%"));
+        // The wildcards and the escape character itself.
+        assert_eq!(search_pattern("50%_a").as_deref(), Some(r"%50\%\_a%"));
+        assert_eq!(
+            search_pattern(r"CORP\admin").as_deref(),
+            Some(r"%CORP\\admin%")
+        );
+        assert_eq!(search_pattern(r"core\").as_deref(), Some(r"%core\\%"));
+        // Characters of more than one byte go through as they are.
+        assert_eq!(
+            search_pattern("Zürich_東京").as_deref(),
+            Some(r"%Zürich\_東京%")
+        );
+        // No pattern for a query with a NUL in it.
+        assert_eq!(search_pattern("core\0"), None);
+        assert_eq!(search_pattern("\0"), None);
+    }
+
+    async fn database_with(sessions: &[(&str, &str)]) -> SqliteProvider {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(SqliteConnectOptions::new().filename(":memory:"))
+            .await
+            .unwrap();
+        sqlx::migrate!().run(&pool).await.unwrap();
+        let db = SqliteProvider::new(pool);
+        let folder = db
+            .create_folder(NewFolder {
+                name: "lab".to_string(),
+                parent_id: None,
+            })
+            .await
+            .unwrap();
+        for (name, username) in sessions {
+            db.create_session(NewSession {
+                folder_id: folder.id,
+                name: (*name).to_string(),
+                hostname: "host.example".to_string(),
+                port: 22,
+                protocol: "ssh".to_string(),
+                username: (*username).to_string(),
+                auth_method: "password".to_string(),
+                jump_host_id: None,
+                tags: "[]".to_string(),
+                icon: "desktop".to_string(),
+                highlight_profile_id: None,
+                credential_profile_id: None,
+                legacy_algorithms: false,
+                login_sequence_id: None,
+            })
+            .await
+            .unwrap();
+        }
+        db
+    }
+
+    async fn found(db: &SqliteProvider, query: &str) -> Vec<String> {
+        let mut names: Vec<String> = db
+            .search_sessions(query)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|s| s.name)
+            .collect();
+        names.sort();
+        names
+    }
+
+    #[tokio::test]
+    async fn a_search_takes_a_backslash_and_the_wildcards_as_written() {
+        let db = database_with(&[
+            ("domain", r"CORP\admin"),
+            ("plain", "CORPadmin"),
+            ("percent", "50%"),
+            ("underscore", "a_b"),
+            ("letters", "axb"),
+        ])
+        .await;
+
+        // A backslash was read as an escape of the character after it, so
+        // this found the session without one and not the session with it.
+        assert_eq!(found(&db, r"CORP\admin").await, ["domain"]);
+        assert_eq!(found(&db, r"CORP\").await, ["domain"]);
+        assert_eq!(found(&db, r"\").await, ["domain"]);
+        assert_eq!(found(&db, "corp").await, ["domain", "plain"]);
+        // A backslash before a wildcard escaped the backslash the search
+        // put there, and left the wildcard a wildcard: this found every
+        // session with a backslash in it.
+        assert!(found(&db, r"\%").await.is_empty());
+        assert!(found(&db, r"\_").await.is_empty());
+        // The wildcards, as before.
+        assert_eq!(found(&db, "%").await, ["percent"]);
+        assert_eq!(found(&db, "a_b").await, ["underscore"]);
+    }
+
+    #[tokio::test]
+    async fn a_search_with_a_nul_in_it_finds_nothing() {
+        let db = database_with(&[("core", "admin")]).await;
+        assert_eq!(found(&db, "core").await, ["core"]);
+        // SQLite reads the pattern up to the NUL: this was a search for
+        // "core", and found the session.
+        assert!(found(&db, "core\0x").await.is_empty());
+        assert!(found(&db, "\0").await.is_empty());
     }
 }
