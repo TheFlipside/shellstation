@@ -2,6 +2,16 @@
 
 All notable changes to this project are documented in this file.
 
+## Unreleased
+
+### Fixed
+
+- `npm audit` reported `minimatch` 10.2.5 (GHSA-g3hv-75wg-m249, a denial of service through a pattern), under `typescript-eslint`: development tooling, not in the shipped app, and listed under **Known issues** of 0.40.0. `npm audit fix` moved it to 11.0.9 within the existing ranges, with `typescript-eslint` 8.60.1 → 8.73.0, and along with it `vite` 8.3.5 → 8.3.8, `rolldown` 1.2.16 → 1.2.19 and `@vitejs/plugin-react` 6.0.2 → 6.3.0, which build the frontend; only `package-lock.json` changes. `minimatch` 11 brings one new package, `@isaacs/nonrecursive-glob-match`, and `rolldown` 1.2.19 lists a WebAssembly binding as optional and for the `wasm32` CPU only, with five optional packages under it, two of them at a prerelease that the binding pins (`@emnapi/core` and `@emnapi/runtime` 2.0.0-beta.2); npm installs none of the six on the platforms the app is built on. Every package still comes from the npm registry, and none of the new ones has an install script. Built on Windows before and after, the frontend's four script files and its main stylesheet have the same content hashes in their names; eslint, the type check and the 604 frontend tests pass with the new versions. The app itself was not started.
+
+### Known issues
+
+- `npm audit` still reports `picomatch` 4.0.7 (GHSA-fc5q-39xc-vjpf, a pattern with repeated extglobs can take very long to match), which has no fixed version yet. It is in development tooling and not in the shipped app (`npm audit --omit=dev` finds none): under `vite` and `vitest`, and under `typescript-eslint` as well, through `tinyglobby`, which was so before the update under **Fixed** too, where `npm audit` listed those packages for `minimatch`. That update took the findings from 13 to 12 and the advisories from two to one. The tools run on a developer's machine and on the release runners, over the project's own files and configuration. The other open issues are those under **Known issues** of 0.40.0.
+
 ## 0.40.0 - 2026-11-18
 
 ### Added
