@@ -29,6 +29,12 @@ export interface UpdateProfileParams {
 
 interface CredentialProfilesState {
   profiles: CredentialProfile[];
+  /**
+   * The ids of the profiles whose change is under way. It is kept here and
+   * not by the dialog that sent the change, which can be closed and opened
+   * again before the change has its answer.
+   */
+  updating: string[];
   loadAll: () => Promise<void>;
   createProfile: (params: CreateProfileParams) => Promise<CredentialProfile>;
   updateProfile: (id: string, params: UpdateProfileParams) => Promise<void>;
@@ -37,8 +43,15 @@ interface CredentialProfilesState {
   getProfileById: (id: string) => CredentialProfile | undefined;
 }
 
+/** The list without one of its entries that are this id. */
+function withoutOne(ids: string[], id: string): string[] {
+  const at = ids.indexOf(id);
+  return at === -1 ? ids : [...ids.slice(0, at), ...ids.slice(at + 1)];
+}
+
 export const useCredentialProfilesStore = create<CredentialProfilesState>((set, get) => ({
   profiles: [],
+  updating: [],
 
   loadAll: async () => {
     const profiles = await invoke<CredentialProfile[]>("credential_profile_list");
@@ -58,26 +71,32 @@ export const useCredentialProfilesStore = create<CredentialProfilesState>((set, 
   },
 
   updateProfile: async (id, params) => {
-    await invoke("credential_profile_update", {
-      id,
-      name: params.name ?? null,
-      authType: params.authType ?? null,
-      username: params.username ?? null,
-      keyPath: params.keyPath ?? null,
-      secret: params.secret ?? null,
-    });
-    set((s) => ({
-      profiles: s.profiles.map((p) => {
-        if (p.id !== id) return p;
-        return {
-          ...p,
-          ...(params.name !== undefined ? { name: params.name } : {}),
-          ...(params.authType !== undefined ? { auth_type: params.authType } : {}),
-          ...(params.username !== undefined ? { username: params.username } : {}),
-          ...(params.keyPath !== undefined ? { key_path: params.keyPath } : {}),
-        };
-      }),
-    }));
+    set((s) => ({ updating: [...s.updating, id] }));
+    try {
+      await invoke("credential_profile_update", {
+        id,
+        name: params.name ?? null,
+        authType: params.authType ?? null,
+        username: params.username ?? null,
+        keyPath: params.keyPath ?? null,
+        secret: params.secret ?? null,
+      });
+      set((s) => ({
+        profiles: s.profiles.map((p) => {
+          if (p.id !== id) return p;
+          return {
+            ...p,
+            ...(params.name !== undefined ? { name: params.name } : {}),
+            ...(params.authType !== undefined ? { auth_type: params.authType } : {}),
+            ...(params.username !== undefined ? { username: params.username } : {}),
+            ...(params.keyPath !== undefined ? { key_path: params.keyPath } : {}),
+          };
+        }),
+      }));
+    } finally {
+      // Once, for this change: another of the same profile may be under way.
+      set((s) => ({ updating: withoutOne(s.updating, id) }));
+    }
   },
 
   deleteProfile: async (id) => {

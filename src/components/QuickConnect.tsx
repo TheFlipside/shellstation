@@ -1,4 +1,5 @@
 import React, { useState } from "react";
+import { flushSync } from "react-dom";
 import { useTranslation } from "react-i18next";
 import { open } from "@tauri-apps/plugin-dialog";
 import { DialogKeys } from "./DialogKeys";
@@ -31,8 +32,20 @@ export function QuickConnect({ onConnect, onCancel }: QuickConnectProps): React.
   const handleSubmit = (e: React.SyntheticEvent): void => {
     e.preventDefault();
     setError("");
-    if (!host.trim()) return;
-    if (protocol === "ssh" && !username.trim()) return;
+    // The host and, for SSH, the user name are required fields, and the
+    // webview does not send a form with one of them empty: it says so at the
+    // field. One with spaces alone is as empty, so it is emptied and the
+    // webview asked to say the same of it.
+    const noHost = !host.trim();
+    const noUsername = protocol === "ssh" && !username.trim();
+    if (noHost || noUsername) {
+      flushSync(() => {
+        if (noHost) setHost("");
+        if (noUsername) setUsername("");
+      });
+      if (e.currentTarget instanceof HTMLFormElement) e.currentTarget.reportValidity();
+      return;
+    }
     // An empty field is the protocol's own port.
     const defaultPort = protocol === "telnet" ? 23 : 22;
     const portNumber = port.trim() === "" ? defaultPort : Number(port);
@@ -91,6 +104,7 @@ export function QuickConnect({ onConnect, onCancel }: QuickConnectProps): React.
                 setHost(e.target.value);
               }}
               placeholder={t("session.hostnamePlaceholder")}
+              required
               autoFocus
             />
           </div>
@@ -120,6 +134,7 @@ export function QuickConnect({ onConnect, onCancel }: QuickConnectProps): React.
                     setUsername(e.target.value);
                   }}
                   placeholder={t("session.usernamePlaceholder")}
+                  required
                 />
               </div>
               <div className="dialog-field">

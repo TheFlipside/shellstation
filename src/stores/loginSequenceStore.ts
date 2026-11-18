@@ -29,6 +29,12 @@ export interface UpdateLoginSequenceParams {
 
 interface LoginSequenceState {
   sequences: LoginSequence[];
+  /**
+   * The ids of the sequences whose change is under way. It is kept here and
+   * not by the dialog that sent the change, which can be closed and opened
+   * again before the change has its answer.
+   */
+  updating: string[];
   loadAll: () => Promise<void>;
   createSequence: (params: CreateLoginSequenceParams) => Promise<LoginSequence>;
   updateSequence: (id: string, params: UpdateLoginSequenceParams) => Promise<void>;
@@ -36,8 +42,15 @@ interface LoginSequenceState {
   getSequenceById: (id: string) => LoginSequence | undefined;
 }
 
+/** The list without one of its entries that are this id. */
+function withoutOne(ids: string[], id: string): string[] {
+  const at = ids.indexOf(id);
+  return at === -1 ? ids : [...ids.slice(0, at), ...ids.slice(at + 1)];
+}
+
 export const useLoginSequenceStore = create<LoginSequenceState>((set, get) => ({
   sequences: [],
+  updating: [],
 
   loadAll: async () => {
     const sequences = await invoke<LoginSequence[]>("login_sequence_list");
@@ -55,23 +68,31 @@ export const useLoginSequenceStore = create<LoginSequenceState>((set, get) => ({
   },
 
   updateSequence: async (id, params) => {
-    await invoke("login_sequence_update", {
-      id,
-      name: params.name ?? null,
-      sendInitialCr: params.sendInitialCr ?? null,
-      steps: params.steps ?? null,
-    });
-    set((s) => ({
-      sequences: s.sequences.map((seq) => {
-        if (seq.id !== id) return seq;
-        return {
-          ...seq,
-          ...(params.name !== undefined ? { name: params.name } : {}),
-          ...(params.sendInitialCr !== undefined ? { send_initial_cr: params.sendInitialCr } : {}),
-          ...(params.steps !== undefined ? { steps: params.steps } : {}),
-        };
-      }),
-    }));
+    set((s) => ({ updating: [...s.updating, id] }));
+    try {
+      await invoke("login_sequence_update", {
+        id,
+        name: params.name ?? null,
+        sendInitialCr: params.sendInitialCr ?? null,
+        steps: params.steps ?? null,
+      });
+      set((s) => ({
+        sequences: s.sequences.map((seq) => {
+          if (seq.id !== id) return seq;
+          return {
+            ...seq,
+            ...(params.name !== undefined ? { name: params.name } : {}),
+            ...(params.sendInitialCr !== undefined
+              ? { send_initial_cr: params.sendInitialCr }
+              : {}),
+            ...(params.steps !== undefined ? { steps: params.steps } : {}),
+          };
+        }),
+      }));
+    } finally {
+      // Once, for this change: another of the same sequence may be under way.
+      set((s) => ({ updating: withoutOne(s.updating, id) }));
+    }
   },
 
   deleteSequence: async (id) => {

@@ -637,6 +637,23 @@ body,
   margin-bottom: 12px;
 }
 
+/* The fields of a form, which it disables together while it saves. It has
+   no box of its own, so the fields lie in the form as they did without it,
+   their margins included. The rest is for a webview that gives it one. */
+.dialog-fieldset {
+  display: contents;
+  border: 0;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+}
+
+/* A text field keeps its colours when it is disabled, and would look as it
+   does when it takes input. A checkbox has a look of the webview's for it. */
+.dialog-fieldset:disabled .dialog-field input:not([type="checkbox"]) {
+  opacity: 0.6;
+}
+
 /* A heading is the label of a group of fields, which no single field
    takes. */
 .dialog-field label,

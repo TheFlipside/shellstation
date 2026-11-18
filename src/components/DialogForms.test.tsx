@@ -1,14 +1,16 @@
 /**
- * The forms of the two managers and of Quick Connect: a save is sent once,
- * however often it is asked for while it is under way; what a save, a file
- * dialog or the read of a stored password brings back is for the form it was
- * asked from; a file dialog that fails says so; Quick Connect passes on no
- * port outside 1 to 65535; and the steps of a login sequence are a group
- * with a name.
+ * The forms of the two managers and of Quick Connect: a form's save is sent
+ * once, however often it is asked for while it is under way, and the form
+ * takes nothing meanwhile; what a save, a file dialog or the read of a stored
+ * password brings back is for the form it was asked from; a password is sent
+ * with a password profile alone; a file dialog that fails says so; Quick
+ * Connect passes on no port outside 1 to 65535 and requires a host and, for
+ * SSH, a user name; and the steps of a login sequence are a group with a
+ * name.
  */
 import React from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, type RenderResult } from "@testing-library/react";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import i18n from "../i18n";
@@ -53,6 +55,13 @@ function sent(command: string): number {
   return vi.mocked(invoke).mock.calls.filter(([name]) => name === command).length;
 }
 
+/** What a command was sent with, the first time. */
+function sentWith(command: string): Record<string, unknown> {
+  const call = vi.mocked(invoke).mock.calls.find(([name]) => name === command);
+  if (!call) throw new Error(`${command} was not sent`);
+  return call[1] as Record<string, unknown>;
+}
+
 /** Let what has settled reach the component, through every step of a chain. */
 async function settle(): Promise<void> {
   await act(async () => {
@@ -60,9 +69,10 @@ async function settle(): Promise<void> {
   });
 }
 
-async function renderOpen(dialog: React.JSX.Element): Promise<void> {
-  render(dialog);
+async function renderOpen(dialog: React.JSX.Element): Promise<RenderResult> {
+  const view = render(dialog);
   await settle();
+  return view;
 }
 
 function field(id: string): HTMLInputElement {
@@ -83,6 +93,11 @@ function form(): HTMLFormElement {
 
 function button(key: string): HTMLButtonElement {
   return screen.getByRole<HTMLButtonElement>("button", { name: i18n.t(key) });
+}
+
+/** The buttons of this name, one for each row of a manager's list. */
+function buttons(key: string): HTMLButtonElement[] {
+  return screen.getAllByRole<HTMLButtonElement>("button", { name: i18n.t(key) });
 }
 
 /** Pick the option with this text in one of the app's selects. */
@@ -117,6 +132,9 @@ const SEQUENCE: LoginSequence = {
   sort_order: 0,
 };
 
+/** The id of a second entry, where a test has two. */
+const OTHER_ID = "00000000-0000-4000-8000-0000000000c9";
+
 const PROFILE: CredentialProfile = {
   id: "00000000-0000-4000-8000-0000000000c2",
   name: "lab admin",
@@ -132,8 +150,8 @@ beforeEach(async () => {
   vi.mocked(invoke).mockReset();
   vi.mocked(open).mockReset();
   backend({});
-  useLoginSequenceStore.setState({ sequences: [] });
-  useCredentialProfilesStore.setState({ profiles: [] });
+  useLoginSequenceStore.setState({ sequences: [], updating: [] });
+  useCredentialProfilesStore.setState({ profiles: [], updating: [] });
 });
 
 /** What the tests of a save need to know of a manager. */
@@ -256,7 +274,8 @@ describe.each(MANAGERS)("a save in the form of $name", (manager) => {
   });
 
   it("can be sent for another entry after one that went through", async () => {
-    backend({ [manager.create]: () => Promise.resolve(manager.stored) });
+    const answers = [manager.stored, { ...manager.stored, id: OTHER_ID, name: "another entry" }];
+    backend({ [manager.create]: () => Promise.resolve(answers.shift()) });
     await renderOpen(manager.render());
     write(manager.stored.name);
     fireEvent.submit(form());
@@ -297,15 +316,165 @@ describe.each(MANAGERS)("a save in the form of $name", (manager) => {
     // The form is left and another one opened, before the save has its answer.
     fireEvent.click(button("dialog.cancel"));
     write("written since");
-    // A manager sends one save at a time: this form's has to wait.
-    expect(button("dialog.save")).toBeDisabled();
-    fireEvent.submit(form());
-    expect(sent(manager.create)).toBe(1);
+    // The save that is under way is not this form's: nothing here waits for it.
+    expect(button("dialog.save")).toBeEnabled();
+    expect(field(manager.nameField)).toBeEnabled();
 
     save.resolve(manager.stored);
     await settle();
     expect(field(manager.nameField).value).toBe("written since");
     expect(button("dialog.save")).toBeEnabled();
+  });
+
+  it("is not held up by the save of a form that was left, nor ended by it", async () => {
+    const first = pending();
+    const second = pending();
+    const answers = [first.promise, second.promise];
+    backend({ [manager.create]: () => answers.shift() ?? Promise.resolve(null) });
+    await renderOpen(manager.render());
+    write(manager.stored.name);
+    fireEvent.submit(form());
+    fireEvent.click(button("dialog.cancel"));
+
+    write("written since");
+    submitTwiceAtOnce();
+    // This form's own save went out, once, beside the one still under way.
+    expect(sent(manager.create)).toBe(2);
+    expect(button("dialog.save")).toBeDisabled();
+
+    // The answer for the form that was left is not this form's.
+    first.resolve(manager.stored);
+    await settle();
+    expect(button("dialog.save")).toBeDisabled();
+    expect(field(manager.nameField).value).toBe("written since");
+
+    second.resolve({ ...manager.stored, id: OTHER_ID });
+    await settle();
+    expect(document.querySelector("form")).toBeNull();
+  });
+
+  describe("of a stored entry", () => {
+    /** The manager with two stored entries, and the second one's form saved and left. */
+    async function savedAndLeft(save: Pending): Promise<RenderResult> {
+      backend({
+        [manager.list]: () =>
+          Promise.resolve([{ ...manager.stored, id: OTHER_ID, name: "the other" }, manager.stored]),
+        [manager.update]: () => save.promise,
+        credential_profile_get_secret: () => Promise.resolve(""),
+      });
+      const view = await renderOpen(manager.render());
+      expect(buttons("common.edit").map((edit) => edit.disabled)).toEqual([false, false]);
+      fireEvent.click(buttons("common.edit")[1]);
+      expect(field(manager.nameField).value).toBe(manager.stored.name);
+      type(manager.nameField, "renamed");
+      fireEvent.submit(form());
+      // The form is left, and the entry's save has no answer yet.
+      fireEvent.click(button("dialog.cancel"));
+      return view;
+    }
+
+    it.each([
+      [
+        "went through",
+        (save: Pending) => {
+          save.resolve(null);
+        },
+      ],
+      [
+        "failed",
+        (save: Pending) => {
+          save.reject(new Error("database is locked"));
+        },
+      ],
+    ] as const)(
+      "keeps the entry from another change and from being deleted, until it %s",
+      async (_how, answer) => {
+        const save = pending();
+        await savedAndLeft(save);
+        // A second save of the entry could land before this one. The other
+        // entry, and a new one, are another matter.
+        expect(buttons("common.edit").map((edit) => edit.disabled)).toEqual([false, true]);
+        expect(buttons("common.delete").map((del) => del.disabled)).toEqual([false, true]);
+        expect(button(manager.newEntry)).toBeEnabled();
+
+        answer(save);
+        await settle();
+        expect(buttons("common.edit").map((edit) => edit.disabled)).toEqual([false, false]);
+        expect(buttons("common.delete").map((del) => del.disabled)).toEqual([false, false]);
+      },
+    );
+
+    it("keeps the entry also in a manager that was closed and opened again", async () => {
+      const save = pending();
+      const view = await savedAndLeft(save);
+      view.unmount();
+
+      // What says so is not the dialog's, which is another one by now.
+      await renderOpen(manager.render());
+      expect(buttons("common.edit").map((edit) => edit.disabled)).toEqual([false, true]);
+      expect(buttons("common.delete").map((del) => del.disabled)).toEqual([false, true]);
+
+      save.resolve(null);
+      await settle();
+      expect(buttons("common.edit").map((edit) => edit.disabled)).toEqual([false, false]);
+      expect(buttons("common.delete").map((del) => del.disabled)).toEqual([false, false]);
+    });
+  });
+
+  it("takes nothing while it is under way, and can still be left", async () => {
+    const save = pending();
+    backend({ [manager.create]: () => save.promise });
+    await renderOpen(manager.render());
+    write(manager.stored.name);
+    expect(field(manager.nameField)).toBeEnabled();
+
+    fireEvent.submit(form());
+    // What was typed now would be no part of the save.
+    expect(field(manager.nameField)).toBeDisabled();
+    for (const control of Array.from(form().querySelectorAll("input, button"))) {
+      if (control !== button("dialog.cancel")) expect(control).toBeDisabled();
+    }
+    expect(button("dialog.cancel")).toBeEnabled();
+
+    save.reject(new Error("database is locked"));
+    await settle();
+    expect(field(manager.nameField)).toBeEnabled();
+    expect(button("dialog.save")).toBeEnabled();
+  });
+
+  it("gives the focus back to where it was, after one that failed", async () => {
+    const save = pending();
+    backend({ [manager.create]: () => save.promise });
+    await renderOpen(manager.render());
+    write(manager.stored.name);
+    const name = field(manager.nameField);
+    name.focus();
+
+    fireEvent.submit(form());
+    // A webview takes the focus from a field that is disabled. The test
+    // environment leaves it there, and does not let it be taken by `blur`.
+    document.body.tabIndex = -1;
+    document.body.focus();
+    document.body.removeAttribute("tabindex");
+    expect(document.activeElement).toBe(document.body);
+
+    save.reject(new Error("database is locked"));
+    await settle();
+    expect(document.activeElement).toBe(name);
+  });
+
+  it("leaves the focus where the user has gone, after one that failed", async () => {
+    const save = pending();
+    backend({ [manager.create]: () => save.promise });
+    await renderOpen(manager.render());
+    write(manager.stored.name);
+    field(manager.nameField).focus();
+
+    fireEvent.submit(form());
+    button("dialog.cancel").focus();
+    save.reject(new Error("database is locked"));
+    await settle();
+    expect(document.activeElement).toBe(button("dialog.cancel"));
   });
 
   it("says with the manager that it failed, once its form was left for another", async () => {
@@ -339,6 +508,44 @@ describe.each(MANAGERS)("a save in the form of $name", (manager) => {
     save.reject(new Error("database is locked"));
     await settle();
     expect(shownWithDialog("database is locked")).toBe(true);
+  });
+});
+
+describe.each([
+  [
+    "profiles",
+    "credential_profile_update",
+    () => useCredentialProfilesStore.getState().updateProfile(OTHER_ID, { name: "renamed" }),
+    () => useCredentialProfilesStore.getState().updating,
+  ],
+  [
+    "login sequences",
+    "login_sequence_update",
+    () => useLoginSequenceStore.getState().updateSequence(OTHER_ID, { name: "renamed" }),
+    () => useLoginSequenceStore.getState().updating,
+  ],
+] as const)("a change that the store of %s has under way", (_name, command, change, updating) => {
+  it("is recorded until it has its answer, each of two of one entry for itself", async () => {
+    const first = pending();
+    const second = pending();
+    const answers = [first.promise, second.promise];
+    backend({ [command]: () => answers.shift() ?? Promise.resolve(null) });
+
+    // At once, before the backend has said anything.
+    const one = change();
+    expect(updating()).toEqual([OTHER_ID]);
+    const two = change();
+    expect(updating()).toEqual([OTHER_ID, OTHER_ID]);
+
+    // The end of one is not the end of the other.
+    first.resolve(null);
+    await one;
+    expect(updating()).toEqual([OTHER_ID]);
+
+    // One that fails is over as well, and says so to whoever asked for it.
+    second.reject(new Error("database is locked"));
+    await expect(two).rejects.toThrow("database is locked");
+    expect(updating()).toEqual([]);
   });
 });
 
@@ -396,6 +603,120 @@ describe("the stored password of a profile", () => {
     second.resolve("stored password");
     await settle();
     expect(field("cm-password").value).toBe("stored password");
+  });
+});
+
+describe("the password a form holds", () => {
+  /** The types of a profile that has no password, by the option's text. */
+  const OTHER_TYPES = [
+    ["a key", "credentialProfiles.authKey", "key"],
+    ["keyboard-interactive", "credentialProfiles.authKeyboardInteractive", "keyboard-interactive"],
+  ] as const;
+
+  /** The manager with one password profile, whose stored password is read. */
+  async function editing(): Promise<void> {
+    backend({
+      credential_profile_list: () => Promise.resolve([PROFILE]),
+      credential_profile_get_secret: () => Promise.resolve("stored password"),
+      credential_profile_update: () => Promise.resolve(null),
+    });
+    await renderOpen(<CredentialManager onClose={vi.fn()} />);
+    fireEvent.click(button("common.edit"));
+    await settle();
+    // The form holds the stored password by now.
+    expect(field("cm-password").value).toBe("stored password");
+  }
+
+  /** The form for a new profile, with a password typed into it. */
+  async function writing(): Promise<void> {
+    backend({ credential_profile_create: () => Promise.resolve(PROFILE) });
+    await renderOpen(<CredentialManager onClose={vi.fn()} />);
+    fireEvent.click(button("credentialProfiles.newProfile"));
+    type("cm-name", "lab admin");
+    type("cm-password", "typed password");
+  }
+
+  it("is sent with a new password profile", async () => {
+    await writing();
+    fireEvent.submit(form());
+    expect(sentWith("credential_profile_create")).toMatchObject({
+      authType: "password",
+      secret: "typed password",
+    });
+    await settle();
+  });
+
+  it.each(OTHER_TYPES)(
+    "is not sent with a new profile that was switched to %s",
+    async (_name, label, authType) => {
+      await writing();
+      choose("cm-authtype", i18n.t(label));
+      fireEvent.submit(form());
+      const args = sentWith("credential_profile_create");
+      expect(args).toMatchObject({ authType, secret: "" });
+      // Nor under another name.
+      expect(JSON.stringify(args)).not.toContain("typed password");
+      await settle();
+    },
+  );
+
+  it("is sent with a profile that was switched away and back to a password", async () => {
+    await writing();
+    choose("cm-authtype", i18n.t("credentialProfiles.authKey"));
+    choose("cm-authtype", i18n.t("credentialProfiles.authPassword"));
+    fireEvent.submit(form());
+    expect(sentWith("credential_profile_create")).toMatchObject({
+      authType: "password",
+      secret: "typed password",
+    });
+    await settle();
+  });
+
+  it.each(OTHER_TYPES)(
+    "is not sent with a stored profile that is switched to %s",
+    async (_name, label, authType) => {
+      await editing();
+      choose("cm-authtype", i18n.t(label));
+      fireEvent.submit(form());
+      // No password: the backend leaves what is stored as it is.
+      const args = sentWith("credential_profile_update");
+      expect(args).toMatchObject({ authType, secret: null });
+      expect(JSON.stringify(args)).not.toContain("stored password");
+      await settle();
+    },
+  );
+
+  it("is sent with a stored password profile when it was changed", async () => {
+    await editing();
+    type("cm-password", "new password");
+    fireEvent.submit(form());
+    expect(sentWith("credential_profile_update")).toMatchObject({
+      authType: "password",
+      secret: "new password",
+    });
+    await settle();
+  });
+});
+
+describe("the list of a select in a credential profile's form", () => {
+  it("closes when the form's save starts, with the form's fields", async () => {
+    const save = pending();
+    backend({ credential_profile_create: () => save.promise });
+    await renderOpen(<CredentialManager onClose={vi.fn()} />);
+    fireEvent.click(button("credentialProfiles.newProfile"));
+    type("cm-name", "lab admin");
+
+    // The list is not among the fields the form disables: it is rendered
+    // beside the dialog's box.
+    const select = document.getElementById("cm-authtype");
+    if (!select) throw new Error("no select");
+    fireEvent.click(select);
+    expect(screen.getAllByRole("option").length).toBeGreaterThan(0);
+    expect(form().querySelector('[role="option"]')).toBeNull();
+
+    fireEvent.submit(form());
+    expect(screen.queryAllByRole("option")).toHaveLength(0);
+    expect(select).toBeDisabled();
   });
 });
 
@@ -559,6 +880,65 @@ describe("the port of Quick Connect", () => {
     expect(screen.getByText(i18n.t("session.portRange"))).toBeInTheDocument();
     choose("qc-protocol", "Telnet");
     expect(screen.queryByText(i18n.t("session.portRange"))).toBeNull();
+  });
+});
+
+describe("the host and the user name of Quick Connect", () => {
+  it("are required fields, the user name for SSH alone", async () => {
+    await renderOpen(<QuickConnect onConnect={vi.fn()} onCancel={vi.fn()} />);
+    expect(field("qc-host").required).toBe(true);
+    expect(field("qc-username").required).toBe(true);
+    // The webview does not send a form with one of them empty.
+    expect(form().checkValidity()).toBe(false);
+    type("qc-host", "switch.example");
+    expect(form().checkValidity()).toBe(false);
+    type("qc-username", "admin");
+    expect(form().checkValidity()).toBe(true);
+
+    type("qc-username", "");
+    choose("qc-protocol", "Telnet");
+    expect(document.getElementById("qc-username")).toBeNull();
+    expect(form().checkValidity()).toBe(true);
+  });
+
+  it.each([
+    ["the host", "   ", "admin", "qc-host"],
+    ["the user name", "switch.example", " \t", "qc-username"],
+  ] as const)("are empty with spaces alone: %s", async (_name, host, username, emptied) => {
+    const onConnect = vi.fn();
+    // Whether the form was valid at the moment the webview was asked about it.
+    const validWhenAsked: boolean[] = [];
+    const said = vi.spyOn(HTMLFormElement.prototype, "reportValidity").mockImplementation(function (
+      this: HTMLFormElement,
+    ) {
+      validWhenAsked.push(this.checkValidity());
+      return false;
+    });
+    try {
+      await renderOpen(<QuickConnect onConnect={onConnect} onCancel={vi.fn()} />);
+      type("qc-host", host);
+      type("qc-username", username);
+      // Spaces alone get past a webview's check of a required field.
+      expect(form().checkValidity()).toBe(true);
+
+      fireEvent.submit(form());
+      expect(onConnect).not.toHaveBeenCalled();
+      // The field is emptied, and the webview asked once it is: asked before,
+      // it would have found nothing to say.
+      expect(field(emptied).value).toBe("");
+      expect(validWhenAsked).toEqual([false]);
+    } finally {
+      said.mockRestore();
+    }
+  });
+
+  it("are passed on without the spaces around them", async () => {
+    const onConnect = vi.fn<(params: QuickConnectParams) => void>();
+    await renderOpen(<QuickConnect onConnect={onConnect} onCancel={vi.fn()} />);
+    type("qc-host", "  switch.example ");
+    type("qc-username", " admin ");
+    fireEvent.submit(form());
+    expect(onConnect.mock.calls[0][0]).toMatchObject({ host: "switch.example", username: "admin" });
   });
 });
 

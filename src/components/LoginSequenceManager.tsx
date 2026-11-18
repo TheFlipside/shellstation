@@ -37,17 +37,26 @@ function blankEdit(): EditState {
 
 export function LoginSequenceManager({ onClose }: LoginSequenceManagerProps): React.JSX.Element {
   const { t } = useTranslation();
-  const { sequences, loadAll, createSequence, updateSequence, deleteSequence } =
+  const { sequences, updating, loadAll, createSequence, updateSequence, deleteSequence } =
     useLoginSequenceStore();
   const [edit, setEdit] = useState<EditState | null>(null);
   const [error, setError] = useState("");
   const [confirmDelete, setConfirmDelete] = useState<LoginSequence | null>(null);
-  // A save that is under way. The ref says so at once: a second submit, as
-  // from a double click, comes before the state is rendered. It is the
-  // dialog's and not a form's: in a form that is opened while a save is under
-  // way, Save is greyed out and a submit dropped until that save has ended.
+  // The save of the form that is open is under way. The ref says so at once:
+  // a second submit, as from a double click, comes before the state is
+  // rendered. Both are the open form's and go back when it is left: a save
+  // that is still under way then is not the next form's, and does not hold
+  // that form's own up.
   const [saving, setSaving] = useState(false);
   const savingRef = useRef(false);
+  // What had the focus when a save was sent. A save disables the form's
+  // fields and its Save button, and the one of them that had the focus loses
+  // it. After a save that failed it is given back.
+  const focusBefore = useRef<HTMLElement | null>(null);
+  // A stored entry whose change is under way (`updating`, which the store
+  // keeps) is not opened for another change, nor deleted, before that change
+  // has its answer: of two saves of one entry the later could land first, and
+  // the earlier then put back what it held.
   // Which form is open, counted up when one is opened and when one is left,
   // by Cancel, by Escape or by its save. What a save brings back is for the
   // form it was sent from, and for no other that is open by then.
@@ -55,10 +64,30 @@ export function LoginSequenceManager({ onClose }: LoginSequenceManagerProps): Re
   // What this dialog reports while it is open is shown in a strip on top of it.
   const { layer, addToast } = useToastLayer();
 
-  const leaveForm = useCallback(() => {
+  /** A form is opened or left: the one that is open from now on has no save under way. */
+  const nextForm = useCallback(() => {
     formRef.current += 1;
-    setEdit(null);
+    savingRef.current = false;
+    setSaving(false);
+    focusBefore.current = null;
   }, []);
+
+  const leaveForm = useCallback(() => {
+    nextForm();
+    setEdit(null);
+  }, [nextForm]);
+
+  useEffect(() => {
+    if (saving) return;
+    const element = focusBefore.current;
+    focusBefore.current = null;
+    if (!element?.isConnected) return;
+    // Not into a dialog that another one lies over, which takes no focus.
+    if (element.closest("[inert]")) return;
+    // Not away from where the user has gone meanwhile.
+    const active = document.activeElement;
+    if (active === null || active === document.body || active === element) element.focus();
+  }, [saving]);
 
   /** An error for a form: in it while it is open, with the dialog once it is left. */
   const reportFor = (form: number, err: unknown): void => {
@@ -84,13 +113,13 @@ export function LoginSequenceManager({ onClose }: LoginSequenceManagerProps): Re
   }, [loadAll, addToast]);
 
   const startCreate = (): void => {
-    formRef.current += 1;
+    nextForm();
     setError("");
     setEdit(blankEdit());
   };
 
   const startEdit = (seq: LoginSequence): void => {
-    formRef.current += 1;
+    nextForm();
     setError("");
     setEdit({
       mode: "edit",
@@ -133,6 +162,9 @@ export function LoginSequenceManager({ onClose }: LoginSequenceManagerProps): Re
       if (formRef.current === form) leaveForm();
     };
 
+    const active = document.activeElement;
+    focusBefore.current =
+      active instanceof HTMLElement && e.currentTarget.contains(active) ? active : null;
     setError("");
     savingRef.current = true;
     setSaving(true);
@@ -141,6 +173,9 @@ export function LoginSequenceManager({ onClose }: LoginSequenceManagerProps): Re
         reportFor(form, err);
       })
       .finally(() => {
+        // The form's own, if it is still the one that is open: one that was
+        // left has given them back, and they may be the next form's by now.
+        if (formRef.current !== form) return;
         savingRef.current = false;
         setSaving(false);
       });
@@ -218,6 +253,7 @@ export function LoginSequenceManager({ onClose }: LoginSequenceManagerProps): Re
                     <button
                       type="button"
                       className="dialog-btn"
+                      disabled={updating.includes(seq.id)}
                       onClick={() => {
                         startEdit(seq);
                       }}
@@ -227,6 +263,7 @@ export function LoginSequenceManager({ onClose }: LoginSequenceManagerProps): Re
                     <button
                       type="button"
                       className="dialog-btn dialog-btn-cancel"
+                      disabled={updating.includes(seq.id)}
                       onClick={() => {
                         setConfirmDelete(seq);
                       }}
@@ -250,128 +287,133 @@ export function LoginSequenceManager({ onClose }: LoginSequenceManagerProps): Re
 
         {edit && (
           <form onSubmit={handleSave}>
-            <div className="dialog-field">
-              <label htmlFor="lsm-name">{t("loginSequences.nameLabel")}</label>
-              <input
-                id="lsm-name"
-                type="text"
-                value={edit.name}
-                onChange={(e) => {
-                  setEdit({ ...edit, name: e.target.value });
-                }}
-                placeholder={t("loginSequences.namePlaceholder")}
-                autoFocus
-              />
-            </div>
-
-            <div className="dialog-field">
-              <label
-                className="dialog-checkbox-label"
-                title={t("loginSequences.sendInitialCrHint")}
-              >
+            {/* While its save is under way a form takes nothing: what was
+                typed then would be no part of the save, and would go with
+                the form when it closes. Cancel is left, to leave by. */}
+            <fieldset className="dialog-fieldset" disabled={saving}>
+              <div className="dialog-field">
+                <label htmlFor="lsm-name">{t("loginSequences.nameLabel")}</label>
                 <input
-                  type="checkbox"
-                  checked={edit.sendInitialCr}
+                  id="lsm-name"
+                  type="text"
+                  value={edit.name}
                   onChange={(e) => {
-                    setEdit({ ...edit, sendInitialCr: e.target.checked });
+                    setEdit({ ...edit, name: e.target.value });
                   }}
+                  placeholder={t("loginSequences.namePlaceholder")}
+                  autoFocus
                 />
-                {t("loginSequences.sendInitialCr")}
-              </label>
-            </div>
+              </div>
 
-            <div className="dialog-field" role="group" aria-labelledby="lsm-steps-label">
-              <span className="dialog-field-heading" id="lsm-steps-label">
-                {t("loginSequences.stepsLabel")}
-              </span>
-              {edit.steps.map((step, idx) => (
-                <div key={idx} className="login-sequence-step">
-                  <div className="login-sequence-step-header">
-                    <span className="login-sequence-step-number">
-                      {t("loginSequences.stepNumber", { n: idx + 1 })}
-                    </span>
-                    <div className="login-sequence-step-actions">
-                      <button
-                        type="button"
-                        className="dialog-btn dialog-btn-small"
-                        disabled={idx === 0}
-                        onClick={() => {
-                          moveStep(idx, -1);
-                        }}
-                        title={t("loginSequences.moveUp")}
-                      >
-                        &#x25B2;
-                      </button>
-                      <button
-                        type="button"
-                        className="dialog-btn dialog-btn-small"
-                        disabled={idx === edit.steps.length - 1}
-                        onClick={() => {
-                          moveStep(idx, 1);
-                        }}
-                        title={t("loginSequences.moveDown")}
-                      >
-                        &#x25BC;
-                      </button>
-                      <button
-                        type="button"
-                        className="dialog-btn dialog-btn-small dialog-btn-cancel"
-                        disabled={edit.steps.length <= 1}
-                        onClick={() => {
-                          removeStep(idx);
-                        }}
-                        title={t("common.delete")}
-                      >
-                        &#x2715;
-                      </button>
+              <div className="dialog-field">
+                <label
+                  className="dialog-checkbox-label"
+                  title={t("loginSequences.sendInitialCrHint")}
+                >
+                  <input
+                    type="checkbox"
+                    checked={edit.sendInitialCr}
+                    onChange={(e) => {
+                      setEdit({ ...edit, sendInitialCr: e.target.checked });
+                    }}
+                  />
+                  {t("loginSequences.sendInitialCr")}
+                </label>
+              </div>
+
+              <div className="dialog-field" role="group" aria-labelledby="lsm-steps-label">
+                <span className="dialog-field-heading" id="lsm-steps-label">
+                  {t("loginSequences.stepsLabel")}
+                </span>
+                {edit.steps.map((step, idx) => (
+                  <div key={idx} className="login-sequence-step">
+                    <div className="login-sequence-step-header">
+                      <span className="login-sequence-step-number">
+                        {t("loginSequences.stepNumber", { n: idx + 1 })}
+                      </span>
+                      <div className="login-sequence-step-actions">
+                        <button
+                          type="button"
+                          className="dialog-btn dialog-btn-small"
+                          disabled={idx === 0}
+                          onClick={() => {
+                            moveStep(idx, -1);
+                          }}
+                          title={t("loginSequences.moveUp")}
+                        >
+                          &#x25B2;
+                        </button>
+                        <button
+                          type="button"
+                          className="dialog-btn dialog-btn-small"
+                          disabled={idx === edit.steps.length - 1}
+                          onClick={() => {
+                            moveStep(idx, 1);
+                          }}
+                          title={t("loginSequences.moveDown")}
+                        >
+                          &#x25BC;
+                        </button>
+                        <button
+                          type="button"
+                          className="dialog-btn dialog-btn-small dialog-btn-cancel"
+                          disabled={edit.steps.length <= 1}
+                          onClick={() => {
+                            removeStep(idx);
+                          }}
+                          title={t("common.delete")}
+                        >
+                          &#x2715;
+                        </button>
+                      </div>
                     </div>
-                  </div>
-                  <div className="dialog-field">
-                    <label htmlFor={`lsm-pattern-${String(idx)}`}>
-                      {t("loginSequences.patternLabel")}
+                    <div className="dialog-field">
+                      <label htmlFor={`lsm-pattern-${String(idx)}`}>
+                        {t("loginSequences.patternLabel")}
+                      </label>
+                      <input
+                        id={`lsm-pattern-${String(idx)}`}
+                        type="text"
+                        value={step.pattern}
+                        onChange={(e) => {
+                          updateStep(idx, { pattern: e.target.value });
+                        }}
+                        placeholder={t("loginSequences.patternPlaceholder")}
+                        className="monospace-input"
+                      />
+                    </div>
+                    <div className="dialog-field">
+                      <label htmlFor={`lsm-response-${String(idx)}`}>
+                        {t("loginSequences.responseLabel")}
+                      </label>
+                      <input
+                        id={`lsm-response-${String(idx)}`}
+                        type="text"
+                        value={step.response}
+                        onChange={(e) => {
+                          updateStep(idx, { response: e.target.value });
+                        }}
+                        placeholder={t("loginSequences.responsePlaceholder")}
+                        className="monospace-input"
+                      />
+                    </div>
+                    <label className="dialog-checkbox-label">
+                      <input
+                        type="checkbox"
+                        checked={step.append_cr}
+                        onChange={(e) => {
+                          updateStep(idx, { append_cr: e.target.checked });
+                        }}
+                      />
+                      {t("loginSequences.appendCr")}
                     </label>
-                    <input
-                      id={`lsm-pattern-${String(idx)}`}
-                      type="text"
-                      value={step.pattern}
-                      onChange={(e) => {
-                        updateStep(idx, { pattern: e.target.value });
-                      }}
-                      placeholder={t("loginSequences.patternPlaceholder")}
-                      className="monospace-input"
-                    />
                   </div>
-                  <div className="dialog-field">
-                    <label htmlFor={`lsm-response-${String(idx)}`}>
-                      {t("loginSequences.responseLabel")}
-                    </label>
-                    <input
-                      id={`lsm-response-${String(idx)}`}
-                      type="text"
-                      value={step.response}
-                      onChange={(e) => {
-                        updateStep(idx, { response: e.target.value });
-                      }}
-                      placeholder={t("loginSequences.responsePlaceholder")}
-                      className="monospace-input"
-                    />
-                  </div>
-                  <label className="dialog-checkbox-label">
-                    <input
-                      type="checkbox"
-                      checked={step.append_cr}
-                      onChange={(e) => {
-                        updateStep(idx, { append_cr: e.target.checked });
-                      }}
-                    />
-                    {t("loginSequences.appendCr")}
-                  </label>
-                </div>
-              ))}
-              <button type="button" className="dialog-btn" onClick={addStep}>
-                {t("loginSequences.addStep")}
-              </button>
-            </div>
+                ))}
+                <button type="button" className="dialog-btn" onClick={addStep}>
+                  {t("loginSequences.addStep")}
+                </button>
+              </div>
+            </fieldset>
 
             <div className="escape-help">
               <p className="dialog-field-note">{t("loginSequences.escapeTitle")}</p>

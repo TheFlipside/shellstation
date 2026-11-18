@@ -41,17 +41,26 @@ function blankEdit(): EditState {
 
 export function CredentialManager({ onClose }: CredentialManagerProps): React.JSX.Element {
   const { t } = useTranslation();
-  const { profiles, loadAll, createProfile, updateProfile, deleteProfile, getSecret } =
+  const { profiles, updating, loadAll, createProfile, updateProfile, deleteProfile, getSecret } =
     useCredentialProfilesStore();
   const [edit, setEdit] = useState<EditState | null>(null);
   const [error, setError] = useState("");
   const [confirmDelete, setConfirmDelete] = useState<CredentialProfile | null>(null);
-  // A save that is under way. The ref says so at once: a second submit, as
-  // from a double click, comes before the state is rendered. It is the
-  // dialog's and not a form's: in a form that is opened while a save is under
-  // way, Save is greyed out and a submit dropped until that save has ended.
+  // The save of the form that is open is under way. The ref says so at once:
+  // a second submit, as from a double click, comes before the state is
+  // rendered. Both are the open form's and go back when it is left: a save
+  // that is still under way then is not the next form's, and does not hold
+  // that form's own up.
   const [saving, setSaving] = useState(false);
   const savingRef = useRef(false);
+  // What had the focus when a save was sent. A save disables the form's
+  // fields and its Save button, and the one of them that had the focus loses
+  // it. After a save that failed it is given back.
+  const focusBefore = useRef<HTMLElement | null>(null);
+  // A stored entry whose change is under way (`updating`, which the store
+  // keeps) is not opened for another change, nor deleted, before that change
+  // has its answer: of two saves of one entry the later could land first, and
+  // the earlier then put back what it held, an old password included.
   // Which form is open, counted up when one is opened and when one is left,
   // by Cancel, by Escape or by its save. What a save, a file dialog or the
   // read of a stored password brings back is for the form it was asked from,
@@ -60,10 +69,30 @@ export function CredentialManager({ onClose }: CredentialManagerProps): React.JS
   // What this dialog reports while it is open is shown in a strip on top of it.
   const { layer, addToast } = useToastLayer();
 
-  const leaveForm = useCallback(() => {
+  /** A form is opened or left: the one that is open from now on has no save under way. */
+  const nextForm = useCallback(() => {
     formRef.current += 1;
-    setEdit(null);
+    savingRef.current = false;
+    setSaving(false);
+    focusBefore.current = null;
   }, []);
+
+  const leaveForm = useCallback(() => {
+    nextForm();
+    setEdit(null);
+  }, [nextForm]);
+
+  useEffect(() => {
+    if (saving) return;
+    const element = focusBefore.current;
+    focusBefore.current = null;
+    if (!element?.isConnected) return;
+    // Not into a dialog that another one lies over, which takes no focus.
+    if (element.closest("[inert]")) return;
+    // Not away from where the user has gone meanwhile.
+    const active = document.activeElement;
+    if (active === null || active === document.body || active === element) element.focus();
+  }, [saving]);
 
   /** An error for a form: in it while it is open, with the dialog once it is left. */
   const reportFor = (form: number, err: unknown): void => {
@@ -91,13 +120,13 @@ export function CredentialManager({ onClose }: CredentialManagerProps): React.JS
   }, [loadAll, addToast]);
 
   const startCreate = (): void => {
-    formRef.current += 1;
+    nextForm();
     setError("");
     setEdit(blankEdit());
   };
 
   const startEdit = (profile: CredentialProfile): void => {
-    formRef.current += 1;
+    nextForm();
     setError("");
     setEdit({
       mode: "edit",
@@ -135,6 +164,10 @@ export function CredentialManager({ onClose }: CredentialManagerProps): React.JS
     }
 
     const form = formRef.current;
+    // A password is a password profile's. The one a form still holds after
+    // its profile was switched to another type, read or typed, is not sent
+    // along with that profile.
+    const secret = edit.authType === "password" ? edit.secret : "";
     const doSave = async (): Promise<void> => {
       if (edit.mode === "create") {
         await createProfile({
@@ -142,7 +175,7 @@ export function CredentialManager({ onClose }: CredentialManagerProps): React.JS
           authType: edit.authType,
           username: edit.username.trim(),
           keyPath: edit.keyPath,
-          secret: edit.secret,
+          secret,
         });
       } else if (edit.id) {
         await updateProfile(edit.id, {
@@ -152,13 +185,16 @@ export function CredentialManager({ onClose }: CredentialManagerProps): React.JS
           keyPath: edit.keyPath,
           // Only send a secret if the user typed one — an empty string means
           // "leave the existing keychain entry alone".
-          secret: edit.secret !== "" ? edit.secret : undefined,
+          secret: secret !== "" ? secret : undefined,
         });
       }
       // The form that was saved closes. One that was opened since stays.
       if (formRef.current === form) leaveForm();
     };
 
+    const active = document.activeElement;
+    focusBefore.current =
+      active instanceof HTMLElement && e.currentTarget.contains(active) ? active : null;
     setError("");
     savingRef.current = true;
     setSaving(true);
@@ -167,6 +203,9 @@ export function CredentialManager({ onClose }: CredentialManagerProps): React.JS
         reportFor(form, err);
       })
       .finally(() => {
+        // The form's own, if it is still the one that is open: one that was
+        // left has given them back, and they may be the next form's by now.
+        if (formRef.current !== form) return;
         savingRef.current = false;
         setSaving(false);
       });
@@ -221,6 +260,7 @@ export function CredentialManager({ onClose }: CredentialManagerProps): React.JS
                     <button
                       type="button"
                       className="dialog-btn"
+                      disabled={updating.includes(p.id)}
                       onClick={() => {
                         startEdit(p);
                       }}
@@ -230,6 +270,7 @@ export function CredentialManager({ onClose }: CredentialManagerProps): React.JS
                     <button
                       type="button"
                       className="dialog-btn dialog-btn-cancel"
+                      disabled={updating.includes(p.id)}
                       onClick={() => {
                         setConfirmDelete(p);
                       }}
@@ -253,111 +294,119 @@ export function CredentialManager({ onClose }: CredentialManagerProps): React.JS
 
         {edit && (
           <form onSubmit={handleSave}>
-            <div className="dialog-field">
-              <label htmlFor="cm-name">{t("credentialProfiles.nameLabel")}</label>
-              <input
-                id="cm-name"
-                type="text"
-                value={edit.name}
-                onChange={(e) => {
-                  setEdit({ ...edit, name: e.target.value });
-                }}
-                placeholder={t("credentialProfiles.namePlaceholder")}
-                autoFocus
-              />
-            </div>
-            <div className="dialog-field">
-              <label htmlFor="cm-authtype">{t("credentialProfiles.authTypeLabel")}</label>
-              <CustomSelect
-                id="cm-authtype"
-                value={edit.authType}
-                onChange={(v) => {
-                  setEdit({ ...edit, authType: v });
-                }}
-                options={[
-                  { value: "password", label: t("credentialProfiles.authPassword") },
-                  { value: "key", label: t("credentialProfiles.authKey") },
-                  {
-                    value: "keyboard-interactive",
-                    label: t("credentialProfiles.authKeyboardInteractive"),
-                  },
-                ]}
-              />
-            </div>
-            <div className="dialog-field">
-              <label htmlFor="cm-username">{t("credentialProfiles.usernameLabel")}</label>
-              <input
-                id="cm-username"
-                type="text"
-                value={edit.username}
-                onChange={(e) => {
-                  setEdit({ ...edit, username: e.target.value });
-                }}
-                placeholder={t("credentialProfiles.usernamePlaceholder")}
-              />
-            </div>
-            {needsPassword && (
+            {/* While its save is under way a form takes nothing: what was
+                typed then would be no part of the save, and would go with
+                the form when it closes. Cancel is left, to leave by. */}
+            <fieldset className="dialog-fieldset" disabled={saving}>
               <div className="dialog-field">
-                <label htmlFor="cm-password">{t("credentialProfiles.passwordLabel")}</label>
+                <label htmlFor="cm-name">{t("credentialProfiles.nameLabel")}</label>
                 <input
-                  id="cm-password"
-                  type="password"
-                  autoComplete="off"
-                  value={edit.secret}
+                  id="cm-name"
+                  type="text"
+                  value={edit.name}
                   onChange={(e) => {
-                    setEdit({ ...edit, secret: e.target.value });
+                    setEdit({ ...edit, name: e.target.value });
                   }}
-                  placeholder={t("credentialProfiles.passwordPlaceholder")}
+                  placeholder={t("credentialProfiles.namePlaceholder")}
+                  autoFocus
                 />
-                {edit.mode === "edit" && (
-                  <p className="dialog-info">{t("credentialProfiles.passwordHint")}</p>
-                )}
               </div>
-            )}
-            {needsKeyPath && (
               <div className="dialog-field">
-                <label htmlFor="cm-keypath">{t("credentialProfiles.keyPathLabel")}</label>
-                <div className="dialog-row">
-                  <div className="dialog-field-grow">
-                    <input
-                      id="cm-keypath"
-                      type="text"
-                      value={edit.keyPath}
-                      onChange={(e) => {
-                        setEdit({ ...edit, keyPath: e.target.value });
-                      }}
-                      placeholder={t("credentialProfiles.keyPathPlaceholder")}
-                    />
-                  </div>
-                  <button
-                    type="button"
-                    className="dialog-btn"
-                    onClick={() => {
-                      const form = formRef.current;
-                      open({
-                        title: t("credentialProfiles.keyPathLabel"),
-                        defaultPath: edit.keyPath || undefined,
-                        multiple: false,
-                        directory: false,
-                      })
-                        .then((path) => {
-                          // Only into the form it was asked from, if that is
-                          // still open, and beside what was typed since. A
-                          // failure of the dialog that was shown goes with it.
-                          if (!path || formRef.current !== form) return;
-                          setError("");
-                          setEdit((prev) => (prev ? { ...prev, keyPath: path } : prev));
-                        })
-                        .catch((err: unknown) => {
-                          reportFor(form, err);
-                        });
-                    }}
-                  >
-                    {t("credentialProfiles.keyPathBrowse")}
-                  </button>
-                </div>
+                <label htmlFor="cm-authtype">{t("credentialProfiles.authTypeLabel")}</label>
+                {/* Its list is outside the fields that the form disables, so it
+                    is told itself, and closes a list that is open. */}
+                <CustomSelect
+                  id="cm-authtype"
+                  disabled={saving}
+                  value={edit.authType}
+                  onChange={(v) => {
+                    setEdit({ ...edit, authType: v });
+                  }}
+                  options={[
+                    { value: "password", label: t("credentialProfiles.authPassword") },
+                    { value: "key", label: t("credentialProfiles.authKey") },
+                    {
+                      value: "keyboard-interactive",
+                      label: t("credentialProfiles.authKeyboardInteractive"),
+                    },
+                  ]}
+                />
               </div>
-            )}
+              <div className="dialog-field">
+                <label htmlFor="cm-username">{t("credentialProfiles.usernameLabel")}</label>
+                <input
+                  id="cm-username"
+                  type="text"
+                  value={edit.username}
+                  onChange={(e) => {
+                    setEdit({ ...edit, username: e.target.value });
+                  }}
+                  placeholder={t("credentialProfiles.usernamePlaceholder")}
+                />
+              </div>
+              {needsPassword && (
+                <div className="dialog-field">
+                  <label htmlFor="cm-password">{t("credentialProfiles.passwordLabel")}</label>
+                  <input
+                    id="cm-password"
+                    type="password"
+                    autoComplete="off"
+                    value={edit.secret}
+                    onChange={(e) => {
+                      setEdit({ ...edit, secret: e.target.value });
+                    }}
+                    placeholder={t("credentialProfiles.passwordPlaceholder")}
+                  />
+                  {edit.mode === "edit" && (
+                    <p className="dialog-info">{t("credentialProfiles.passwordHint")}</p>
+                  )}
+                </div>
+              )}
+              {needsKeyPath && (
+                <div className="dialog-field">
+                  <label htmlFor="cm-keypath">{t("credentialProfiles.keyPathLabel")}</label>
+                  <div className="dialog-row">
+                    <div className="dialog-field-grow">
+                      <input
+                        id="cm-keypath"
+                        type="text"
+                        value={edit.keyPath}
+                        onChange={(e) => {
+                          setEdit({ ...edit, keyPath: e.target.value });
+                        }}
+                        placeholder={t("credentialProfiles.keyPathPlaceholder")}
+                      />
+                    </div>
+                    <button
+                      type="button"
+                      className="dialog-btn"
+                      onClick={() => {
+                        const form = formRef.current;
+                        open({
+                          title: t("credentialProfiles.keyPathLabel"),
+                          defaultPath: edit.keyPath || undefined,
+                          multiple: false,
+                          directory: false,
+                        })
+                          .then((path) => {
+                            // Only into the form it was asked from, if that is
+                            // still open, and beside what was typed since. A
+                            // failure of the dialog that was shown goes with it.
+                            if (!path || formRef.current !== form) return;
+                            setError("");
+                            setEdit((prev) => (prev ? { ...prev, keyPath: path } : prev));
+                          })
+                          .catch((err: unknown) => {
+                            reportFor(form, err);
+                          });
+                      }}
+                    >
+                      {t("credentialProfiles.keyPathBrowse")}
+                    </button>
+                  </div>
+                </div>
+              )}
+            </fieldset>
             {error && <p className="dialog-error">{error}</p>}
             <div className="dialog-actions">
               <button type="button" className="dialog-btn dialog-btn-cancel" onClick={leaveForm}>
