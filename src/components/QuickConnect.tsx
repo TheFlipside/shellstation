@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { open } from "@tauri-apps/plugin-dialog";
 import { DialogKeys } from "./DialogKeys";
@@ -26,23 +26,24 @@ export function QuickConnect({ onConnect, onCancel }: QuickConnectProps): React.
   const [username, setUsername] = useState("");
   const [authMethod, setAuthMethod] = useState<"password" | "publickey">("password");
   const [credential, setCredential] = useState("");
-
-  // Clear credential from state when the dialog unmounts.
-  useEffect(() => {
-    return () => {
-      setCredential("");
-    };
-  }, []);
+  const [error, setError] = useState("");
 
   const handleSubmit = (e: React.SyntheticEvent): void => {
     e.preventDefault();
+    setError("");
     if (!host.trim()) return;
     if (protocol === "ssh" && !username.trim()) return;
+    // An empty field is the protocol's own port.
     const defaultPort = protocol === "telnet" ? 23 : 22;
+    const portNumber = port.trim() === "" ? defaultPort : Number(port);
+    if (!Number.isInteger(portNumber) || portNumber < 1 || portNumber > 65535) {
+      setError(t("session.portRange"));
+      return;
+    }
     onConnect({
       protocol,
       host: host.trim(),
-      port: Number(port) || defaultPort,
+      port: portNumber,
       username: username.trim(),
       authMethod,
       authCredential: credential,
@@ -65,6 +66,7 @@ export function QuickConnect({ onConnect, onCancel }: QuickConnectProps): React.
               onChange={(v) => {
                 const p = v as "ssh" | "telnet";
                 setProtocol(p);
+                setError("");
                 setPort((prev) =>
                   (prev === "22" && p === "telnet") || (prev === "23" && p === "ssh")
                     ? p === "telnet"
@@ -100,6 +102,7 @@ export function QuickConnect({ onConnect, onCancel }: QuickConnectProps): React.
               value={port}
               onChange={(e) => {
                 setPort(e.target.value);
+                setError("");
               }}
               min={1}
               max={65535}
@@ -166,17 +169,19 @@ export function QuickConnect({ onConnect, onCancel }: QuickConnectProps): React.
                       type="button"
                       className="dialog-btn"
                       onClick={() => {
-                        void (async () => {
-                          const path = await open({
-                            title: t("session.keyPathLabel"),
-                            defaultPath: credential || undefined,
-                            multiple: false,
-                            directory: false,
+                        setError("");
+                        open({
+                          title: t("session.keyPathLabel"),
+                          defaultPath: credential || undefined,
+                          multiple: false,
+                          directory: false,
+                        })
+                          .then((path) => {
+                            if (path) setCredential(path);
+                          })
+                          .catch((err: unknown) => {
+                            setError(err instanceof Error ? err.message : String(err));
                           });
-                          if (path) {
-                            setCredential(path);
-                          }
-                        })();
                       }}
                     >
                       {t("session.keyPathBrowse")}
@@ -186,6 +191,7 @@ export function QuickConnect({ onConnect, onCancel }: QuickConnectProps): React.
               </div>
             </>
           )}
+          {error && <p className="dialog-error">{error}</p>}
           <div className="dialog-actions">
             <button type="button" className="dialog-btn dialog-btn-cancel" onClick={onCancel}>
               {t("dialog.cancel")}

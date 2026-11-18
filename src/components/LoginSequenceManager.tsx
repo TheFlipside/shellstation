@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { DialogKeys } from "./DialogKeys";
 import {
@@ -42,17 +42,39 @@ export function LoginSequenceManager({ onClose }: LoginSequenceManagerProps): Re
   const [edit, setEdit] = useState<EditState | null>(null);
   const [error, setError] = useState("");
   const [confirmDelete, setConfirmDelete] = useState<LoginSequence | null>(null);
+  // A save that is under way. The ref says so at once: a second submit, as
+  // from a double click, comes before the state is rendered. It is the
+  // dialog's and not a form's: in a form that is opened while a save is under
+  // way, Save is greyed out and a submit dropped until that save has ended.
+  const [saving, setSaving] = useState(false);
+  const savingRef = useRef(false);
+  // Which form is open, counted up when one is opened and when one is left,
+  // by Cancel, by Escape or by its save. What a save brings back is for the
+  // form it was sent from, and for no other that is open by then.
+  const formRef = useRef(0);
   // What this dialog reports while it is open is shown in a strip on top of it.
   const { layer, addToast } = useToastLayer();
+
+  const leaveForm = useCallback(() => {
+    formRef.current += 1;
+    setEdit(null);
+  }, []);
+
+  /** An error for a form: in it while it is open, with the dialog once it is left. */
+  const reportFor = (form: number, err: unknown): void => {
+    const message = err instanceof Error ? err.message : String(err);
+    if (formRef.current === form) setError(message);
+    else addToast(message);
+  };
 
   const handleEscape = useCallback(() => {
     if (confirmDelete !== null) return;
     if (edit !== null) {
-      setEdit(null);
+      leaveForm();
       return;
     }
     onClose();
-  }, [edit, confirmDelete, onClose]);
+  }, [edit, confirmDelete, onClose, leaveForm]);
 
   useEffect(() => {
     loadAll().catch((err: unknown) => {
@@ -62,11 +84,13 @@ export function LoginSequenceManager({ onClose }: LoginSequenceManagerProps): Re
   }, [loadAll, addToast]);
 
   const startCreate = (): void => {
+    formRef.current += 1;
     setError("");
     setEdit(blankEdit());
   };
 
   const startEdit = (seq: LoginSequence): void => {
+    formRef.current += 1;
     setError("");
     setEdit({
       mode: "edit",
@@ -79,7 +103,7 @@ export function LoginSequenceManager({ onClose }: LoginSequenceManagerProps): Re
 
   const handleSave = (e: React.SyntheticEvent): void => {
     e.preventDefault();
-    if (!edit) return;
+    if (!edit || savingRef.current) return;
     if (!edit.name.trim()) {
       setError(t("loginSequences.nameRequired"));
       return;
@@ -90,6 +114,7 @@ export function LoginSequenceManager({ onClose }: LoginSequenceManagerProps): Re
       return;
     }
 
+    const form = formRef.current;
     const doSave = async (): Promise<void> => {
       if (edit.mode === "create") {
         await createSequence({
@@ -104,12 +129,21 @@ export function LoginSequenceManager({ onClose }: LoginSequenceManagerProps): Re
           steps: validSteps,
         });
       }
-      setEdit(null);
+      // The form that was saved closes. One that was opened since stays.
+      if (formRef.current === form) leaveForm();
     };
 
-    doSave().catch((err: unknown) => {
-      setError(err instanceof Error ? err.message : String(err));
-    });
+    setError("");
+    savingRef.current = true;
+    setSaving(true);
+    doSave()
+      .catch((err: unknown) => {
+        reportFor(form, err);
+      })
+      .finally(() => {
+        savingRef.current = false;
+        setSaving(false);
+      });
   };
 
   const handleDelete = (seq: LoginSequence): void => {
@@ -246,8 +280,10 @@ export function LoginSequenceManager({ onClose }: LoginSequenceManagerProps): Re
               </label>
             </div>
 
-            <div className="dialog-field">
-              <label>{t("loginSequences.stepsLabel")}</label>
+            <div className="dialog-field" role="group" aria-labelledby="lsm-steps-label">
+              <span className="dialog-field-heading" id="lsm-steps-label">
+                {t("loginSequences.stepsLabel")}
+              </span>
               {edit.steps.map((step, idx) => (
                 <div key={idx} className="login-sequence-step">
                   <div className="login-sequence-step-header">
@@ -363,16 +399,10 @@ export function LoginSequenceManager({ onClose }: LoginSequenceManagerProps): Re
 
             {error && <p className="dialog-error">{error}</p>}
             <div className="dialog-actions">
-              <button
-                type="button"
-                className="dialog-btn dialog-btn-cancel"
-                onClick={() => {
-                  setEdit(null);
-                }}
-              >
+              <button type="button" className="dialog-btn dialog-btn-cancel" onClick={leaveForm}>
                 {t("dialog.cancel")}
               </button>
-              <button type="submit" className="dialog-btn dialog-btn-primary">
+              <button type="submit" className="dialog-btn dialog-btn-primary" disabled={saving}>
                 {t("dialog.save")}
               </button>
             </div>

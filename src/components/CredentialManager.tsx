@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { open } from "@tauri-apps/plugin-dialog";
 import { DialogKeys } from "./DialogKeys";
@@ -46,19 +46,42 @@ export function CredentialManager({ onClose }: CredentialManagerProps): React.JS
   const [edit, setEdit] = useState<EditState | null>(null);
   const [error, setError] = useState("");
   const [confirmDelete, setConfirmDelete] = useState<CredentialProfile | null>(null);
+  // A save that is under way. The ref says so at once: a second submit, as
+  // from a double click, comes before the state is rendered. It is the
+  // dialog's and not a form's: in a form that is opened while a save is under
+  // way, Save is greyed out and a submit dropped until that save has ended.
+  const [saving, setSaving] = useState(false);
+  const savingRef = useRef(false);
+  // Which form is open, counted up when one is opened and when one is left,
+  // by Cancel, by Escape or by its save. What a save, a file dialog or the
+  // read of a stored password brings back is for the form it was asked from,
+  // and for no other that is open by then.
+  const formRef = useRef(0);
   // What this dialog reports while it is open is shown in a strip on top of it.
   const { layer, addToast } = useToastLayer();
+
+  const leaveForm = useCallback(() => {
+    formRef.current += 1;
+    setEdit(null);
+  }, []);
+
+  /** An error for a form: in it while it is open, with the dialog once it is left. */
+  const reportFor = (form: number, err: unknown): void => {
+    const message = err instanceof Error ? err.message : String(err);
+    if (formRef.current === form) setError(message);
+    else addToast(message);
+  };
 
   // ESC closes the inline edit form if open, otherwise closes the whole
   // manager. ConfirmDialog handles its own ESC via the shared stack.
   const handleEscape = useCallback(() => {
     if (confirmDelete !== null) return;
     if (edit !== null) {
-      setEdit(null);
+      leaveForm();
       return;
     }
     onClose();
-  }, [edit, confirmDelete, onClose]);
+  }, [edit, confirmDelete, onClose, leaveForm]);
 
   useEffect(() => {
     loadAll().catch((err: unknown) => {
@@ -68,11 +91,13 @@ export function CredentialManager({ onClose }: CredentialManagerProps): React.JS
   }, [loadAll, addToast]);
 
   const startCreate = (): void => {
+    formRef.current += 1;
     setError("");
     setEdit(blankEdit());
   };
 
   const startEdit = (profile: CredentialProfile): void => {
+    formRef.current += 1;
     setError("");
     setEdit({
       mode: "edit",
@@ -83,11 +108,19 @@ export function CredentialManager({ onClose }: CredentialManagerProps): React.JS
       keyPath: profile.key_path,
       secret: "",
     });
-    // Prefill the secret for password profiles so the user can see/edit it.
+    // Prefill the secret for password profiles so the user can see/edit it:
+    // in the form it was read for, and not over a password that was typed
+    // before it came, nor while the profile is switched to another type.
     if (profile.auth_type === "password") {
+      const form = formRef.current;
       getSecret(profile.id)
         .then((secret) => {
-          setEdit((prev) => (prev?.id === profile.id ? { ...prev, secret } : prev));
+          if (formRef.current !== form) return;
+          setEdit((prev) =>
+            prev?.id === profile.id && prev.authType === "password" && prev.secret === ""
+              ? { ...prev, secret }
+              : prev,
+          );
         })
         .catch(noop);
     }
@@ -95,12 +128,13 @@ export function CredentialManager({ onClose }: CredentialManagerProps): React.JS
 
   const handleSave = (e: React.SyntheticEvent): void => {
     e.preventDefault();
-    if (!edit) return;
+    if (!edit || savingRef.current) return;
     if (!edit.name.trim()) {
       setError(t("credentialProfiles.nameRequired"));
       return;
     }
 
+    const form = formRef.current;
     const doSave = async (): Promise<void> => {
       if (edit.mode === "create") {
         await createProfile({
@@ -121,12 +155,21 @@ export function CredentialManager({ onClose }: CredentialManagerProps): React.JS
           secret: edit.secret !== "" ? edit.secret : undefined,
         });
       }
-      setEdit(null);
+      // The form that was saved closes. One that was opened since stays.
+      if (formRef.current === form) leaveForm();
     };
 
-    doSave().catch((err: unknown) => {
-      setError(err instanceof Error ? err.message : String(err));
-    });
+    setError("");
+    savingRef.current = true;
+    setSaving(true);
+    doSave()
+      .catch((err: unknown) => {
+        reportFor(form, err);
+      })
+      .finally(() => {
+        savingRef.current = false;
+        setSaving(false);
+      });
   };
 
   const handleDelete = (profile: CredentialProfile): void => {
@@ -290,17 +333,24 @@ export function CredentialManager({ onClose }: CredentialManagerProps): React.JS
                     type="button"
                     className="dialog-btn"
                     onClick={() => {
-                      void (async () => {
-                        const path = await open({
-                          title: t("credentialProfiles.keyPathLabel"),
-                          defaultPath: edit.keyPath || undefined,
-                          multiple: false,
-                          directory: false,
+                      const form = formRef.current;
+                      open({
+                        title: t("credentialProfiles.keyPathLabel"),
+                        defaultPath: edit.keyPath || undefined,
+                        multiple: false,
+                        directory: false,
+                      })
+                        .then((path) => {
+                          // Only into the form it was asked from, if that is
+                          // still open, and beside what was typed since. A
+                          // failure of the dialog that was shown goes with it.
+                          if (!path || formRef.current !== form) return;
+                          setError("");
+                          setEdit((prev) => (prev ? { ...prev, keyPath: path } : prev));
+                        })
+                        .catch((err: unknown) => {
+                          reportFor(form, err);
                         });
-                        if (path) {
-                          setEdit({ ...edit, keyPath: path });
-                        }
-                      })();
                     }}
                   >
                     {t("credentialProfiles.keyPathBrowse")}
@@ -310,16 +360,10 @@ export function CredentialManager({ onClose }: CredentialManagerProps): React.JS
             )}
             {error && <p className="dialog-error">{error}</p>}
             <div className="dialog-actions">
-              <button
-                type="button"
-                className="dialog-btn dialog-btn-cancel"
-                onClick={() => {
-                  setEdit(null);
-                }}
-              >
+              <button type="button" className="dialog-btn dialog-btn-cancel" onClick={leaveForm}>
                 {t("dialog.cancel")}
               </button>
-              <button type="submit" className="dialog-btn dialog-btn-primary">
+              <button type="submit" className="dialog-btn dialog-btn-primary" disabled={saving}>
                 {t("dialog.save")}
               </button>
             </div>

@@ -637,7 +637,10 @@ body,
   margin-bottom: 12px;
 }
 
-.dialog-field label {
+/* A heading is the label of a group of fields, which no single field
+   takes. */
+.dialog-field label,
+.dialog-field-heading {
   font-size: 12px;
   color: var(--color-subtext0);
 }
