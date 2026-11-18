@@ -238,13 +238,17 @@ function Prompt({ name }: { name: string }): React.JSX.Element {
 /** What the dialog below raises its toasts with. */
 let raise: ToastLayerHandle["addToast"];
 
-/** A dialog that shows its own toasts, as Settings does, and closes on a click beside it. */
+/** A dialog that shows its own toasts, as Settings does. */
 function Manager({
-  onClose,
+  onOverlayClick,
   onSave,
   children,
 }: {
-  onClose?: () => void;
+  /**
+   * A click that gets as far as the overlay. No dialog's overlay listens
+   * for one; this is to see whether a click the box refuses is passed on.
+   */
+  onOverlayClick?: () => void;
   /** A click on the button in the dialog's box. */
   onSave?: () => void;
   children?: React.ReactNode;
@@ -255,7 +259,7 @@ function Manager({
     <div
       className="dialog-overlay dialog-overlay-messages"
       data-testid="manager"
-      onClick={onClose}
+      onClick={onOverlayClick}
       role="presentation"
     >
       <DialogKeys />
@@ -414,8 +418,8 @@ describe("ToastContainer and dialogs", () => {
     // The box moves when a toast comes or goes, and a control of the dialog
     // comes to lie where the pointer is.
     const onSave = vi.fn();
-    const onClose = vi.fn();
-    render(<Manager onSave={onSave} onClose={onClose} />);
+    const onOverlayClick = vi.fn();
+    render(<Manager onSave={onSave} onOverlayClick={onOverlayClick} />);
     const save = screen.getByRole("button", { name: "Save" });
     const settle = (): void => {
       act(() => {
@@ -423,19 +427,19 @@ describe("ToastContainer and dialogs", () => {
       });
     };
 
-    // This box lets a click on to the overlay, which closes the dialog.
+    // A click the box takes is passed on, and would be heard at the overlay.
     fireEvent.click(save);
     expect(onSave).toHaveBeenCalledTimes(1);
-    expect(onClose).toHaveBeenCalledTimes(1);
-    onClose.mockClear();
+    expect(onOverlayClick).toHaveBeenCalledTimes(1);
+    onOverlayClick.mockClear();
 
-    // A toast comes: the click that was on its way is refused at the box,
-    // and reaches neither the button nor the overlay.
+    // A toast comes: the click that was on its way is refused at the box. It
+    // does not reach the button and is not passed on.
     raiseOwn("save failed");
     expect(fireEvent.mouseDown(save)).toBe(false);
     expect(fireEvent.click(save)).toBe(false);
     expect(onSave).toHaveBeenCalledTimes(1);
-    expect(onClose).not.toHaveBeenCalled();
+    expect(onOverlayClick).not.toHaveBeenCalled();
     act(() => {
       vi.advanceTimersByTime(SETTLE_MS - 1);
     });
@@ -578,19 +582,6 @@ describe("ToastContainer and dialogs", () => {
     raiseOwn("import done");
     expect(useToastStore.getState().toasts.map((t) => t.layer)).toEqual([null]);
     expect(screen.getByText("import done")).toBeInTheDocument();
-  });
-
-  it("does not take a click on a dialog's toast for a click beside the dialog", () => {
-    const onClose = vi.fn();
-    render(<Manager onClose={onClose} />);
-    raiseOwn("delete failed");
-    fireEvent.click(screen.getByText("delete failed"));
-    fireEvent.click(screen.getByRole("button", { name: "×" }));
-    expect(screen.queryByText("delete failed")).not.toBeInTheDocument();
-    expect(onClose).not.toHaveBeenCalled();
-
-    fireEvent.click(screen.getByTestId("manager"));
-    expect(onClose).toHaveBeenCalledTimes(1);
   });
 
   it("closes the toasts of one stack with that stack's button", () => {

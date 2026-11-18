@@ -31,17 +31,9 @@ export function PasteConfirmDialog({
   const preview = truncated ? content.slice(0, PREVIEW_MAX_CHARS) : content;
 
   return ReactDOM.createPortal(
-    <div className="dialog-overlay" onClick={onCancel}>
+    <div className="dialog-overlay" role="presentation">
       <DialogKeys onEscape={onCancel} />
-      <div
-        className="dialog"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="paste-confirm-title"
-        onClick={(e) => {
-          e.stopPropagation();
-        }}
-      >
+      <div className="dialog" role="dialog" aria-modal="true" aria-labelledby="paste-confirm-title">
         <h3 id="paste-confirm-title" className="dialog-title">
           {t("pasteConfirm.title")}
         </h3>

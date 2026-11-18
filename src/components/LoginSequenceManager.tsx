@@ -151,14 +151,11 @@ export function LoginSequenceManager({ onClose }: LoginSequenceManagerProps): Re
   };
 
   return (
-    <div className="dialog-overlay dialog-overlay-messages" onClick={onClose} role="presentation">
+    <div className="dialog-overlay dialog-overlay-messages" role="presentation">
       <DialogKeys onEscape={handleEscape} />
       <ToastLayer layer={layer} />
       <div
         className="dialog dialog-wide"
-        onClick={(e) => {
-          e.stopPropagation();
-        }}
         role="dialog"
         aria-modal="true"
         aria-labelledby="lsm-title"

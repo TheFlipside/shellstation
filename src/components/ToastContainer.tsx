@@ -130,10 +130,6 @@ function ToastGroup({
   );
 }
 
-function stopClick(event: React.MouseEvent): void {
-  event.stopPropagation();
-}
-
 /**
  * A stack with toasts in it. It is never taller than the window: its lists
  * scroll instead, so that every toast can be read and closed.
@@ -167,9 +163,6 @@ function ToastStack({
       ref={stackRef}
       className={layer === null ? "toast-stack toast-container" : "toast-stack toast-strip"}
       inert={covered}
-      // A dialog that closes on a click beside it must not take a click on
-      // one of its own toasts for one.
-      onClick={layer === null ? undefined : stopClick}
     >
       <ToastGroup
         toasts={toasts.filter((toast) => toast.sticky)}
@@ -238,8 +231,7 @@ function refuse(event: Event): void {
  * pointer is: under the button that closed the last toast, for the second
  * click of a double click, or under a click that was on its way when a toast
  * came. For a moment after the strip has changed, the box therefore takes no
- * click. It is refused at the box, and not let through it: behind the box is
- * the overlay, where a click closes some dialogs.
+ * click. It is refused at the box, and is not passed on.
  */
 export function ToastLayer({ layer }: { layer: string }): React.JSX.Element {
   const toasts = useToastStore((s) => s.toasts);

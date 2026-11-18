@@ -50,17 +50,9 @@ export function QuickConnect({ onConnect, onCancel }: QuickConnectProps): React.
   };
 
   return (
-    <div className="dialog-overlay" onClick={onCancel} role="presentation">
+    <div className="dialog-overlay" role="presentation">
       <DialogKeys onEscape={onCancel} />
-      <div
-        className="dialog"
-        onClick={(e) => {
-          e.stopPropagation();
-        }}
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="qc-title"
-      >
+      <div className="dialog" role="dialog" aria-modal="true" aria-labelledby="qc-title">
         <h3 className="dialog-title" id="qc-title">
           {t("quickConnect.title")}
         </h3>
