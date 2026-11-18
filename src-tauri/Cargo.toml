@@ -27,19 +27,21 @@ tauri-plugin-opener = "2"
 base64 = "0.23"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-# russh pulls in the `rsa` crate which has an open advisory (RUSTSEC-2023-0071,
-# Marvin Attack: RSA PKCS#1 v1.5 decryption timing side-channel). This only
-# affects the decrypting party (i.e. an SSH server). ShellStation is purely an
-# SSH client — it signs with RSA keys but never decrypts — so the vulnerable
-# code path is not reachable here. No upstream fix exists as of 2026-04.
+# At least 0.65.2: from there russh takes `rsa` 0.10, the first version
+# without RUSTSEC-2023-0071 (Marvin Attack: RSA PKCS#1 v1.5 decryption timing
+# side-channel). Up to 0.65.1 it pinned a release candidate of 0.10, which
+# `cargo audit` reports. The advisory is about the decrypting party (i.e. an
+# SSH server). ShellStation is purely an SSH client — it signs with RSA keys
+# but never decrypts — so that code path was not reachable here either way.
 #
 # The `des` feature pulls in 3des-cbc so the per-session "Legacy algorithms"
 # toggle can negotiate with old network gear that only speaks 3DES. It is NOT
 # in russh's default cipher list and is only appended to `Preferred` when a
 # session explicitly opts in — see `legacy_preferred()` in src/ssh/mod.rs.
-russh = { version = "0.65", features = ["des"] }
-# default-features disabled to exclude sqlx-mysql, which is unused and
-# otherwise pulls in the `rsa` crate (see RUSTSEC-2023-0071 above).
+russh = { version = "0.65.2", features = ["des"] }
+# default-features disabled to exclude sqlx-mysql, which is unused. It has
+# the `rsa` crate as an optional dependency, which mattered while
+# RUSTSEC-2023-0071 (above) had no fixed version.
 #
 # `sqlite-bundled` is used instead of `sqlite` because, as of sqlx 0.9,
 # `sqlite` is a meta-feature that additionally pulls in `sqlite-deserialize`,

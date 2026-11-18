@@ -433,6 +433,51 @@ impl Default for PostgresConfig {
     }
 }
 
+/// The environment variable in which sqlx, as libpq does, takes an address
+/// to connect to in place of the host's.
+const PG_HOSTADDR_ENV: &str = "PGHOSTADDR";
+
+/// What [`take_pg_hostaddr_env`] took out of the environment, for
+/// [`pg_hostaddr_env`].
+static PG_HOSTADDR: std::sync::OnceLock<std::ffi::OsString> = std::sync::OnceLock::new();
+
+/// Take `PGHOSTADDR` out of the process environment, and say whether it was
+/// set. `run` calls this before anything else, and nothing else may call it:
+/// changing the environment is not safe beside a thread that reads it, and
+/// at that point the process has one thread. (`remove_var` is a safe
+/// function in this crate's edition, so the compiler does not ask for that.)
+///
+/// What was set is kept for [`pg_hostaddr_env`], so that a local shell still
+/// gets it: the variable is the user's, for `psql` and the like, and only
+/// the app's own database connection must not go by it.
+///
+/// sqlx fills new `PgConnectOptions` from the `PG*` variables, and
+/// [`PostgresConfig::connect_options`] then sets what the app configures
+/// over them: host, port, database, user, password and SSL mode. Up to sqlx
+/// 0.9.0 that covered `PGHOSTADDR`, which was one more source of the host.
+/// From 0.9.1 it is an address of its own, which the connection goes to
+/// whatever the host is, and the options have no call that takes it back.
+/// With it set, the app would connect to that address and log in there. The
+/// host from Settings would only be the TLS server name, which no SSL mode
+/// the app offers checks a certificate against.
+pub(crate) fn take_pg_hostaddr_env() -> bool {
+    let Some(value) = std::env::var_os(PG_HOSTADDR_ENV) else {
+        return false;
+    };
+    std::env::remove_var(PG_HOSTADDR_ENV);
+    // Set once: the second of two calls finds no variable and returns above.
+    let _ = PG_HOSTADDR.set(value);
+    true
+}
+
+/// `PGHOSTADDR` as the app was started with it, for the environment of a
+/// process the user runs in a local shell tab. `None` if it was not set.
+pub(crate) fn pg_hostaddr_env() -> Option<(&'static str, &'static std::ffi::OsStr)> {
+    PG_HOSTADDR
+        .get()
+        .map(|value| (PG_HOSTADDR_ENV, value.as_os_str()))
+}
+
 impl PostgresConfig {
     /// Build type-safe `PostgreSQL` connection options.
     ///
@@ -1139,6 +1184,64 @@ mod tests {
                 "{unknown:?}"
             );
         }
+    }
+
+    /// Set in the process that
+    /// `pghostaddr_in_the_environment_is_not_connected_to` starts.
+    const HOSTADDR_CHILD_ENV: &str = "SHELLSTATION_TEST_PGHOSTADDR_CHILD";
+
+    /// The environment belongs to the whole process and the tests share
+    /// one, so the test runs itself once more, alone, in a process that has
+    /// the variable, and changes the environment only there.
+    #[test]
+    fn pghostaddr_in_the_environment_is_not_connected_to() {
+        use sqlx::ConnectOptions;
+
+        const NAME: &str = "config::tests::pghostaddr_in_the_environment_is_not_connected_to";
+        const ADDRESS: &str = "203.0.113.7";
+
+        if std::env::var_os(HOSTADDR_CHILD_ENV).is_none() {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", NAME, "--test-threads=1", "--nocapture"])
+                .env(HOSTADDR_CHILD_ENV, "1")
+                .env(PG_HOSTADDR_ENV, ADDRESS)
+                .output()
+                .unwrap();
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(output.status.success(), "{stdout}\n{stderr}");
+            // The name above is still this test's, so the child ran it.
+            assert!(stdout.contains("1 passed"), "{stdout}\n{stderr}");
+            return;
+        }
+
+        // sqlx writes the address it would connect to into the URL.
+        let hostaddr = || {
+            PostgresConfig {
+                host: "db.example.com".to_string(),
+                database: "shellstation".to_string(),
+                username: "user".to_string(),
+                ..PostgresConfig::default()
+            }
+            .connect_options()
+            .to_url_lossy()
+            .query_pairs()
+            .find(|(key, _)| key == "hostaddr")
+            .map(|(_, value)| value.into_owned())
+        };
+        // Should this fail, sqlx no longer takes the variable for the
+        // address, and `take_pg_hostaddr_env` may no longer be needed.
+        assert_eq!(hostaddr().as_deref(), Some(ADDRESS));
+        assert_eq!(pg_hostaddr_env(), None);
+        assert!(take_pg_hostaddr_env());
+        assert_eq!(hostaddr(), None);
+        // A local shell is still given what the app was started with.
+        assert_eq!(
+            pg_hostaddr_env(),
+            Some((PG_HOSTADDR_ENV, std::ffi::OsStr::new(ADDRESS)))
+        );
+        assert!(!take_pg_hostaddr_env());
+        assert!(pg_hostaddr_env().is_some());
     }
 
     #[test]

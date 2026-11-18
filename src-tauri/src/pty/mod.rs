@@ -92,6 +92,12 @@ impl PtyManager {
         let shell = default_shell();
         let mut cmd = CommandBuilder::new(&shell);
         cmd.env("TERM", "xterm-256color");
+        // The app takes this variable out of its own environment at startup,
+        // for its database connection. The shell is the user's, and gets the
+        // environment the app was started with.
+        if let Some((name, value)) = crate::config::pg_hostaddr_env() {
+            cmd.env(name, value);
+        }
 
         let child = pair.slave.spawn_command(cmd).map_err(|e| e.to_string())?;
         drop(pair.slave);

@@ -2124,6 +2124,11 @@ fn open_app_log_file(
 /// so a panic is the appropriate signal for the `OS` to surface.
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // First: it changes the environment, which is safe only while this is
+    // the process's one thread. Nothing before it may start one. Logged once
+    // there is a log.
+    let pg_hostaddr_taken = config::take_pg_hostaddr_env();
+
     let config_dir = config::app_config_dir();
     // Owner-only on Unix, and on Windows when it is created here: it holds
     // the config, the local database and the logs. The subscriber is not
@@ -2159,6 +2164,12 @@ pub fn run() {
     );
     for note in &config_notes {
         note.log();
+    }
+    if pg_hostaddr_taken {
+        tracing::warn!(
+            "PGHOSTADDR is set in the environment and is not used for the database \
+             connection, which goes to the host in Settings; local shells still get it"
+        );
     }
     // After init_tracing, so that a keychain problem is logged.
     config::load_postgres_password(&mut app_config);
