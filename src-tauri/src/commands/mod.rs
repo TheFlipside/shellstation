@@ -3,6 +3,7 @@ mod connection_prompt;
 mod credential_profile;
 mod data_transfer;
 mod database;
+mod entry_lock;
 mod highlight;
 mod logging;
 mod login_sequence;

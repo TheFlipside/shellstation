@@ -108,6 +108,8 @@ pub async fn login_sequence_update(
     }
 
     let uuid = parse_uuid(&id)?;
+    // One change of the sequence at a time.
+    let _entry = super::entry_lock::hold(uuid).await;
     db.0.update_login_sequence(
         uuid,
         UpdateLoginSequence {
@@ -125,6 +127,8 @@ pub async fn login_sequence_delete(
     id: String,
 ) -> Result<(), String> {
     let uuid = parse_uuid(&id)?;
+    // Not while a change of the sequence is under way.
+    let _entry = super::entry_lock::hold(uuid).await;
     db.0.delete_login_sequence(uuid).await
 }
 

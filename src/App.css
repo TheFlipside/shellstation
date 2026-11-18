@@ -1911,6 +1911,16 @@ body,
   border-bottom: none;
 }
 
+/* An entry whose change or deletion is under way: its buttons are greyed
+   out until that has its answer, and the row says why without a word. */
+.credential-profile-row-busy {
+  cursor: progress;
+}
+
+.credential-profile-row-busy .credential-profile-meta {
+  opacity: 0.6;
+}
+
 .credential-profile-meta {
   display: flex;
   align-items: baseline;

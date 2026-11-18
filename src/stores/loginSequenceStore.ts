@@ -30,9 +30,9 @@ export interface UpdateLoginSequenceParams {
 interface LoginSequenceState {
   sequences: LoginSequence[];
   /**
-   * The ids of the sequences whose change is under way. It is kept here and
-   * not by the dialog that sent the change, which can be closed and opened
-   * again before the change has its answer.
+   * The ids of the sequences whose change or deletion is under way, one entry
+   * for each. It is kept here and not by the dialog that sent it, which can
+   * be closed and opened again before it has its answer.
    */
   updating: string[];
   loadAll: () => Promise<void>;
@@ -89,6 +89,9 @@ export const useLoginSequenceStore = create<LoginSequenceState>((set, get) => ({
           };
         }),
       }));
+      // A change of a sequence is one step in the backend, so one that failed
+      // was not made in part, and the list is not read again as the profiles'
+      // is.
     } finally {
       // Once, for this change: another of the same sequence may be under way.
       set((s) => ({ updating: withoutOne(s.updating, id) }));
@@ -96,8 +99,13 @@ export const useLoginSequenceStore = create<LoginSequenceState>((set, get) => ({
   },
 
   deleteSequence: async (id) => {
-    await invoke("login_sequence_delete", { id });
-    set((s) => ({ sequences: s.sequences.filter((seq) => seq.id !== id) }));
+    set((s) => ({ updating: [...s.updating, id] }));
+    try {
+      await invoke("login_sequence_delete", { id });
+      set((s) => ({ sequences: s.sequences.filter((seq) => seq.id !== id) }));
+    } finally {
+      set((s) => ({ updating: withoutOne(s.updating, id) }));
+    }
   },
 
   getSequenceById: (id) => get().sequences.find((seq) => seq.id === id),

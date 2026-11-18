@@ -57,10 +57,12 @@ export function CredentialManager({ onClose }: CredentialManagerProps): React.JS
   // fields and its Save button, and the one of them that had the focus loses
   // it. After a save that failed it is given back.
   const focusBefore = useRef<HTMLElement | null>(null);
-  // A stored entry whose change is under way (`updating`, which the store
-  // keeps) is not opened for another change, nor deleted, before that change
-  // has its answer: of two saves of one entry the later could land first, and
-  // the earlier then put back what it held, an old password included.
+  // A stored entry whose change or deletion is under way (`updating`, which
+  // the store keeps) is not opened for another change, nor deleted, before
+  // that has its answer: of two saves of one entry the later could land
+  // first, and the earlier then put back what it held, an old password
+  // included. Its row says that it is busy, to a screen reader and by its
+  // look.
   // Which form is open, counted up when one is opened and when one is left,
   // by Cancel, by Escape or by its save. What a save, a file dialog or the
   // read of a stored password brings back is for the form it was asked from,
@@ -212,6 +214,8 @@ export function CredentialManager({ onClose }: CredentialManagerProps): React.JS
   };
 
   const handleDelete = (profile: CredentialProfile): void => {
+    // Once: a second confirmation can come before the first is rendered.
+    if (useCredentialProfilesStore.getState().updating.includes(profile.id)) return;
     deleteProfile(profile.id)
       .then(() => {
         setConfirmDelete(null);
@@ -247,7 +251,15 @@ export function CredentialManager({ onClose }: CredentialManagerProps): React.JS
                 <p className="dialog-info">{t("credentialProfiles.noneYet")}</p>
               )}
               {profiles.map((p) => (
-                <div key={p.id} className="credential-profile-row">
+                <div
+                  key={p.id}
+                  className={
+                    updating.includes(p.id)
+                      ? "credential-profile-row credential-profile-row-busy"
+                      : "credential-profile-row"
+                  }
+                  aria-busy={updating.includes(p.id)}
+                >
                   <div className="credential-profile-meta">
                     <strong>{p.name}</strong>
                     <span className="credential-profile-divider">|</span>

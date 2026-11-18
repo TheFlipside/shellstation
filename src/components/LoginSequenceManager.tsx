@@ -53,10 +53,11 @@ export function LoginSequenceManager({ onClose }: LoginSequenceManagerProps): Re
   // fields and its Save button, and the one of them that had the focus loses
   // it. After a save that failed it is given back.
   const focusBefore = useRef<HTMLElement | null>(null);
-  // A stored entry whose change is under way (`updating`, which the store
-  // keeps) is not opened for another change, nor deleted, before that change
-  // has its answer: of two saves of one entry the later could land first, and
-  // the earlier then put back what it held.
+  // A stored entry whose change or deletion is under way (`updating`, which
+  // the store keeps) is not opened for another change, nor deleted, before
+  // that has its answer: of two saves of one entry the later could land
+  // first, and the earlier then put back what it held. Its row says that it
+  // is busy, to a screen reader and by its look.
   // Which form is open, counted up when one is opened and when one is left,
   // by Cancel, by Escape or by its save. What a save brings back is for the
   // form it was sent from, and for no other that is open by then.
@@ -182,6 +183,8 @@ export function LoginSequenceManager({ onClose }: LoginSequenceManagerProps): Re
   };
 
   const handleDelete = (seq: LoginSequence): void => {
+    // Once: a second confirmation can come before the first is rendered.
+    if (useLoginSequenceStore.getState().updating.includes(seq.id)) return;
     deleteSequence(seq.id)
       .then(() => {
         setConfirmDelete(null);
@@ -241,7 +244,15 @@ export function LoginSequenceManager({ onClose }: LoginSequenceManagerProps): Re
                 <p className="dialog-info">{t("loginSequences.noneYet")}</p>
               )}
               {sequences.map((seq) => (
-                <div key={seq.id} className="credential-profile-row">
+                <div
+                  key={seq.id}
+                  className={
+                    updating.includes(seq.id)
+                      ? "credential-profile-row credential-profile-row-busy"
+                      : "credential-profile-row"
+                  }
+                  aria-busy={updating.includes(seq.id)}
+                >
                   <div className="credential-profile-meta">
                     <strong>{seq.name}</strong>
                     <span className="credential-profile-divider">|</span>

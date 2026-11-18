@@ -1139,8 +1139,9 @@ fn profile_to_auth(
             Ok((profile.username.clone(), "password".to_string(), secret))
         }
         "key" => {
-            // Private-key path is stored on the profile row; any passphrase
-            // lives in the keychain but is not currently passed to russh.
+            // Private-key path is stored on the profile row. A key profile
+            // has no secret in the keychain: a passphrase for the key is not
+            // kept for a profile, and none is passed to russh.
             Ok((
                 profile.username.clone(),
                 "publickey".to_string(),

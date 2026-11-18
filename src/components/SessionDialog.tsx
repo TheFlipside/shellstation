@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from "react";
+import { flushSync } from "react-dom";
 import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
 import { DialogKeys } from "./DialogKeys";
@@ -110,7 +111,20 @@ export function SessionDialog({
   const handleSubmit = (e: React.SyntheticEvent): void => {
     e.preventDefault();
     setError("");
-    if (!name.trim() || !hostname.trim()) return;
+    // The name and the host are required fields, and the webview does not
+    // send a form with one of them empty: it says so at the field. One with
+    // spaces alone is as empty, so it is emptied and the webview asked to
+    // say the same of it.
+    const noName = !name.trim();
+    const noHost = !hostname.trim();
+    if (noName || noHost) {
+      flushSync(() => {
+        if (noName) setName("");
+        if (noHost) setHostname("");
+      });
+      if (e.currentTarget instanceof HTMLFormElement) e.currentTarget.reportValidity();
+      return;
+    }
     if (!folderId) {
       setError(t("session.noFolder"));
       return;
@@ -186,6 +200,7 @@ export function SessionDialog({
                 setName(e.target.value);
               }}
               placeholder={t("session.namePlaceholder")}
+              required
               autoFocus
             />
           </div>
@@ -237,6 +252,7 @@ export function SessionDialog({
                   setHostname(e.target.value);
                 }}
                 placeholder={t("session.hostnamePlaceholder")}
+                required
               />
             </div>
             <div className="dialog-field dialog-field-small">

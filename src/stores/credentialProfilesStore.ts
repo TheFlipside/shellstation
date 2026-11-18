@@ -30,9 +30,9 @@ export interface UpdateProfileParams {
 interface CredentialProfilesState {
   profiles: CredentialProfile[];
   /**
-   * The ids of the profiles whose change is under way. It is kept here and
-   * not by the dialog that sent the change, which can be closed and opened
-   * again before the change has its answer.
+   * The ids of the profiles whose change or deletion is under way, one entry
+   * for each. It is kept here and not by the dialog that sent it, which can
+   * be closed and opened again before it has its answer.
    */
   updating: string[];
   loadAll: () => Promise<void>;
@@ -93,6 +93,14 @@ export const useCredentialProfilesStore = create<CredentialProfilesState>((set, 
           };
         }),
       }));
+    } catch (err) {
+      // A change is two steps in the backend, the row and the secret, and
+      // one that failed may have made the first. What the list shows is read
+      // again; where that fails as well, it stays as it was.
+      await get()
+        .loadAll()
+        .catch(() => undefined);
+      throw err;
     } finally {
       // Once, for this change: another of the same profile may be under way.
       set((s) => ({ updating: withoutOne(s.updating, id) }));
@@ -100,8 +108,13 @@ export const useCredentialProfilesStore = create<CredentialProfilesState>((set, 
   },
 
   deleteProfile: async (id) => {
-    await invoke("credential_profile_delete", { id });
-    set((s) => ({ profiles: s.profiles.filter((p) => p.id !== id) }));
+    set((s) => ({ updating: [...s.updating, id] }));
+    try {
+      await invoke("credential_profile_delete", { id });
+      set((s) => ({ profiles: s.profiles.filter((p) => p.id !== id) }));
+    } finally {
+      set((s) => ({ updating: withoutOne(s.updating, id) }));
+    }
   },
 
   getSecret: async (id) => {

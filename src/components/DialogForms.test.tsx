@@ -95,6 +95,19 @@ function button(key: string): HTMLButtonElement {
   return screen.getByRole<HTMLButtonElement>("button", { name: i18n.t(key) });
 }
 
+/**
+ * Whether each row of a manager's list says that it is busy: to a screen
+ * reader, and by the class that its look goes by. One without the other is
+ * neither.
+ */
+function busyRows(): (boolean | "half")[] {
+  return Array.from(document.querySelectorAll(".credential-profile-row")).map((row) => {
+    const said = row.getAttribute("aria-busy") === "true";
+    const shown = row.classList.contains("credential-profile-row-busy");
+    return said === shown ? said : "half";
+  });
+}
+
 /** The buttons of this name, one for each row of a manager's list. */
 function buttons(key: string): HTMLButtonElement[] {
   return screen.getAllByRole<HTMLButtonElement>("button", { name: i18n.t(key) });
@@ -167,6 +180,7 @@ interface Manager {
   list: string;
   create: string;
   update: string;
+  remove: string;
   /** An entry as the backend has it. */
   stored: { name: string };
 }
@@ -184,6 +198,7 @@ const MANAGERS: Manager[] = [
     list: "login_sequence_list",
     create: "login_sequence_create",
     update: "login_sequence_update",
+    remove: "login_sequence_delete",
     stored: SEQUENCE,
   },
   {
@@ -196,6 +211,7 @@ const MANAGERS: Manager[] = [
     list: "credential_profile_list",
     create: "credential_profile_create",
     update: "credential_profile_update",
+    remove: "credential_profile_delete",
     stored: PROFILE,
   },
 ];
@@ -395,14 +411,69 @@ describe.each(MANAGERS)("a save in the form of $name", (manager) => {
         // entry, and a new one, are another matter.
         expect(buttons("common.edit").map((edit) => edit.disabled)).toEqual([false, true]);
         expect(buttons("common.delete").map((del) => del.disabled)).toEqual([false, true]);
+        expect(busyRows()).toEqual([false, true]);
         expect(button(manager.newEntry)).toBeEnabled();
 
         answer(save);
         await settle();
         expect(buttons("common.edit").map((edit) => edit.disabled)).toEqual([false, false]);
         expect(buttons("common.delete").map((del) => del.disabled)).toEqual([false, false]);
+        expect(busyRows()).toEqual([false, false]);
       },
     );
+
+    it("keeps an entry that is being deleted, and sends its deletion once", async () => {
+      const gone = pending();
+      backend({
+        [manager.list]: () =>
+          Promise.resolve([{ ...manager.stored, id: OTHER_ID, name: "the other" }, manager.stored]),
+        [manager.remove]: () => gone.promise,
+      });
+      const view = await renderOpen(manager.render());
+      fireEvent.click(buttons("common.delete")[1]);
+      const confirm = document.querySelector<HTMLButtonElement>(".dialog-btn-danger");
+      if (!confirm) throw new Error("no confirmation");
+      // Two confirmations with nothing rendered between them.
+      act(() => {
+        fireEvent.click(confirm);
+        fireEvent.click(confirm);
+      });
+      expect(sent(manager.remove)).toBe(1);
+
+      // Also in a manager that was closed and opened again meanwhile.
+      view.unmount();
+      await renderOpen(manager.render());
+      expect(buttons("common.edit").map((edit) => edit.disabled)).toEqual([false, true]);
+      expect(buttons("common.delete").map((del) => del.disabled)).toEqual([false, true]);
+      expect(busyRows()).toEqual([false, true]);
+
+      gone.resolve(null);
+      await settle();
+      expect(screen.queryByText(manager.stored.name)).toBeNull();
+      expect(buttons("common.edit").map((edit) => edit.disabled)).toEqual([false]);
+    });
+
+    it("lets an entry be changed and deleted again after a deletion that failed", async () => {
+      const gone = pending();
+      backend({
+        [manager.list]: () => Promise.resolve([manager.stored]),
+        [manager.remove]: () => gone.promise,
+      });
+      await renderOpen(manager.render());
+      fireEvent.click(button("common.delete"));
+      const confirm = document.querySelector<HTMLButtonElement>(".dialog-btn-danger");
+      if (!confirm) throw new Error("no confirmation");
+      fireEvent.click(confirm);
+
+      gone.reject(new Error("database is locked"));
+      await settle();
+      expect(shownWithDialog("database is locked")).toBe(true);
+      // The question is gone with its answer.
+      expect(document.querySelector(".dialog-btn-danger")).toBeNull();
+      expect(button("common.edit")).toBeEnabled();
+      expect(button("common.delete")).toBeEnabled();
+      expect(busyRows()).toEqual([false]);
+    });
 
     it("keeps the entry also in a manager that was closed and opened again", async () => {
       const save = pending();
@@ -513,18 +584,30 @@ describe.each(MANAGERS)("a save in the form of $name", (manager) => {
 
 describe.each([
   [
-    "profiles",
+    "profiles, a change",
     "credential_profile_update",
     () => useCredentialProfilesStore.getState().updateProfile(OTHER_ID, { name: "renamed" }),
     () => useCredentialProfilesStore.getState().updating,
   ],
   [
-    "login sequences",
+    "profiles, a deletion",
+    "credential_profile_delete",
+    () => useCredentialProfilesStore.getState().deleteProfile(OTHER_ID),
+    () => useCredentialProfilesStore.getState().updating,
+  ],
+  [
+    "login sequences, a change",
     "login_sequence_update",
     () => useLoginSequenceStore.getState().updateSequence(OTHER_ID, { name: "renamed" }),
     () => useLoginSequenceStore.getState().updating,
   ],
-] as const)("a change that the store of %s has under way", (_name, command, change, updating) => {
+  [
+    "login sequences, a deletion",
+    "login_sequence_delete",
+    () => useLoginSequenceStore.getState().deleteSequence(OTHER_ID),
+    () => useLoginSequenceStore.getState().updating,
+  ],
+] as const)("what the store of %s has under way", (_name, command, change, updating) => {
   it("is recorded until it has its answer, each of two of one entry for itself", async () => {
     const first = pending();
     const second = pending();
@@ -546,6 +629,63 @@ describe.each([
     second.reject(new Error("database is locked"));
     await expect(two).rejects.toThrow("database is locked");
     expect(updating()).toEqual([]);
+  });
+});
+
+describe("a change of a profile that failed", () => {
+  it("has the list read again, since the backend may have made it in part", async () => {
+    backend({
+      credential_profile_update: () => Promise.reject(new Error("keychain is locked")),
+      credential_profile_list: () =>
+        Promise.resolve([{ ...PROFILE, name: "as the backend has it" }]),
+    });
+    useCredentialProfilesStore.setState({ profiles: [PROFILE] });
+
+    const change = useCredentialProfilesStore.getState().updateProfile(PROFILE.id, {
+      name: "renamed",
+    });
+    await expect(change).rejects.toThrow("keychain is locked");
+    const { profiles, updating } = useCredentialProfilesStore.getState();
+    expect(profiles.map((profile) => profile.name)).toEqual(["as the backend has it"]);
+    expect(updating).toEqual([]);
+  });
+
+  it("keeps the profile as one whose change is under way until the list is read", async () => {
+    const list = pending();
+    backend({
+      credential_profile_update: () => Promise.reject(new Error("keychain is locked")),
+      credential_profile_list: () => list.promise,
+    });
+    useCredentialProfilesStore.setState({ profiles: [PROFILE] });
+
+    const change = useCredentialProfilesStore.getState().updateProfile(PROFILE.id, {
+      name: "renamed",
+    });
+    const failed = expect(change).rejects.toThrow("keychain is locked");
+    // The change has failed by now, and what the list shows is not known yet.
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(useCredentialProfilesStore.getState().updating).toEqual([PROFILE.id]);
+
+    list.resolve([PROFILE]);
+    await failed;
+    expect(useCredentialProfilesStore.getState().updating).toEqual([]);
+  });
+
+  it("is told to whoever asked for it also where the list cannot be read", async () => {
+    backend({
+      credential_profile_update: () => Promise.reject(new Error("keychain is locked")),
+      credential_profile_list: () => Promise.reject(new Error("database is locked")),
+    });
+    useCredentialProfilesStore.setState({ profiles: [PROFILE] });
+
+    const change = useCredentialProfilesStore.getState().updateProfile(PROFILE.id, {
+      name: "renamed",
+    });
+    await expect(change).rejects.toThrow("keychain is locked");
+    const { profiles, updating } = useCredentialProfilesStore.getState();
+    expect(profiles).toEqual([PROFILE]);
+    expect(updating).toEqual([]);
   });
 });
 
