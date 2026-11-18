@@ -341,6 +341,26 @@ impl DatabaseProvider for PostgresProvider {
         rows.iter().map(row_to_folder).collect()
     }
 
+    // RLS limits this to the folders the role can see: its own and the
+    // shared ones, as `list_folders`.
+    async fn search_folders(&self, query: &str) -> DbResult<Vec<Folder>> {
+        let Some(pattern) = search_pattern(query) else {
+            return Ok(Vec::new());
+        };
+        let rows = sqlx::query(
+            "SELECT id, name, parent_id, sort_order, owner, visibility \
+             FROM folders \
+             WHERE name ILIKE $1 ESCAPE '\\' \
+             ORDER BY sort_order ASC, name ASC",
+        )
+        .bind(&pattern)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| format!("Failed to search folders: {e}"))?;
+
+        rows.iter().map(row_to_folder).collect()
+    }
+
     async fn rename_folder(&self, id: Uuid, name: &str) -> DbResult<()> {
         let result =
             sqlx::query("UPDATE folders SET name = $1 WHERE id = $2 AND owner = current_user")

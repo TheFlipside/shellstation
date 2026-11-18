@@ -3195,6 +3195,119 @@ mod tests {
         with_rls_test_database(check_folder_walks_end_on_a_loop).await;
     }
 
+    /// The search against a real server: a role finds its own folders and
+    /// sessions and other users' shared ones, by `ILIKE` and with the query
+    /// taken as written. Same server as for `shared_rows_keep_their_owner`;
+    /// run with `--ignored search_finds`.
+    #[tokio::test]
+    #[ignore = "needs a throwaway PostgreSQL server in SHELLSTATION_TEST_PG_URL"]
+    async fn a_search_finds_what_the_role_can_see() {
+        with_rls_test_database(check_a_search_finds_what_the_role_can_see).await;
+    }
+
+    async fn check_a_search_finds_what_the_role_can_see(
+        opts: sqlx::postgres::PgConnectOptions,
+        admin: String,
+        alice: String,
+        bob: String,
+    ) {
+        use db::DatabaseProvider;
+
+        // One connection, so each SET ROLE holds for the statements after
+        // it, the app's own included.
+        let pool = PgPoolOptions::new()
+            .max_connections(1)
+            .connect_with(opts)
+            .await
+            .unwrap();
+        prepare_rls_test_database(&pool, &admin, &alice, &bob).await;
+        let app = PostgresProvider::new(pool.clone());
+
+        // Folders of both users with "lab" in the name, bob's one shared and
+        // one personal, and a session of each kind in bob's shared folder.
+        // Made by a superuser, who may write any owner.
+        let (shared, secret) = (uuid::Uuid::new_v4(), uuid::Uuid::new_v4());
+        for sql in [
+            "RESET ROLE".to_string(),
+            format!(
+                "INSERT INTO folders (id, name, parent_id, sort_order, owner, visibility) VALUES \
+                 ('{}', 'Core lab', NULL, 0, '{alice}', 'personal'), \
+                 ('{shared}', 'Lab shared', NULL, 1, '{bob}', 'shared'), \
+                 ('{secret}', 'lab secret', '{shared}', 0, '{bob}', 'personal'), \
+                 ('{}', 'CORP\\net', NULL, 2, '{bob}', 'shared'), \
+                 ('{}', '50%', NULL, 3, '{bob}', 'shared'), \
+                 ('{}', 'a_b', NULL, 4, '{bob}', 'shared'), \
+                 ('{}', 'axb', NULL, 5, '{bob}', 'shared')",
+                uuid::Uuid::new_v4(),
+                uuid::Uuid::new_v4(),
+                uuid::Uuid::new_v4(),
+                uuid::Uuid::new_v4(),
+                uuid::Uuid::new_v4()
+            ),
+            format!(
+                "INSERT INTO sessions (id, folder_id, name, hostname, username, owner, visibility) VALUES \
+                 ('{}', '{shared}', 'lab-gw', 'host.example', '', '{bob}', 'shared'), \
+                 ('{}', '{shared}', 'lab-db', 'host.example', '', '{bob}', 'personal')",
+                uuid::Uuid::new_v4(),
+                uuid::Uuid::new_v4()
+            ),
+        ] {
+            pg_exec(&pool, &sql).await.expect(&sql);
+        }
+
+        let folders = |query: &'static str| {
+            let app = &app;
+            async move {
+                app.search_folders(query)
+                    .await
+                    .unwrap()
+                    .into_iter()
+                    .map(|f| f.name)
+                    .collect::<Vec<_>>()
+            }
+        };
+        let sessions = |query: &'static str| {
+            let app = &app;
+            async move {
+                app.search_sessions(query)
+                    .await
+                    .unwrap()
+                    .into_iter()
+                    .map(|s| s.name)
+                    .collect::<Vec<_>>()
+            }
+        };
+
+        // Alice finds her own folder and the one bob shares, in the order
+        // the folders are listed in, and not his personal one, nor his
+        // personal session.
+        pg_exec(&pool, &format!("SET ROLE {alice}")).await.unwrap();
+        assert_eq!(folders("LAB").await, ["Core lab", "Lab shared"]);
+        assert_eq!(sessions("lab").await, ["lab-gw"]);
+        // The folder that was found is the row the tree has, with its owner.
+        let found = app.search_folders("lab shared").await.unwrap();
+        assert_eq!(found.len(), 1);
+        assert_eq!(
+            (found[0].id, found[0].parent_id, found[0].owner.as_str()),
+            (shared, None, bob.as_str())
+        );
+        assert_eq!(found[0].visibility, "shared");
+        // The backslash and the wildcards as written, and nothing for a
+        // query with a NUL in it, which the server would refuse.
+        assert_eq!(folders(r"corp\").await, [r"CORP\net"]);
+        assert_eq!(folders("%").await, ["50%"]);
+        assert_eq!(folders("a_b").await, ["a_b"]);
+        assert!(folders(r"\%").await.is_empty());
+        assert!(folders("lab\0").await.is_empty());
+        // Not by the name of a session in it.
+        assert!(folders("gw").await.is_empty());
+
+        // Bob finds his own two, and not alice's personal one.
+        pg_exec(&pool, &format!("SET ROLE {bob}")).await.unwrap();
+        assert_eq!(folders("lab").await, ["lab secret", "Lab shared"]);
+        assert_eq!(sessions("lab").await, ["lab-db", "lab-gw"]);
+    }
+
     /// `check_postgres_rls` against a real server: it finds nothing missing
     /// after the setup, as a regular user, and names each part that is taken
     /// away or is not the setup's. Same server as for

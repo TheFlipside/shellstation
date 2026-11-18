@@ -15,13 +15,14 @@ import {
 import { isJumpHostCandidate, jumpHostForCopy, useSessionStore } from "../stores/sessionStore";
 import type { Folder, Session } from "../stores/sessionStore";
 import { useToastStore } from "../stores/toastStore";
-import { SessionTree, parseDndId, flattenVisibleItems } from "./SessionTree";
+import { SessionTree, indexTree, parseDndId, flattenVisibleItems } from "./SessionTree";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { dialogOpen } from "./DialogKeys";
 import { FolderDialog } from "./FolderDialog";
 import { MoveDialog } from "./MoveDialog";
 import { SearchField } from "./SearchField";
+import { SearchResults } from "./SearchResults";
 import { FolderCredentialDialog } from "./FolderCredentialDialog";
 import { BulkEditDialog } from "./BulkEditDialog";
 import { SessionDialog, type SessionFormData } from "./SessionDialog";
@@ -154,6 +155,25 @@ export function SessionSidebar(): React.JSX.Element {
   // `searchResults` and short-circuits the `wasFiltered && !isFiltered`
   // condition. Do NOT reset to null here.
   const prevSearchResultsRef = useRef(searchResults);
+  // The folders a search found that the user has closed in its results. A
+  // folder that was found lists what is in it until then, however it is in
+  // the tree, and the tree's own open folders are not changed by it.
+  const [closedResultFolders, setClosedResultFolders] = useState<ReadonlySet<string>>(
+    () => new Set<string>(),
+  );
+  const toggleResultFolder = useCallback((id: string): void => {
+    setClosedResultFolders((closed) => {
+      const next = new Set(closed);
+      if (!next.delete(id)) next.add(id);
+      return next;
+    });
+  }, []);
+  // The next search starts with every folder it finds open again.
+  useEffect(() => {
+    if (searchResults === null) {
+      setClosedResultFolders((closed) => (closed.size === 0 ? closed : new Set<string>()));
+    }
+  }, [searchResults]);
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
@@ -311,10 +331,15 @@ export function SessionSidebar(): React.JSX.Element {
 
       const key = e.key;
 
-      // Enter: toggle folder or connect session
+      // Enter: toggle folder or connect session. A folder that a search
+      // found is opened and closed in the results, not in the tree.
       if (key === "Enter") {
         if (selectedItemType === "folder" && selectedItemId) {
-          toggleFolder(selectedItemId);
+          if (searchResults?.folders.some((f) => f.id === selectedItemId)) {
+            toggleResultFolder(selectedItemId);
+          } else {
+            toggleFolder(selectedItemId);
+          }
         } else if (selectedItemType === "session" && selectedItemId) {
           handleSessionDoubleClick(selectedItemId);
         }
@@ -474,6 +499,8 @@ export function SessionSidebar(): React.JSX.Element {
       expandFolder,
       collapseFolder,
       toggleFolder,
+      searchResults,
+      toggleResultFolder,
       scrollItemIntoView,
       handleSessionDoubleClick,
       confirmDialog,
@@ -1012,8 +1039,19 @@ export function SessionSidebar(): React.JSX.Element {
   // due to broken parent chains after DB manipulation or multi-user RLS).
   const displaySessions = useMemo(() => {
     if (!searchResults) return sessions;
-    return searchResults.filter((s) => reachableFolderIds.has(s.folder_id));
+    return searchResults.sessions.filter((s) => reachableFolderIds.has(s.folder_id));
   }, [searchResults, sessions, reachableFolderIds]);
+
+  // Everything by the folder it is in, for the tree and for what a folder
+  // lists that a search found.
+  const treeIndex = useMemo(() => indexTree(folders, sessions), [folders, sessions]);
+
+  // The folders a search found, held to the same rule: one that the tree
+  // does not show is not listed.
+  const foundFolders = useMemo(
+    () => (searchResults ? searchResults.folders.filter((f) => reachableFolderIds.has(f.id)) : []),
+    [searchResults, reachableFolderIds],
+  );
 
   // Folders eligible for session/move dialogs: owned by current user and tree-reachable.
   const ownedReachableFolders = useMemo(
@@ -1140,45 +1178,21 @@ export function SessionSidebar(): React.JSX.Element {
           ref={treeRef}
         >
           {searchResults ? (
-            displaySessions.map((s) => (
-              <div
-                key={s.id}
-                data-item-id={s.id}
-                className={`tree-item tree-session${selectedItemId === s.id ? " tree-item-selected" : ""}`}
-                onClick={() => {
-                  selectItem(s.id, "session");
-                }}
-                onDoubleClick={() => {
-                  handleSessionDoubleClick(s.id);
-                }}
-                onContextMenu={(e) => {
-                  e.preventDefault();
-                  selectItem(s.id, "session");
-                  handleContextMenu(e, s.id, "session");
-                }}
-                role="treeitem"
-                tabIndex={0}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") handleSessionDoubleClick(s.id);
-                }}
-              >
-                <span className="tree-icon">
-                  <SessionIconComponent iconKey={s.icon} />
-                </span>
-                <span
-                  className={`tree-label${s.visibility === "shared" ? " tree-label-shared" : ""}`}
-                >
-                  {s.name}
-                </span>
-                <span className="tree-meta">{s.hostname}</span>
-              </div>
-            ))
+            <SearchResults
+              foundFolders={foundFolders}
+              foundSessions={displaySessions}
+              folders={folders}
+              index={treeIndex}
+              closedFolderIds={closedResultFolders}
+              onToggleFolder={toggleResultFolder}
+              onContextMenu={handleContextMenu}
+              onSessionDoubleClick={handleSessionDoubleClick}
+            />
           ) : (
             <SessionTree
               parentId={null}
               depth={0}
-              folders={folders}
-              sessions={sessions}
+              index={treeIndex}
               onContextMenu={handleContextMenu}
               onSessionDoubleClick={handleSessionDoubleClick}
             />

@@ -558,26 +558,49 @@ pub async fn session_delete(
 /// pathologically long needle from forcing expensive full-table scans.
 const MAX_SEARCH_QUERY_LEN: usize = 200;
 
+/// What a search found: the folders whose name has the query in it, and the
+/// sessions that have it in their name, host, user name or tags. A session
+/// is not found by the name of its folder; the window lists a folder that
+/// was found with what is in it.
+#[derive(Debug, serde::Serialize)]
+pub struct SearchResults {
+    pub folders: Vec<Folder>,
+    pub sessions: Vec<Session>,
+}
+
+/// The query as it is searched for: its first [`MAX_SEARCH_QUERY_LEN`]
+/// bytes, and as far beyond as the character at that place goes.
+fn capped_query(query: &str) -> &str {
+    if query.len() <= MAX_SEARCH_QUERY_LEN {
+        return query;
+    }
+    &query[..query
+        .char_indices()
+        .take_while(|(i, _)| *i < MAX_SEARCH_QUERY_LEN)
+        .last()
+        .map_or(0, |(i, c)| i + c.len_utf8())]
+}
+
+/// Folders and sessions for one query. The two statements run one after the
+/// other, so a search holds one of the pool's connections at a time.
+async fn search(db: &dyn DatabaseProvider, query: &str) -> Result<SearchResults, String> {
+    let query = capped_query(query);
+    let folders = db.search_folders(query).await?;
+    let sessions = db.search_sessions(query).await?;
+    Ok(SearchResults { folders, sessions })
+}
+
 #[tauri::command]
 pub async fn session_search(
     state: State<'_, DbState>,
     highlights: State<'_, SessionHighlightState>,
     query: String,
-) -> Result<Vec<Session>, String> {
-    let trimmed = if query.len() > MAX_SEARCH_QUERY_LEN {
-        &query[..query
-            .char_indices()
-            .take_while(|(i, _)| *i < MAX_SEARCH_QUERY_LEN)
-            .last()
-            .map_or(0, |(i, c)| i + c.len_utf8())]
-    } else {
-        query.as_str()
-    };
-    let mut sessions = state.0.search_sessions(trimmed).await?;
+) -> Result<SearchResults, String> {
+    let mut results = search(state.0.as_ref(), &query).await?;
     if let Some(local) = highlights.0.as_ref() {
-        local.overlay(&mut sessions).await;
+        local.overlay(&mut results.sessions).await;
     }
-    Ok(sessions)
+    Ok(results)
 }
 
 #[tauri::command]
@@ -2319,5 +2342,97 @@ mod tests {
         forget_highlights(&h.local, &[b]).await;
         assert_eq!(h.local.get(a).await.unwrap(), Some(profile));
         assert_eq!(h.local.get(b).await.unwrap(), None);
+    }
+
+    #[test]
+    fn a_query_is_searched_for_by_its_first_200_bytes() {
+        assert_eq!(capped_query(""), "");
+        assert_eq!(capped_query("core"), "core");
+        let exact = "a".repeat(MAX_SEARCH_QUERY_LEN);
+        assert_eq!(capped_query(&exact), exact);
+        let long = "a".repeat(MAX_SEARCH_QUERY_LEN + 50);
+        assert_eq!(capped_query(&long), exact);
+        // A character that begins before the limit is kept whole, and
+        // nothing is cut inside one.
+        let wide = format!("{}übc", "a".repeat(MAX_SEARCH_QUERY_LEN - 1));
+        assert_eq!(
+            capped_query(&wide),
+            format!("{}ü", "a".repeat(MAX_SEARCH_QUERY_LEN - 1))
+        );
+    }
+
+    fn names_found(results: &SearchResults) -> (Vec<&str>, Vec<&str>) {
+        (
+            results.folders.iter().map(|f| f.name.as_str()).collect(),
+            results.sessions.iter().map(|s| s.name.as_str()).collect(),
+        )
+    }
+
+    #[tokio::test]
+    async fn a_search_finds_folders_by_name_and_sessions_by_their_own_fields() {
+        let db = SqliteProvider::new(memory_pool("ON").await);
+        let production = db
+            .create_folder(NewFolder {
+                name: "Production".to_string(),
+                parent_id: None,
+            })
+            .await
+            .unwrap()
+            .id;
+        let lab = db
+            .create_folder(NewFolder {
+                name: "lab".to_string(),
+                parent_id: Some(production),
+            })
+            .await
+            .unwrap()
+            .id;
+        db.create_session(new_session(production, "web", None))
+            .await
+            .unwrap();
+        db.create_session(new_session(lab, "prod-db", None))
+            .await
+            .unwrap();
+        let none: Vec<&str> = Vec::new();
+
+        // The folder by its name, and the session by its own: the session
+        // in the folder that was found is not a result itself.
+        let found = search(&db, "PROD").await.unwrap();
+        assert_eq!(names_found(&found), (vec!["Production"], vec!["prod-db"]));
+        assert_eq!(found.folders[0].id, production);
+        // A folder is found by its own name, not by the one above it.
+        let found = search(&db, "lab").await.unwrap();
+        assert_eq!(names_found(&found), (vec!["lab"], none.clone()));
+        assert_eq!(found.folders[0].parent_id, Some(production));
+        // A session's host is searched, and a folder has none.
+        let found = search(&db, "web.example").await.unwrap();
+        assert_eq!(names_found(&found), (none.clone(), vec!["web"]));
+        // A query with a NUL in it finds neither.
+        let found = search(&db, "prod\0").await.unwrap();
+        assert_eq!(names_found(&found), (none.clone(), none.clone()));
+
+        // The query is cut for both alike: what is past the limit keeps
+        // neither the folder nor the session from being found.
+        let long_name = "f".repeat(MAX_SEARCH_QUERY_LEN);
+        db.create_folder(NewFolder {
+            name: long_name.clone(),
+            parent_id: None,
+        })
+        .await
+        .unwrap();
+        db.create_session(new_session(lab, &long_name, None))
+            .await
+            .unwrap();
+        let found = search(&db, &format!("{long_name}-and-more")).await.unwrap();
+        assert_eq!(
+            names_found(&found),
+            (vec![long_name.as_str()], vec![long_name.as_str()])
+        );
+        // Without the cut it finds neither.
+        assert!(db
+            .search_folders(&format!("{long_name}-and-more"))
+            .await
+            .unwrap()
+            .is_empty());
     }
 }

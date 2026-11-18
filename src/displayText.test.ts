@@ -5,7 +5,13 @@
  * it is allowed to be.
  */
 import { describe, expect, it } from "vitest";
-import { hostAsWritten, shownAsWritten, typedAsWritten } from "./displayText";
+import {
+  PATH_SEPARATOR_CHAR,
+  hostAsWritten,
+  pathNameAsWritten,
+  shownAsWritten,
+  typedAsWritten,
+} from "./displayText";
 
 describe("shownAsWritten", () => {
   it("leaves ordinary text as it is", () => {
@@ -131,5 +137,81 @@ describe("typedAsWritten", () => {
   it("cuts a user name that is longer than the app lets one be", () => {
     expect(typedAsWritten("u".repeat(255))).toBe("u".repeat(255));
     expect(typedAsWritten("u".repeat(256))).toBe(`${"u".repeat(255)}…`);
+  });
+});
+
+describe("pathNameAsWritten", () => {
+  const separator = String.fromCodePoint(0x203a);
+  const ellipsis = String.fromCodePoint(0x2026);
+
+  it("leaves a folder's name as it is, in any script", () => {
+    expect(PATH_SEPARATOR_CHAR).toBe(separator);
+    for (const name of ["", "Production", "10.0.0.0/24", "a > b", "Zürich", "東京"]) {
+      expect(pathNameAsWritten(name, 64)).toBe(name);
+    }
+  });
+
+  it("writes out what a path gives a meaning of its own", () => {
+    // The separator: one folder is not to read as two, one in the other.
+    expect(pathNameAsWritten(`Customers ${separator} Production`, 64)).toBe(
+      "Customers \\u{203A} Production",
+    );
+    // The ellipsis, which stands for folders that are left out.
+    expect(pathNameAsWritten(ellipsis, 64)).toBe("\\u{2026}");
+    expect(pathNameAsWritten(`Lab${ellipsis}`, 64)).toBe("Lab\\u{2026}");
+  });
+
+  it("doubles a backslash, so that text is told from a character written out", () => {
+    expect(pathNameAsWritten("CORP\\net", 64)).toBe("CORP\\\\net");
+    expect(pathNameAsWritten("a\\u{203A}b", 64)).toBe("a\\\\u{203A}b");
+    expect(pathNameAsWritten(`a${separator}b`, 64)).toBe("a\\u{203A}b");
+  });
+
+  it("writes out the characters that change how a name displays", () => {
+    const override = String.fromCodePoint(0x202e);
+    const zeroWidth = String.fromCodePoint(0x200b);
+    expect(pathNameAsWritten(`a${override}b${zeroWidth}c\nd`, 64)).toBe(
+      "a\\u{202E}b\\u{200B}c\\u{000A}d",
+    );
+  });
+
+  it("cuts a name after as many characters as it is given, before writing any out", () => {
+    expect(pathNameAsWritten("n".repeat(24), 24)).toBe("n".repeat(24));
+    expect(pathNameAsWritten("n".repeat(25), 24)).toBe(`${"n".repeat(24)}…`);
+    // The mark of the cut is the one ellipsis that is not written out.
+    expect(pathNameAsWritten(`ab${separator}cd`, 3)).toBe("ab\\u{203A}…");
+  });
+
+  it("cuts by characters, also where they take two units each", () => {
+    const face = String.fromCodePoint(0x1f600);
+    expect(pathNameAsWritten(face.repeat(3), 3)).toBe(face.repeat(3));
+    expect(pathNameAsWritten(face.repeat(4), 3)).toBe(`${face.repeat(3)}…`);
+    expect(pathNameAsWritten(face.repeat(100), 3)).toBe(`${face.repeat(3)}…`);
+    // A cut that would fall inside one takes neither half of it.
+    expect(pathNameAsWritten(`a${face.repeat(100)}`, 2)).toBe(`a${face}…`);
+    expect(pathNameAsWritten(`ab${face.repeat(100)}`, 2)).toBe("ab…");
+  });
+
+  it("cuts first and writes out what is left, a backslash and a control among it", () => {
+    const override = String.fromCodePoint(0x202e);
+    // Four characters of six: the two that are written out or doubled count
+    // as one each, and what is past the cut is not shown in any form.
+    expect(pathNameAsWritten(`a\\${override}b${separator}c`, 4)).toBe("a\\\\\\u{202E}b…");
+    // A name's own ellipsis is written out; the one of the cut is not.
+    expect(pathNameAsWritten(`${ellipsis}${ellipsis}x`, 2)).toBe("\\u{2026}\\u{2026}…");
+  });
+
+  it("goes through the start of a name only, however long the name is", () => {
+    // Megabytes, as a row written past the app's own checks can have.
+    const long = "n".repeat(8 * 1024 * 1024);
+    const started = performance.now();
+    for (let n = 0; n < 2000; n++) {
+      expect(pathNameAsWritten(long, 24)).toHaveLength(25);
+    }
+    // Counting the whole name took some 100 ms for each of these.
+    expect(performance.now() - started).toBeLessThan(2000);
+    expect(shownAsWritten(long, 64)).toBe(`${"n".repeat(64)}…`);
+    expect(hostAsWritten(long)).toBe(`${"n".repeat(255)}…`);
+    expect(typedAsWritten(long)).toBe(`${"n".repeat(255)}…`);
   });
 });

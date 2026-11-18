@@ -5,13 +5,66 @@ import type { Folder, Session } from "../stores/sessionStore";
 import { useSessionStore } from "../stores/sessionStore";
 import { FolderIcon, SharedFolderIcon, SessionIconComponent } from "./SessionIcons";
 
+/**
+ * The folders and sessions of the tree by the folder they are in, each list
+ * in the order the tree shows it. Made once for all of them: a tree that
+ * went through every folder and session for each folder it lists took as
+ * long as the two multiplied, and a search can list many folders at once.
+ */
+export interface TreeIndex {
+  /** The folders in a folder; under `null`, those at the top. */
+  folders: ReadonlyMap<string | null, readonly Folder[]>;
+  /** The sessions in a folder. */
+  sessions: ReadonlyMap<string, readonly Session[]>;
+}
+
+export function indexTree(folders: readonly Folder[], sessions: readonly Session[]): TreeIndex {
+  const foldersIn = new Map<string | null, Folder[]>();
+  for (const folder of folders) {
+    const siblings = foldersIn.get(folder.parent_id);
+    if (siblings) siblings.push(folder);
+    else foldersIn.set(folder.parent_id, [folder]);
+  }
+  const sessionsIn = new Map<string, Session[]>();
+  for (const session of sessions) {
+    const siblings = sessionsIn.get(session.folder_id);
+    if (siblings) siblings.push(session);
+    else sessionsIn.set(session.folder_id, [session]);
+  }
+  return { folders: foldersIn, sessions: sessionsIn };
+}
+
+const NO_FOLDERS: readonly Folder[] = [];
+const NO_SESSIONS: readonly Session[] = [];
+
+/**
+ * What a tree is told that lists the content of a folder a search found.
+ *
+ * An item can be on the page more than once there: a session under its
+ * folder and as a result of its own, and a folder that was found under
+ * another that was. The items of such a tree are therefore not sortable, and
+ * their drag-and-drop IDs get the ID of the folder that was found in front
+ * (`of`), so that no two are alike.
+ *
+ * A folder in it that was found as well (`found`) is listed by its name and
+ * is not opened there: it lists its content as a result of its own. Were it
+ * opened in both places, a chain of folders that are all found, each open in
+ * the tree, would be listed once for every folder of it, the chain's length
+ * squared.
+ */
+export interface TreeResult {
+  of: string;
+  found: ReadonlySet<string>;
+}
+
 interface SessionTreeProps {
   parentId: string | null;
   depth: number;
-  folders: Folder[];
-  sessions: Session[];
+  index: TreeIndex;
   onContextMenu: (e: React.MouseEvent, id: string, type: "folder" | "session") => void;
   onSessionDoubleClick: (id: string) => void;
+  /** Set for a tree that lists what is in a folder a search found. */
+  result?: TreeResult;
 }
 
 /** Item entry in the flattened visible tree, used for keyboard navigation. */
@@ -60,28 +113,40 @@ export function parseDndId(dndId: string): { type: "folder" | "session"; id: str
   return null;
 }
 
+/**
+ * The drag-and-drop ID of an item in the content of a folder a search found
+ * (`resultOf`, that folder's ID), or the item's own in the tree. `parseDndId` reads only the
+ * second kind: an item of the first is not dragged.
+ */
+export function dndIdIn(resultOf: string | undefined, dndId: string): string {
+  return resultOf === undefined ? dndId : `result-${resultOf}:${dndId}`;
+}
+
 function SortableFolder({
   folder,
   depth,
-  folders,
-  sessions,
+  index,
   onContextMenu,
   onSessionDoubleClick,
+  result,
 }: {
   folder: Folder;
   depth: number;
-  folders: Folder[];
-  sessions: Session[];
+  index: TreeIndex;
   onContextMenu: SessionTreeProps["onContextMenu"];
   onSessionDoubleClick: SessionTreeProps["onSessionDoubleClick"];
+  result: SessionTreeProps["result"];
 }): React.JSX.Element {
   const { expandedFolderIds, toggleFolder, selectedItemId, selectItem } = useSessionStore();
-  const isExpanded = expandedFolderIds.has(folder.id);
+  // A folder that was found itself has its content as a result of its own.
+  const listedApart = result?.found.has(folder.id) === true;
+  const isExpanded = !listedApart && expandedFolderIds.has(folder.id);
   const isSelected = selectedItemId === folder.id;
 
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
-    id: folderDndId(folder.id),
+    id: dndIdIn(result?.of, folderDndId(folder.id)),
     data: { type: "folder" as const, id: folder.id, parentId: folder.parent_id },
+    disabled: result !== undefined,
   });
 
   const style: React.CSSProperties = {
@@ -93,7 +158,7 @@ function SortableFolder({
   return (
     <div ref={setNodeRef} style={style}>
       <div
-        {...attributes}
+        {...(result === undefined ? attributes : {})}
         {...listeners}
         className={`tree-item tree-folder ${isSelected ? "tree-item-selected" : ""}`}
         style={{ "--tree-depth": depth } as React.CSSProperties}
@@ -105,7 +170,7 @@ function SortableFolder({
           if (e.detail > 1) e.preventDefault();
         }}
         onDoubleClick={() => {
-          toggleFolder(folder.id);
+          if (!listedApart) toggleFolder(folder.id);
         }}
         onContextMenu={(e) => {
           e.preventDefault();
@@ -113,26 +178,30 @@ function SortableFolder({
           onContextMenu(e, folder.id, "folder");
         }}
         role="treeitem"
-        aria-expanded={isExpanded ? "true" : "false"}
+        aria-expanded={listedApart ? undefined : isExpanded ? "true" : "false"}
         tabIndex={-1}
       >
-        <span
-          className="tree-chevron"
-          onClick={(e) => {
-            e.stopPropagation();
-            toggleFolder(folder.id);
-          }}
-          onMouseDown={(e) => {
-            e.stopPropagation();
-          }}
-          onPointerDown={(e) => {
-            e.stopPropagation();
-          }}
-          role="button"
-          aria-label={isExpanded ? "Collapse" : "Expand"}
-        >
-          {isExpanded ? "\u25BE" : "\u25B8"}
-        </span>
+        {listedApart ? (
+          <span className="tree-chevron" aria-hidden="true" />
+        ) : (
+          <span
+            className="tree-chevron"
+            onClick={(e) => {
+              e.stopPropagation();
+              toggleFolder(folder.id);
+            }}
+            onMouseDown={(e) => {
+              e.stopPropagation();
+            }}
+            onPointerDown={(e) => {
+              e.stopPropagation();
+            }}
+            role="button"
+            aria-label={isExpanded ? "Collapse" : "Expand"}
+          >
+            {isExpanded ? "\u25BE" : "\u25B8"}
+          </span>
+        )}
         <span className={`tree-icon${folder.visibility === "shared" ? " tree-icon-shared" : ""}`}>
           {folder.visibility === "shared" ? <SharedFolderIcon /> : <FolderIcon />}
         </span>
@@ -144,10 +213,10 @@ function SortableFolder({
         <SessionTree
           parentId={folder.id}
           depth={depth + 1}
-          folders={folders}
-          sessions={sessions}
+          index={index}
           onContextMenu={onContextMenu}
           onSessionDoubleClick={onSessionDoubleClick}
+          result={result}
         />
       )}
     </div>
@@ -159,18 +228,21 @@ function SortableSession({
   depth,
   onContextMenu,
   onSessionDoubleClick,
+  result,
 }: {
   session: Session;
   depth: number;
   onContextMenu: SessionTreeProps["onContextMenu"];
   onSessionDoubleClick: SessionTreeProps["onSessionDoubleClick"];
+  result: SessionTreeProps["result"];
 }): React.JSX.Element {
   const { selectedItemId, selectItem } = useSessionStore();
   const isSelected = selectedItemId === session.id;
 
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
-    id: sessionDndId(session.id),
+    id: dndIdIn(result?.of, sessionDndId(session.id)),
     data: { type: "session" as const, id: session.id, folderId: session.folder_id },
+    disabled: result !== undefined,
   });
 
   const style: React.CSSProperties = {
@@ -182,7 +254,7 @@ function SortableSession({
   return (
     <div
       ref={setNodeRef}
-      {...attributes}
+      {...(result === undefined ? attributes : {})}
       {...listeners}
       style={{ ...style, "--tree-depth": depth } as React.CSSProperties}
       className={`tree-item tree-session ${isSelected ? "tree-item-selected" : ""}`}
@@ -221,16 +293,17 @@ function SortableSession({
 export function SessionTree({
   parentId,
   depth,
-  folders,
-  sessions,
+  index,
   onContextMenu,
   onSessionDoubleClick,
+  result,
 }: SessionTreeProps): React.JSX.Element {
-  const childFolders = folders.filter((f) => f.parent_id === parentId);
-  const childSessions = sessions.filter((s) => s.folder_id === parentId);
+  const childFolders = index.folders.get(parentId) ?? NO_FOLDERS;
+  const childSessions =
+    parentId === null ? NO_SESSIONS : (index.sessions.get(parentId) ?? NO_SESSIONS);
 
-  const folderDndIds = childFolders.map((f) => folderDndId(f.id));
-  const sessionDndIds = childSessions.map((s) => sessionDndId(s.id));
+  const folderDndIds = childFolders.map((f) => dndIdIn(result?.of, folderDndId(f.id)));
+  const sessionDndIds = childSessions.map((s) => dndIdIn(result?.of, sessionDndId(s.id)));
 
   return (
     <div role="group">
@@ -240,10 +313,10 @@ export function SessionTree({
             key={folder.id}
             folder={folder}
             depth={depth}
-            folders={folders}
-            sessions={sessions}
+            index={index}
             onContextMenu={onContextMenu}
             onSessionDoubleClick={onSessionDoubleClick}
+            result={result}
           />
         ))}
       </SortableContext>
@@ -255,6 +328,7 @@ export function SessionTree({
             depth={depth}
             onContextMenu={onContextMenu}
             onSessionDoubleClick={onSessionDoubleClick}
+            result={result}
           />
         ))}
       </SortableContext>

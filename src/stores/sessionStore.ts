@@ -159,6 +159,15 @@ export function jumpHostChain(session: Session, sessions: Session[]): JumpHostCh
   return { hops, complete: true };
 }
 
+/**
+ * What a search found: the folders whose name has the query in it, and the
+ * sessions that have it in their name, host, user name or tags.
+ */
+export interface SearchResults {
+  folders: Folder[];
+  sessions: Session[];
+}
+
 interface SessionState {
   folders: Folder[];
   sessions: Session[];
@@ -166,7 +175,7 @@ interface SessionState {
   selectedItemId: string | null;
   selectedItemType: "folder" | "session" | null;
   searchQuery: string;
-  searchResults: Session[] | null;
+  searchResults: SearchResults | null;
   lastFingerprint: string;
 
   loadAll: () => Promise<void>;
@@ -302,7 +311,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     const query = get().searchQuery;
     if (query.trim()) {
       try {
-        const results = await invoke<Session[]>("session_search", { query });
+        const results = await invoke<SearchResults>("session_search", { query });
         set({ searchResults: results });
       } catch {
         set({ searchResults: null });
@@ -413,7 +422,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       set({ searchResults: null });
       return;
     }
-    const results = await invoke<Session[]>("session_search", { query });
+    const results = await invoke<SearchResults>("session_search", { query });
     set({ searchResults: results });
   },
 

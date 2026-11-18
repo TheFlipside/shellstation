@@ -1634,6 +1634,12 @@ body,
   max-width: 100px;
 }
 
+/* The folders above a folder that a search found, beside its name. It gets
+   more room than a session's host, and the name gives way to it. */
+.tree-path {
+  max-width: 60%;
+}
+
 /* Drag-and-drop overlay (floating clone of dragged item) */
 .tree-item-drag-overlay {
   display: flex;

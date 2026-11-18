@@ -28,10 +28,18 @@ function codePointWritten(ch: string): string {
 /**
  * The first `maxChars` characters of `text`, and whether that left any out.
  * By code point, so that a cut never splits a surrogate pair.
+ *
+ * Only the start of the text is gone through for it. A name can be megabytes
+ * long in a row written past the app's own checks, and the search results
+ * show the same name once for each folder below it: counting all of it each
+ * time took as long as the name is, for a result of `maxChars` characters.
+ * Twice as many UTF-16 units as characters wanted hold at least that many
+ * characters, and half a pair at their end is past the cut.
  */
 function cut(text: string, maxChars: number): [string, boolean] {
-  const chars = Array.from(text);
-  if (chars.length <= maxChars) return [text, false];
+  const head = text.length > maxChars * 2 ? text.slice(0, maxChars * 2) : text;
+  const chars = Array.from(head);
+  if (chars.length <= maxChars) return [head, head.length < text.length];
   return [chars.slice(0, maxChars).join(""), true];
 }
 
@@ -53,6 +61,30 @@ function cut(text: string, maxChars: number): [string, boolean] {
 export function shownAsWritten(text: string, maxChars: number): string {
   const [shown, more] = cut(text, maxChars);
   return shown.replace(DISPLAY_CONTROL_RE, codePointWritten) + (more ? "…" : "");
+}
+
+/** The character that stands between the names of a path of folders. */
+export const PATH_SEPARATOR_CHAR = "\u203a";
+
+/** A backslash, the separator of a path, or an ellipsis. */
+const PATH_OWN_RE = /[\\\u203a\u2026]/g;
+
+/**
+ * A folder's name as one part of a path, as another user wrote it: shown as
+ * [`shownAsWritten`] shows a name, and with three more characters that a
+ * path gives a meaning of its own. The separator and the ellipsis, which
+ * stands for the folders a path leaves out, are written out as their code
+ * points, so that one folder cannot read as two, one in the other, or as
+ * more folders than are shown. And a backslash is doubled, as
+ * [`typedAsWritten`] does it, so that a name with the text `\u{203A}` in it
+ * does not read as one with the separator written out.
+ */
+export function pathNameAsWritten(text: string, maxChars: number): string {
+  const [shown, more] = cut(text, maxChars);
+  // The path's own characters first: writing one out puts a backslash
+  // there, which is not to be doubled in its turn.
+  const own = shown.replace(PATH_OWN_RE, (ch) => (ch === "\\" ? "\\\\" : codePointWritten(ch)));
+  return own.replace(DISPLAY_CONTROL_RE, codePointWritten) + (more ? "…" : "");
 }
 
 /** The longest host the app's own commands take, in characters at the most. */

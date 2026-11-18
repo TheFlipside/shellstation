@@ -163,6 +163,25 @@ impl DatabaseProvider for SqliteProvider {
         rows.iter().map(row_to_folder).collect()
     }
 
+    // SQLite LIKE is case-insensitive for ASCII; PostgreSQL uses ILIKE.
+    async fn search_folders(&self, query: &str) -> DbResult<Vec<Folder>> {
+        let Some(pattern) = search_pattern(query) else {
+            return Ok(Vec::new());
+        };
+        let rows = sqlx::query(
+            "SELECT id, name, parent_id, sort_order, owner, visibility \
+             FROM folders \
+             WHERE name LIKE ? ESCAPE '\\' \
+             ORDER BY sort_order ASC, name ASC",
+        )
+        .bind(&pattern)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| format!("Failed to search folders: {e}"))?;
+
+        rows.iter().map(row_to_folder).collect()
+    }
+
     async fn rename_folder(&self, id: Uuid, name: &str) -> DbResult<()> {
         let result = sqlx::query("UPDATE folders SET name = ? WHERE id = ?")
             .bind(name)
@@ -1393,5 +1412,50 @@ mod tests {
         // "core", and found the session.
         assert!(found(&db, "core\0x").await.is_empty());
         assert!(found(&db, "\0").await.is_empty());
+    }
+
+    async fn folders_found(db: &SqliteProvider, query: &str) -> Vec<String> {
+        db.search_folders(query)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|f| f.name)
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn a_folder_search_goes_by_the_name_as_a_session_search_does() {
+        let db = database_with(&[("lab-router", "admin")]).await;
+        let lab = db.list_folders().await.unwrap()[0].id;
+        for (name, parent_id) in [
+            ("Zebra", None),
+            (r"CORP\net", None),
+            ("50%", None),
+            ("a_b", None),
+            ("axb", None),
+            ("Alpha lab", Some(lab)),
+        ] {
+            db.create_folder(NewFolder {
+                name: name.to_string(),
+                parent_id,
+            })
+            .await
+            .unwrap();
+        }
+
+        // Anywhere in the name, whatever the case of ASCII letters, at any
+        // depth, and in the order the folders are listed in: by place among
+        // their siblings, then by name.
+        assert_eq!(folders_found(&db, "LAB").await, ["Alpha lab", "lab"]);
+        assert_eq!(folders_found(&db, "zeb").await, ["Zebra"]);
+        // Not by the name of a session in it.
+        assert!(folders_found(&db, "router").await.is_empty());
+        // The backslash and the wildcards as written.
+        assert_eq!(folders_found(&db, r"CORP\").await, [r"CORP\net"]);
+        assert_eq!(folders_found(&db, "%").await, ["50%"]);
+        assert_eq!(folders_found(&db, "a_b").await, ["a_b"]);
+        assert!(folders_found(&db, r"\%").await.is_empty());
+        // A query with a NUL in it finds nothing.
+        assert!(folders_found(&db, "lab\0").await.is_empty());
     }
 }

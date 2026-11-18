@@ -19,7 +19,7 @@ use models::{
 
 pub type DbResult<T> = Result<T, String>;
 
-/// The `LIKE` pattern of a session search: `query` anywhere in the text, and
+/// The `LIKE` pattern of a search for sessions or folders: `query` anywhere in the text, and
 /// taken as written. `%` and `_` are a pattern's wildcards, and `\` is the
 /// character the search statements name as its escape, so each of the three
 /// gets a `\` before it. Without one before the `\` itself, a query with a
@@ -105,6 +105,10 @@ pub trait DatabaseProvider: Send + Sync {
 
     async fn create_folder(&self, folder: NewFolder) -> DbResult<Folder>;
     async fn list_folders(&self) -> DbResult<Vec<Folder>>;
+    /// The folders whose name has `query` in it, by the rules of
+    /// [`search_pattern`] and in the order of [`Self::list_folders`]. Only a
+    /// folder's own name is looked at, not the names of the folders above it.
+    async fn search_folders(&self, query: &str) -> DbResult<Vec<Folder>>;
     async fn rename_folder(&self, id: Uuid, name: &str) -> DbResult<()>;
     async fn move_folder(&self, id: Uuid, new_parent_id: Option<Uuid>) -> DbResult<()>;
     async fn delete_folder(&self, id: Uuid) -> DbResult<()>;
