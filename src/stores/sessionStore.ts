@@ -198,7 +198,12 @@ interface SessionState {
    * shared session, and changes nothing for anyone else.
    */
   setSessionHighlightProfile: (id: string, profileId: string | null) => Promise<void>;
-  searchSessions: (query: string) => Promise<void>;
+  /**
+   * Takes the search field's text, and searches for it once it has stood
+   * for `SEARCH_PAUSE_MS`. A text of spaces alone is searched for no more
+   * than an empty one.
+   */
+  searchSessions: (query: string) => void;
   clearSearch: () => void;
 
   // Bulk operations
@@ -265,6 +270,84 @@ export interface UpdateSessionParams {
   legacyAlgorithms?: boolean;
 }
 
+/**
+ * How long the search field's text has to stand before it is searched for,
+ * in milliseconds. A search reads every folder and every session the user
+ * can see, in PostgreSQL mode from the shared database, so text that is
+ * being typed is searched for once, when the typing pauses, and not at each
+ * character.
+ */
+export const SEARCH_PAUSE_MS = 250;
+
+// The pace of the search. The window sends one search at a time: while one
+// is under way the next waits for its answer, and takes the text the field
+// has then. The backend holds every caller to one search at a time as well
+// (`SearchGate` in `commands/session.rs`), and would answer a search that a
+// later one overtook there with an error, which is a failure like any other
+// here; sent one at a time, none is. It also answers every search within a
+// time limit of its own, so a search that is under way here has an end.
+
+/** Runs out when the field's text has stood for `SEARCH_PAUSE_MS`. */
+let searchPause: ReturnType<typeof setTimeout> | undefined;
+/** Whether a search is under way. */
+let searching = false;
+/** Whether a search was asked for while one is under way. */
+let searchWanted = false;
+/**
+ * Whether the next search is one after a refresh, whose failure takes the
+ * results away: what was found before may no longer be there.
+ */
+let searchFailureClears = false;
+
+function endSearchPause(): void {
+  clearTimeout(searchPause);
+  searchPause = undefined;
+}
+
+/** One search, for the text the field has when it is sent. Never rejects. */
+async function searchOnce(): Promise<void> {
+  // What is sent now is for the text as it is: nothing is left to wait for.
+  endSearchPause();
+  const failureClears = searchFailureClears;
+  searchFailureClears = false;
+  const query = useSessionStore.getState().searchQuery;
+  if (!query.trim()) return;
+  try {
+    const results = await invoke<SearchResults>("session_search", { query });
+    // An answer is for the text it was asked with. The field has another by
+    // now where the user went on typing or cleared it; the search for that
+    // text is still to come, or there is none to show.
+    if (useSessionStore.getState().searchQuery === query) {
+      useSessionStore.setState({ searchResults: results });
+    }
+  } catch {
+    if (failureClears) useSessionStore.setState({ searchResults: null });
+  }
+}
+
+/**
+ * Searches for the field's text: now, or with a search under way, once that
+ * one has its answer. However many ask while one is under way, one search
+ * follows it. Nothing waits for a search: what it finds is put into the
+ * store when it comes.
+ */
+function runSearch(): void {
+  if (searching) {
+    searchWanted = true;
+    return;
+  }
+  searching = true;
+  void searchOnce().finally(() => {
+    searching = false;
+    if (searchWanted) {
+      searchWanted = false;
+      // Sent in the same step, so that nothing can ask in between and find
+      // no search under way.
+      runSearch();
+    }
+  });
+}
+
 export const useSessionStore = create<SessionState>((set, get) => ({
   folders: [],
   sessions: [],
@@ -308,14 +391,13 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       localStorage.setItem("shellstation:expandedFolders", JSON.stringify([...next]));
     }
     set({ folders, sessions, expandedFolderIds: pruned ? next : expanded });
-    const query = get().searchQuery;
-    if (query.trim()) {
-      try {
-        const results = await invoke<SearchResults>("session_search", { query });
-        set({ searchResults: results });
-      } catch {
-        set({ searchResults: null });
-      }
+    // What a search found is from before the change: search once more, for
+    // the text the field has, in the search's own turn. The refresh does not
+    // wait for it: the folders and sessions are in place, and an edit is
+    // not held up by how long a search takes.
+    if (get().searchQuery.trim()) {
+      searchFailureClears = true;
+      runSearch();
     }
   },
 
@@ -416,17 +498,21 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     await get().loadAll();
   },
 
-  searchSessions: async (query) => {
-    set({ searchQuery: query });
+  searchSessions: (query) => {
+    endSearchPause();
     if (!query.trim()) {
-      set({ searchResults: null });
+      set({ searchQuery: query, searchResults: null });
       return;
     }
-    const results = await invoke<SearchResults>("session_search", { query });
-    set({ searchResults: results });
+    set({ searchQuery: query });
+    searchPause = setTimeout(() => {
+      searchPause = undefined;
+      runSearch();
+    }, SEARCH_PAUSE_MS);
   },
 
   clearSearch: () => {
+    endSearchPause();
     set({ searchQuery: "", searchResults: null });
   },
 

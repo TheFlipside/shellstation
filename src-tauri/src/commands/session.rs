@@ -1,4 +1,7 @@
 use std::collections::HashSet;
+use std::future::Future;
+use std::sync::Arc;
+use std::time::Duration;
 
 use tauri::{AppHandle, State};
 use uuid::Uuid;
@@ -590,17 +593,187 @@ async fn search(db: &dyn DatabaseProvider, query: &str) -> Result<SearchResults,
     Ok(SearchResults { folders, sessions })
 }
 
+/// What a search is answered with that was not run, because a later one
+/// asked while it waited for its turn ([`SearchGate`]).
+const SEARCH_REPLACED: &str = "Search not run: a later search has replaced it";
+
+/// What a search is answered with that was not run, because as many
+/// searches as [`SEARCHES_UNENDED_AT_MOST`] were given up and have not ended.
+const SEARCH_REFUSED: &str = "Search not run: earlier searches have not ended";
+
+/// What a search is answered with whose task ended without an answer, as by
+/// a panic. What it ended with is in the application log.
+const SEARCH_FAILED: &str = "Search failed";
+
+/// How long a search keeps its turn at the most.
+///
+/// With the limits the app sets for its `PostgreSQL` sessions
+/// (`db::postgres::pool_options`), each of a search's two statements waits
+/// up to 5 s for a connection and runs up to 60 s, which is 130 s. The rest
+/// is for the read of the local database that follows them in `PostgreSQL`
+/// mode, which has no limit of its own and takes a moment as a rule. A
+/// search is therefore done before this as a rule where those limits are in
+/// effect and the server answers. It is not where the server sets a longer
+/// `statement_timeout`, which the app keeps, where a connection pooler does
+/// not carry the limits along, or where a connection has gone silent: a
+/// search can then outlast its turn ([`SearchGate::run`]).
+const SEARCH_TURN_LIMIT: Duration = Duration::from_secs(150);
+
+/// How many searches there are at the most that have not ended: the one
+/// that has its turn, and those that were given up at
+/// [`SEARCH_TURN_LIMIT`] and are still waiting for the database. Each holds
+/// one database connection at the most, of the pool's ten.
+const SEARCHES_UNENDED_AT_MOST: usize = 3;
+
+/// Lets one search run at a time, and of the searches that wait for it, the
+/// one that asked last.
+///
+/// A search reads every folder and every session the user can see: its
+/// pattern begins with a wildcard, which no index serves. In `PostgreSQL`
+/// mode those are statements against the shared database, each on one of the
+/// pool's ten connections and for as long as `statement_timeout` lets it
+/// run. Without the gate, searches that are asked for faster than the
+/// database answers them run side by side: they load the server by their
+/// number, and can take every connection of the pool, so that the user's
+/// other commands fail for want of one.
+///
+/// A search that is running is not called off. sqlx cannot cancel a
+/// statement, and a query whose future is dropped leaves the statement
+/// running on the server and its connection waiting for the answer. So a
+/// later search waits, without a connection. A search that waits when
+/// another one asks is answered with [`SEARCH_REPLACED`] then, and not when
+/// its turn would have come: what it would find is for a query that is no
+/// longer asked, and so no more than one search waits, however many ask. A
+/// caller that asks without end therefore keeps every search but its last
+/// from running: the gate limits what searching costs, and not who searches.
+///
+/// A search counts as asked for when its command begins. Tauri runs a
+/// command to its end, so one that asked is one that takes its turn: were
+/// the last one to ask given up while it waits, the ones it replaced would
+/// stay replaced, and the next search would be the next one asked for.
+///
+/// A search keeps its turn until it has its answer, and no longer than
+/// [`SEARCH_TURN_LIMIT`]: one without an answer by then is given up, and the
+/// next may run beside it ([`Self::run`]). The turn is the command's, so
+/// this too rests on a command being run to its end; one that were dropped
+/// would leave its search running without the turn, as one that is given
+/// up, and counted like it. What searching costs is thus one
+/// database connection at a time, and with searches that were given up, up
+/// to [`SEARCHES_UNENDED_AT_MOST`].
+///
+/// The window paces its own searches (`src/stores/sessionStore.ts`). The gate
+/// is for what the window does not keep to, such as the searches of a page
+/// that was loaded again while the old page's search is still running.
+pub struct SearchGate {
+    /// Held by the search that has its turn.
+    running: tokio::sync::Mutex<()>,
+    /// The number of the search that asked last.
+    asked: tokio::sync::watch::Sender<u64>,
+    /// A permit for each search that has not ended, given up or not.
+    unended: Arc<tokio::sync::Semaphore>,
+}
+
+impl Default for SearchGate {
+    fn default() -> Self {
+        Self {
+            running: tokio::sync::Mutex::new(()),
+            asked: tokio::sync::watch::channel(0).0,
+            unended: Arc::new(tokio::sync::Semaphore::new(SEARCHES_UNENDED_AT_MOST)),
+        }
+    }
+}
+
+impl SearchGate {
+    /// Waits until no search has its turn. `None` for a search that another
+    /// one has asked after, as soon as that one asks: it is not to run, and
+    /// gets no turn from then on. The search has its turn while it keeps
+    /// what is returned.
+    async fn turn(&self) -> Option<tokio::sync::MutexGuard<'_, ()>> {
+        let mut asked = self.asked.subscribe();
+        let mut number = 0;
+        self.asked.send_modify(|last| {
+            *last += 1;
+            number = *last;
+        });
+        tokio::select! {
+            // A later search first: one that is replaced does not take a
+            // turn that has come free in the same moment.
+            biased;
+            // Not an error: the numbers are sent by the gate, which is there.
+            _ = asked.wait_for(|last| *last > number) => None,
+            turn = self.running.lock() => Some(turn),
+        }
+    }
+
+    /// Runs `search` when its turn has come, as a task of its own, and
+    /// answers with what it found, or with an error once `limit` is up.
+    ///
+    /// The limit is for a database that does not answer. A connection that
+    /// has gone silent without being closed brings none of the server's time
+    /// limits to the app, and a search that waited on it would keep its
+    /// turn, and every later search waiting, for as long as the operating
+    /// system keeps the connection. After `limit` the search is given up:
+    /// its turn ends, and its task is left to end by itself, with the
+    /// connection it holds. Dropping it would put that connection back into
+    /// the pool with a statement still running on it, for the next command
+    /// to wait on.
+    ///
+    /// A search that was given up no longer has the turn, so the next one
+    /// runs beside it. So that these do not take the pool's connections one
+    /// by one while the database stays silent, a search is refused with
+    /// [`SEARCH_REFUSED`] while [`SEARCHES_UNENDED_AT_MOST`] have not ended.
+    async fn run<T, S>(&self, limit: Duration, search: S) -> Result<T, String>
+    where
+        T: Send + 'static,
+        S: Future<Output = Result<T, String>> + Send + 'static,
+    {
+        let Some(_turn) = self.turn().await else {
+            return Err(SEARCH_REPLACED.to_string());
+        };
+        let Ok(unended) = self.unended.clone().try_acquire_owned() else {
+            return Err(SEARCH_REFUSED.to_string());
+        };
+        let task = tokio::spawn(async move {
+            // Until the search has ended, whenever that is.
+            let _unended = unended;
+            search.await
+        });
+        match tokio::time::timeout(limit, task).await {
+            Ok(Ok(answer)) => answer,
+            Ok(Err(e)) => {
+                tracing::error!("The search's task ended without an answer: {e}");
+                Err(SEARCH_FAILED.to_string())
+            }
+            Err(_) => Err(format!(
+                "Search given up: the database has not answered within {limit:?}"
+            )),
+        }
+    }
+}
+
 #[tauri::command]
 pub async fn session_search(
     state: State<'_, DbState>,
     highlights: State<'_, SessionHighlightState>,
+    gate: State<'_, SearchGate>,
     query: String,
 ) -> Result<SearchResults, String> {
-    let mut results = search(state.0.as_ref(), &query).await?;
-    if let Some(local) = highlights.0.as_ref() {
-        local.overlay(&mut results.sessions).await;
-    }
-    Ok(results)
+    // A search that waits holds its query as it is searched for, and no
+    // more of what it was sent.
+    let mut query = query;
+    query.truncate(capped_query(&query).len());
+    query.shrink_to_fit();
+
+    let db = state.0.clone();
+    let local = highlights.0.clone();
+    gate.run(SEARCH_TURN_LIMIT, async move {
+        let mut results = search(db.as_ref(), &query).await?;
+        if let Some(local) = local.as_ref() {
+            local.overlay(&mut results.sessions).await;
+        }
+        Ok(results)
+    })
+    .await
 }
 
 #[tauri::command]
@@ -2435,5 +2608,313 @@ mod tests {
             .await
             .unwrap()
             .is_empty());
+    }
+
+    /// Lets the tasks that were spawned run until search number `number`
+    /// has asked `gate` for its turn. A task asks and begins to wait in one
+    /// step on the runtime of a `#[tokio::test]`, which has one thread, so
+    /// it waits by then.
+    async fn until_asked(gate: &SearchGate, number: u64) {
+        let asked = async {
+            while *gate.asked.borrow() < number {
+                tokio::task::yield_now().await;
+            }
+        };
+        tokio::time::timeout(Duration::from_secs(5), asked)
+            .await
+            .expect("the search asks for its turn");
+    }
+
+    /// Lets the tasks that were spawned go as far as they can.
+    async fn let_run() {
+        for _ in 0..10 {
+            tokio::task::yield_now().await;
+        }
+    }
+
+    /// A search that has no answer until `answer` is sent or dropped.
+    fn waiting_search() -> (
+        tokio::sync::oneshot::Sender<()>,
+        impl Future<Output = Result<u8, String>> + Send + 'static,
+    ) {
+        let (answer, answered) = tokio::sync::oneshot::channel::<()>();
+        (answer, async move {
+            answered.await.map_err(|e| e.to_string())?;
+            Ok(7)
+        })
+    }
+
+    #[tokio::test]
+    async fn one_search_runs_at_a_time_and_of_those_that_wait_the_last() {
+        let gate = Arc::new(SearchGate::default());
+        // Nothing runs, so the first has its turn at once.
+        let first = gate.turn().await.expect("the first search runs");
+
+        // Three more ask while it runs, one after the other. Each says
+        // whether it was run, and one that is keeps its turn until told.
+        let (answers, mut answered) = tokio::sync::mpsc::unbounded_channel();
+        let (finish, finished) = tokio::sync::watch::channel(false);
+        let mut later = Vec::new();
+        for number in 2..=4u64 {
+            let asking = gate.clone();
+            let answers = answers.clone();
+            let mut finished = finished.clone();
+            later.push(tokio::spawn(async move {
+                let turn = asking.turn().await;
+                answers.send((number, turn.is_some())).unwrap();
+                if turn.is_some() {
+                    finished.wait_for(|done| *done).await.unwrap();
+                }
+            }));
+            until_asked(&gate, number).await;
+            let_run().await;
+            // The one that waited before it is answered now, while the
+            // first still runs, and is not run. The one that asked last
+            // waits.
+            if number > 2 {
+                assert_eq!(answered.try_recv(), Ok((number - 1, false)));
+            }
+            assert!(answered.try_recv().is_err());
+        }
+
+        // The first is done, and the last one runs.
+        drop(first);
+        assert_eq!(answered.recv().await, Some((4, true)));
+
+        // One that asks while that one runs waits for it, and runs then:
+        // nothing has asked after it.
+        let fifth = {
+            let gate = gate.clone();
+            tokio::spawn(async move { gate.turn().await.is_some() })
+        };
+        until_asked(&gate, 5).await;
+        let_run().await;
+        assert!(!fifth.is_finished());
+        finish.send(true).unwrap();
+        assert!(fifth.await.unwrap());
+        for task in later {
+            task.await.unwrap();
+        }
+
+        // And with nothing running, the next has its turn at once again.
+        assert!(gate.turn().await.is_some());
+    }
+
+    #[tokio::test]
+    async fn of_many_that_ask_one_waits_and_none_runs_beside_another() {
+        let gate = Arc::new(SearchGate::default());
+        let running = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let ran = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let order = std::sync::atomic::Ordering::SeqCst;
+        let first = gate.turn().await.expect("the first search runs");
+
+        let mut tasks = Vec::new();
+        for number in 2..=50u64 {
+            let asking = gate.clone();
+            let running = running.clone();
+            let ran = ran.clone();
+            tasks.push(tokio::spawn(async move {
+                let Some(_turn) = asking.turn().await else {
+                    return;
+                };
+                assert_eq!(running.fetch_add(1, order), 0);
+                let_run().await;
+                running.fetch_sub(1, order);
+                ran.fetch_add(1, order);
+            }));
+            until_asked(&gate, number).await;
+        }
+        // While the first runs, all that asked but the last have their
+        // answer: one search waits, and not forty-nine.
+        let_run().await;
+        assert_eq!(tasks.iter().filter(|task| !task.is_finished()).count(), 1);
+        assert_eq!(ran.load(order), 0);
+
+        drop(first);
+        for task in tasks {
+            task.await.unwrap();
+        }
+        // The last one ran, and no other.
+        assert_eq!(ran.load(order), 1);
+    }
+
+    #[tokio::test]
+    async fn a_search_replaced_as_the_turn_comes_free_does_not_take_it() {
+        // Which of two things that have both happened a search goes by is
+        // the gate's choice, so this is tried many times over.
+        for _ in 0..64 {
+            let gate = Arc::new(SearchGate::default());
+            let first = gate.turn().await.expect("the first search runs");
+            let second = {
+                let gate = gate.clone();
+                tokio::spawn(async move { gate.turn().await.is_some() })
+            };
+            until_asked(&gate, 2).await;
+            let_run().await;
+            // A later search asks and the first is done, with nothing run
+            // in between: the second finds both.
+            gate.asked.send_modify(|last| *last += 1);
+            drop(first);
+            assert!(!second.await.unwrap());
+        }
+    }
+
+    #[tokio::test]
+    async fn a_search_keeps_its_turn_until_it_has_its_answer() {
+        let gate = Arc::new(SearchGate::default());
+        let limit = Duration::from_secs(5);
+        let (answer, search) = waiting_search();
+        let first = {
+            let gate = gate.clone();
+            tokio::spawn(async move { gate.run(limit, search).await })
+        };
+        until_asked(&gate, 1).await;
+        let_run().await;
+
+        // The next one waits for it, and is answered once the first is.
+        let second = {
+            let gate = gate.clone();
+            tokio::spawn(async move { gate.run(limit, async { Ok(8) }).await })
+        };
+        until_asked(&gate, 2).await;
+        let_run().await;
+        assert!(!first.is_finished());
+        assert!(!second.is_finished());
+
+        answer.send(()).unwrap();
+        assert_eq!(first.await.unwrap(), Ok(7));
+        assert_eq!(second.await.unwrap(), Ok(8));
+
+        // One that waits when a later one asks is told so, and is not run.
+        let (answer, search) = waiting_search();
+        let third = {
+            let gate = gate.clone();
+            tokio::spawn(async move { gate.run(limit, search).await })
+        };
+        until_asked(&gate, 3).await;
+        let_run().await;
+        let ran = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let fourth = {
+            let gate = gate.clone();
+            let ran = ran.clone();
+            tokio::spawn(async move {
+                gate.run(limit, async move {
+                    ran.store(true, std::sync::atomic::Ordering::SeqCst);
+                    Ok(9)
+                })
+                .await
+            })
+        };
+        until_asked(&gate, 4).await;
+        let_run().await;
+        let fifth = {
+            let gate = gate.clone();
+            tokio::spawn(async move { gate.run(limit, async { Ok(10) }).await })
+        };
+        until_asked(&gate, 5).await;
+        assert_eq!(fourth.await.unwrap(), Err(SEARCH_REPLACED.to_string()));
+        assert!(!ran.load(std::sync::atomic::Ordering::SeqCst));
+        answer.send(()).unwrap();
+        assert_eq!(third.await.unwrap(), Ok(7));
+        assert_eq!(fifth.await.unwrap(), Ok(10));
+    }
+
+    #[tokio::test]
+    async fn a_search_is_answered_with_what_it_found_or_how_it_failed() {
+        let gate = SearchGate::default();
+        let limit = Duration::from_secs(5);
+        assert_eq!(gate.run(limit, async { Ok(7) }).await, Ok(7));
+        let failed: Result<u8, String> = gate
+            .run(limit, async { Err("Failed to search folders".to_string()) })
+            .await;
+        assert_eq!(failed, Err("Failed to search folders".to_string()));
+
+        // One that panics is an error, without what it panicked with, and
+        // not a panic of the command. It has ended, so it holds up nothing.
+        let panicked: Result<u8, String> = gate
+            .run(limit, async { panic!("with a secret in the message") })
+            .await;
+        assert_eq!(panicked, Err(SEARCH_FAILED.to_string()));
+        assert_eq!(gate.unended.available_permits(), SEARCHES_UNENDED_AT_MOST);
+        assert_eq!(gate.run(limit, async { Ok(7) }).await, Ok(7));
+    }
+
+    #[tokio::test]
+    async fn a_search_without_an_answer_is_given_up_and_left_to_end_by_itself() {
+        let gate = SearchGate::default();
+        let limit = Duration::from_millis(50);
+        let (answer, search) = waiting_search();
+        let (ended, mut has_ended) = tokio::sync::mpsc::unbounded_channel();
+        let given_up = gate
+            .run(limit, async move {
+                let found = search.await;
+                ended.send(()).unwrap();
+                found
+            })
+            .await;
+        assert_eq!(
+            given_up,
+            Err("Search given up: the database has not answered within 50ms".to_string())
+        );
+
+        // Its turn has ended: the next search runs, beside it.
+        assert_eq!(
+            gate.unended.available_permits(),
+            SEARCHES_UNENDED_AT_MOST - 1
+        );
+        assert_eq!(
+            gate.run(Duration::from_secs(5), async { Ok(8) }).await,
+            Ok(8)
+        );
+
+        // It was not dropped: once the database answers after all, it goes
+        // on to its end, and counts no longer.
+        answer.send(()).expect("the search is still there");
+        assert_eq!(has_ended.recv().await, Some(()));
+        let_run().await;
+        assert_eq!(gate.unended.available_permits(), SEARCHES_UNENDED_AT_MOST);
+    }
+
+    #[tokio::test]
+    async fn no_more_searches_are_left_unended_than_the_gate_allows() {
+        let gate = SearchGate::default();
+        let limit = Duration::from_millis(20);
+        // As many as may be unended are given up, one after the other.
+        let mut answers = Vec::new();
+        for _ in 0..SEARCHES_UNENDED_AT_MOST {
+            let (answer, search) = waiting_search();
+            answers.push(answer);
+            let given_up = gate.run(limit, search).await;
+            assert!(given_up.unwrap_err().starts_with("Search given up: "));
+        }
+
+        // The next one is refused, and is not run.
+        let ran = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let refused: Result<u8, String> = {
+            let ran = ran.clone();
+            gate.run(limit, async move {
+                ran.store(true, std::sync::atomic::Ordering::SeqCst);
+                Ok(7)
+            })
+            .await
+        };
+        assert_eq!(refused, Err(SEARCH_REFUSED.to_string()));
+        assert!(!ran.load(std::sync::atomic::Ordering::SeqCst));
+
+        // One of them ends, as when its connection is closed at last, and a
+        // search runs again.
+        drop(answers.pop());
+        let ended = async {
+            while gate.unended.available_permits() == 0 {
+                tokio::task::yield_now().await;
+            }
+        };
+        tokio::time::timeout(Duration::from_secs(5), ended)
+            .await
+            .expect("the search ends");
+        assert_eq!(
+            gate.run(Duration::from_secs(5), async { Ok(7) }).await,
+            Ok(7)
+        );
     }
 }

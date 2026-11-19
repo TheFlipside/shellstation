@@ -6,9 +6,11 @@
  * is in it and then the sessions, leaves out a folder that the tree does not
  * show, opens and closes a folder that was found on Enter in the results and
  * not in the tree, keeps it closed while the search is on, and starts the
- * next search after the field was cleared with every folder open again.
+ * next search after the field was cleared with every folder open again. The
+ * field's changes that follow each other are one search; the pause and the
+ * rest of the pace are pinned in `src/stores/sessionStore.search.test.ts`.
  */
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { invoke } from "@tauri-apps/api/core";
 import { useSessionStore, type Folder, type Session } from "../stores/sessionStore";
@@ -96,9 +98,14 @@ function field(): HTMLInputElement {
 async function search(query: string): Promise<void> {
   const before = searches.length;
   fireEvent.change(field(), { target: { value: query } });
-  await waitFor(() => {
-    expect(searches.length).toBeGreaterThan(before);
-  });
+  // The search is sent once the text has stood for the store's pause. The
+  // clock is the real one, so a machine that is held up gets more time.
+  await waitFor(
+    () => {
+      expect(searches.length).toBeGreaterThan(before);
+    },
+    { timeout: 3000 },
+  );
   // The answer, and the list made from it.
   await act(async () => {
     await Promise.resolve();
@@ -146,6 +153,12 @@ beforeEach(() => {
         return Promise.resolve([]);
     }
   });
+});
+
+afterEach(() => {
+  // The pause of a search is the store module's, which the tests share: a
+  // test that fails within one does not leave it running into the next.
+  useSessionStore.getState().clearSearch();
 });
 
 describe("the sidebar's search", () => {
@@ -209,6 +222,22 @@ describe("the sidebar's search", () => {
     expect(rows()).toEqual(["0:Customers", "0:Lab", "1:lab-prod"]);
   });
 
+  it("searches once for changes that follow each other, for the last text", async () => {
+    await renderSidebar();
+    // Each change comes before the pause of the one before is over.
+    fireEvent.change(field(), { target: { value: "p" } });
+    fireEvent.change(field(), { target: { value: "pr" } });
+    fireEvent.change(field(), { target: { value: "pro" } });
+    // The field has each text at once; the list waits for the search, of
+    // which none is sent yet.
+    expect(field().value).toBe("pro");
+    expect(rows()).toEqual(["0:Customers", "0:Lab"]);
+    expect(searches).toEqual([]);
+    await search("prod");
+    expect(searches).toEqual(["prod"]);
+    expect(rows()).toEqual(["0:Production", "1:web", "0:lab-prod"]);
+  });
+
   it("searches again after a change, and lists what is found then", async () => {
     await renderSidebar();
     await search("lab");
@@ -225,10 +254,13 @@ describe("the sidebar's search", () => {
     await act(async () => {
       await useSessionStore.getState().loadAll();
     });
+    // The search is sent with the refresh, which does not wait for it.
     expect(searches).toEqual(["lab", "lab"]);
-    expect(useSessionStore.getState().searchResults).toEqual({
-      folders: [renamed],
-      sessions: [labProd, added],
+    await waitFor(() => {
+      expect(useSessionStore.getState().searchResults).toEqual({
+        folders: [renamed],
+        sessions: [labProd, added],
+      });
     });
     expect(rows()).toEqual(["0:Laboratory", "1:lab-prod", "1:lab-two", "0:lab-prod", "0:lab-two"]);
   });

@@ -1141,7 +1141,7 @@ export function SessionSidebar(): React.JSX.Element {
           value={searchQuery}
           onChange={(value) => {
             if (value) {
-              searchSessions(value).catch(noop);
+              searchSessions(value);
             } else {
               clearSearch();
             }

@@ -2179,6 +2179,7 @@ pub fn run() {
         .manage(SshState::default())
         .manage(TelnetState::default())
         .manage(TerminalReadyState::default())
+        .manage(commands::SearchGate::default())
         .on_page_load(|webview, payload| {
             // Only the main window holds terminal tabs. A load there, a
             // reload included, starts the frontend over without them. Any
