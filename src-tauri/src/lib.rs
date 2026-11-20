@@ -3198,8 +3198,10 @@ mod tests {
 
     /// The search against a real server: a role finds its own folders and
     /// sessions and other users' shared ones, by `ILIKE` and with the query
-    /// taken as written. Same server as for `shared_rows_keep_their_owner`;
-    /// run with `--ignored search_finds`.
+    /// taken as written, and a statement of a search gives up at the
+    /// search's own time limit, or at a shorter one that is in effect, which
+    /// takes some 25 s to see. Same server as for
+    /// `shared_rows_keep_their_owner`; run with `--ignored search_finds`.
     #[tokio::test]
     #[ignore = "needs a throwaway PostgreSQL server in SHELLSTATION_TEST_PG_URL"]
     async fn a_search_finds_what_the_role_can_see() {
@@ -3218,7 +3220,7 @@ mod tests {
         // it, the app's own included.
         let pool = PgPoolOptions::new()
             .max_connections(1)
-            .connect_with(opts)
+            .connect_with(opts.clone())
             .await
             .unwrap();
         prepare_rls_test_database(&pool, &admin, &alice, &bob).await;
@@ -3307,6 +3309,128 @@ mod tests {
         pg_exec(&pool, &format!("SET ROLE {bob}")).await.unwrap();
         assert_eq!(folders("lab").await, ["lab secret", "Lab shared"]);
         assert_eq!(sessions("lab").await, ["lab-db", "lab-gw"]);
+
+        // What the app searches by is the two together, and nothing for a
+        // query with a NUL in it. The connection has no limit for a
+        // statement or for a lock from here on, whatever the server sets,
+        // which is not what the app's own have: those give up on a lock
+        // after 5 s.
+        for sql in ["SET statement_timeout = 0", "SET lock_timeout = 0"] {
+            pg_exec(&pool, sql).await.expect(sql);
+        }
+        let search_finds = |query: &'static str| {
+            let app = &app;
+            async move {
+                let (folders, sessions) = app.search(query).await.unwrap();
+                (
+                    folders.into_iter().map(|f| f.name).collect::<Vec<_>>(),
+                    sessions.into_iter().map(|s| s.name).collect::<Vec<_>>(),
+                )
+            }
+        };
+        let both = (
+            vec!["lab secret".to_string(), "Lab shared".to_string()],
+            vec!["lab-db".to_string(), "lab-gw".to_string()],
+        );
+        assert_eq!(search_finds("lab").await, both);
+        assert_eq!(search_finds("lab\0").await, (Vec::new(), Vec::new()));
+        // The time limit of its statements ended with them.
+        let limit = || async {
+            sqlx::query_scalar::<_, String>("SHOW statement_timeout")
+                .fetch_one(&pool)
+                .await
+                .unwrap()
+        };
+        assert_eq!(limit().await, "0");
+
+        // A statement of a search gives up at the search's own limit. With
+        // the folders locked by another session, and no other limit in
+        // effect, the search's first statement would wait without end. So
+        // that a search without its limit fails this test, and does not
+        // keep it waiting for a lock that is the test's own, a search is
+        // given half a minute here. What comes back is how the search
+        // failed and how long that took.
+        let other = PgPoolOptions::new()
+            .max_connections(1)
+            .connect_with(opts)
+            .await
+            .unwrap();
+        let search_meets_lock = || async {
+            let mut holding = other.begin().await.unwrap();
+            sqlx::query("LOCK TABLE folders IN ACCESS EXCLUSIVE MODE")
+                .execute(&mut *holding)
+                .await
+                .unwrap();
+            let started = std::time::Instant::now();
+            let answer =
+                tokio::time::timeout(std::time::Duration::from_secs(30), app.search("lab")).await;
+            let waited = started.elapsed();
+            holding.rollback().await.unwrap();
+            let failed = answer
+                .expect("a search that met a lock had not given up after 30 s")
+                .unwrap_err();
+            (failed, waited)
+        };
+        let seconds = std::time::Duration::from_secs;
+        let (failed, waited) = search_meets_lock().await;
+        assert!(
+            failed.starts_with("Failed to search folders: ")
+                && failed.contains("statement timeout"),
+            "{failed}"
+        );
+        assert!(waited >= seconds(9) && waited < seconds(15), "{waited:?}");
+        // The search's transaction is over: the connection has no limit
+        // again, is bob's still, and the next search finds what it should.
+        assert_eq!(limit().await, "0");
+        assert_eq!(search_finds("lab").await, both);
+
+        // A shorter limit that is in effect stays, for the search and after.
+        pg_exec(&pool, "SET statement_timeout = '3s'")
+            .await
+            .unwrap();
+        let (failed, waited) = search_meets_lock().await;
+        assert!(failed.contains("statement timeout"), "{failed}");
+        assert!(waited >= seconds(2) && waited < seconds(9), "{waited:?}");
+        assert_eq!(limit().await, "3s");
+        assert_eq!(search_finds("lab").await, both);
+
+        // A longer one, which is what the app's own connections have, gives
+        // way to the search's, and is back afterwards.
+        pg_exec(&pool, "SET statement_timeout = '60s'")
+            .await
+            .unwrap();
+        let (failed, waited) = search_meets_lock().await;
+        assert!(failed.contains("statement timeout"), "{failed}");
+        assert!(waited >= seconds(9) && waited < seconds(15), "{waited:?}");
+        assert_eq!(limit().await, "1min");
+        assert_eq!(search_finds("lab").await, both);
+
+        // With a time limit for locks that is shorter, as the app's own
+        // connections have one, a search that waits for a lock gives up at
+        // that.
+        pg_exec(&pool, "SET lock_timeout = '2s'").await.unwrap();
+        let (failed, waited) = search_meets_lock().await;
+        assert!(
+            failed.starts_with("Failed to search folders: ") && failed.contains("lock timeout"),
+            "{failed}"
+        );
+        assert!(waited >= seconds(1) && waited < seconds(9), "{waited:?}");
+        assert_eq!(limit().await, "1min");
+        assert_eq!(search_finds("lab").await, both);
+
+        // What the search sets within its transaction, seen from inside
+        // one.
+        let mut tx = pool.begin().await.unwrap();
+        db::postgres::limit_statement_time(&mut tx, 10_000)
+            .await
+            .unwrap();
+        let within: String = sqlx::query_scalar("SHOW statement_timeout")
+            .fetch_one(&mut *tx)
+            .await
+            .unwrap();
+        assert_eq!(within, "10s");
+        tx.commit().await.unwrap();
+        assert_eq!(limit().await, "1min");
     }
 
     /// `check_postgres_rls` against a real server: it finds nothing missing

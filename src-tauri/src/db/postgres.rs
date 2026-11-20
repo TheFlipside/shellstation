@@ -98,6 +98,52 @@ impl PostgresProvider {
     }
 }
 
+/// The longest a statement of a search may take, in milliseconds.
+///
+/// A search reads every folder and every session the role can see, since no
+/// index serves its pattern, and the search for the next text waits for it
+/// (`SearchGate` in `commands/session.rs`). What it finds is for a list in
+/// the sidebar: an answer that takes longer than this is of no use, and a
+/// statement that goes on for the minute the app's other statements have
+/// ([`SESSION_TIMEOUTS`]) loads the shared server for that long and keeps
+/// the next search waiting.
+const SEARCH_STATEMENT_TIMEOUT_MS: i64 = 10_000;
+
+/// Let no statement of the transaction on `conn` take longer than `limit_ms`
+/// milliseconds, which is more than none. A shorter limit that is in
+/// effect, the server's or the app's, stays; the limit set here ends with
+/// the transaction, so `conn` has to be in one. Nothing here sees to that:
+/// outside of a transaction the limit is gone as soon as it is set, without
+/// an error, and nothing is limited.
+///
+/// What is in effect is read as the number of milliseconds that
+/// `pg_settings` gives as text, and compared here, so that the statement
+/// compares nothing but two `text`s. The two statements of this function
+/// run before the limit is set, with the limit that is in effect.
+pub(crate) async fn limit_statement_time(
+    conn: &mut sqlx::PgConnection,
+    limit_ms: i64,
+) -> DbResult<()> {
+    debug_assert!(limit_ms > 0, "a limit of 0 is none");
+    let current: String = sqlx::query_scalar(
+        "SELECT setting FROM pg_catalog.pg_settings WHERE name = 'statement_timeout'",
+    )
+    .fetch_one(&mut *conn)
+    .await
+    .map_err(|e| format!("Failed to read the statement timeout: {e}"))?;
+    // `0` is no limit; so is anything that is no number.
+    let current = current.parse::<i64>().unwrap_or(0);
+    if current > 0 && current <= limit_ms {
+        return Ok(());
+    }
+    sqlx::query("SELECT pg_catalog.set_config('statement_timeout', $1, true)")
+        .bind(limit_ms.to_string())
+        .execute(&mut *conn)
+        .await
+        .map_err(|e| format!("Failed to set the statement timeout: {e}"))?;
+    Ok(())
+}
+
 fn parse_uuid(s: &str) -> DbResult<Uuid> {
     Uuid::parse_str(s).map_err(|e| format!("Invalid UUID '{s}': {e}"))
 }
@@ -242,6 +288,63 @@ fn row_to_credential(row: &PgRow) -> DbResult<Credential> {
     })
 }
 
+/// The folders whose name matches `pattern`, which is one of
+/// [`search_pattern`]'s. RLS limits this to the folders the role can see:
+/// its own and the shared ones, as `list_folders`.
+async fn folders_matching<'e, E>(executor: E, pattern: &str) -> DbResult<Vec<Folder>>
+where
+    E: sqlx::PgExecutor<'e>,
+{
+    let rows = sqlx::query(
+        "SELECT id, name, parent_id, sort_order, owner, visibility \
+         FROM folders \
+         WHERE name ILIKE $1 ESCAPE '\\' \
+         ORDER BY sort_order ASC, name ASC",
+    )
+    .bind(pattern)
+    .fetch_all(executor)
+    .await
+    .map_err(|e| format!("Failed to search folders: {e}"))?;
+
+    rows.iter().map(row_to_folder).collect()
+}
+
+/// The sessions that match `pattern`, which is one of [`search_pattern`]'s,
+/// in their name, host, user name or tags. RLS limits this to the sessions
+/// the role can see.
+async fn sessions_matching<'e, E>(executor: E, pattern: &str) -> DbResult<Vec<Session>>
+where
+    E: sqlx::PgExecutor<'e>,
+{
+    let rows = sqlx::query(
+        "SELECT id, folder_id, name, hostname, port, protocol, username, auth_method, jump_host_id, tags, icon, sort_order, highlight_profile_id, credential_profile_id, legacy_algorithms, owner, visibility, login_sequence_id \
+         FROM sessions \
+         WHERE name ILIKE $1 ESCAPE '\\' \
+            OR hostname ILIKE $1 ESCAPE '\\' \
+            OR username ILIKE $1 ESCAPE '\\' \
+            OR tags ILIKE $1 ESCAPE '\\' \
+         ORDER BY sort_order ASC, name ASC",
+    )
+    .bind(pattern)
+    .fetch_all(executor)
+    .await
+    .map_err(|e| format!("Failed to search sessions: {e}"))?;
+
+    rows.iter().map(row_to_session).collect()
+}
+
+/// The two statements of a search, in the transaction on `conn` and with
+/// the time limit of a search's statements.
+async fn search_within(
+    conn: &mut sqlx::PgConnection,
+    pattern: &str,
+) -> DbResult<(Vec<Folder>, Vec<Session>)> {
+    limit_statement_time(&mut *conn, SEARCH_STATEMENT_TIMEOUT_MS).await?;
+    let folders = folders_matching(&mut *conn, pattern).await?;
+    let sessions = sessions_matching(&mut *conn, pattern).await?;
+    Ok((folders, sessions))
+}
+
 #[async_trait]
 impl DatabaseProvider for PostgresProvider {
     // ── Folders ──────────────────────────────────────────────────────────
@@ -341,24 +444,51 @@ impl DatabaseProvider for PostgresProvider {
         rows.iter().map(row_to_folder).collect()
     }
 
-    // RLS limits this to the folders the role can see: its own and the
-    // shared ones, as `list_folders`.
     async fn search_folders(&self, query: &str) -> DbResult<Vec<Folder>> {
         let Some(pattern) = search_pattern(query) else {
             return Ok(Vec::new());
         };
-        let rows = sqlx::query(
-            "SELECT id, name, parent_id, sort_order, owner, visibility \
-             FROM folders \
-             WHERE name ILIKE $1 ESCAPE '\\' \
-             ORDER BY sort_order ASC, name ASC",
-        )
-        .bind(&pattern)
-        .fetch_all(&self.pool)
-        .await
-        .map_err(|e| format!("Failed to search folders: {e}"))?;
+        folders_matching(&self.pool, &pattern).await
+    }
 
-        rows.iter().map(row_to_folder).collect()
+    /// One transaction for the two statements, for the time limit a
+    /// search's statements have ([`SEARCH_STATEMENT_TIMEOUT_MS`]), which
+    /// ends with it. They are still two reads, each of the database as it is
+    /// when it runs, and they hold one of the pool's connections between
+    /// them. The transaction also keeps the lock that the read of `folders`
+    /// takes until its end, so through the read of `sessions`, where each
+    /// statement by itself lets its lock go when it is done.
+    ///
+    /// A statement that waits for a lock another session holds gives up
+    /// before the limit as a rule, at the session's `lock_timeout`, which is
+    /// shorter unless the server sets a longer one ([`SESSION_TIMEOUTS`]).
+    /// The transaction's begin and end and the two statements that read and
+    /// set the limit have the limit the app's other statements have.
+    async fn search(&self, query: &str) -> DbResult<(Vec<Folder>, Vec<Session>)> {
+        let Some(pattern) = search_pattern(query) else {
+            return Ok((Vec::new(), Vec::new()));
+        };
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| format!("Failed to begin the search: {e}"))?;
+        let found = search_within(&mut tx, &pattern).await;
+        // Ended now, and not when the connection is next used: a statement
+        // that ran into its limit leaves the transaction open on the
+        // server. The transaction wrote nothing, so an end that fails takes
+        // nothing from a search that found: what it read is whole. sqlx
+        // then rolls the transaction back as the connection goes back to
+        // the pool, which drops a connection that is gone.
+        let ended = if found.is_ok() {
+            tx.commit().await
+        } else {
+            tx.rollback().await
+        };
+        if let Err(e) = ended {
+            tracing::warn!("The search's transaction was not ended: {e}");
+        }
+        found
     }
 
     async fn rename_folder(&self, id: Uuid, name: &str) -> DbResult<()> {
@@ -744,21 +874,7 @@ impl DatabaseProvider for PostgresProvider {
         let Some(pattern) = search_pattern(query) else {
             return Ok(Vec::new());
         };
-        let rows = sqlx::query(
-            "SELECT id, folder_id, name, hostname, port, protocol, username, auth_method, jump_host_id, tags, icon, sort_order, highlight_profile_id, credential_profile_id, legacy_algorithms, owner, visibility, login_sequence_id \
-             FROM sessions \
-             WHERE name ILIKE $1 ESCAPE '\\' \
-                OR hostname ILIKE $1 ESCAPE '\\' \
-                OR username ILIKE $1 ESCAPE '\\' \
-                OR tags ILIKE $1 ESCAPE '\\' \
-             ORDER BY sort_order ASC, name ASC",
-        )
-        .bind(&pattern)
-        .fetch_all(&self.pool)
-        .await
-        .map_err(|e| format!("Failed to search sessions: {e}"))?;
-
-        rows.iter().map(row_to_session).collect()
+        sessions_matching(&self.pool, &pattern).await
     }
 
     // ── Reordering ─────────────────────────────────────────────────────

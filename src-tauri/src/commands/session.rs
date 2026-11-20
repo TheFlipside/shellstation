@@ -585,11 +585,11 @@ fn capped_query(query: &str) -> &str {
 }
 
 /// Folders and sessions for one query. The two statements run one after the
-/// other, so a search holds one of the pool's connections at a time.
+/// other, so a search holds one of the pool's connections at a time, and
+/// against `PostgreSQL` each has the time limit of a search's statements
+/// (`DatabaseProvider::search`).
 async fn search(db: &dyn DatabaseProvider, query: &str) -> Result<SearchResults, String> {
-    let query = capped_query(query);
-    let folders = db.search_folders(query).await?;
-    let sessions = db.search_sessions(query).await?;
+    let (folders, sessions) = db.search(capped_query(query)).await?;
     Ok(SearchResults { folders, sessions })
 }
 
@@ -607,17 +607,22 @@ const SEARCH_FAILED: &str = "Search failed";
 
 /// How long a search keeps its turn at the most.
 ///
-/// With the limits the app sets for its `PostgreSQL` sessions
-/// (`db::postgres::pool_options`), each of a search's two statements waits
-/// up to 5 s for a connection and runs up to 60 s, which is 130 s. The rest
-/// is for the read of the local database that follows them in `PostgreSQL`
-/// mode, which has no limit of its own and takes a moment as a rule. A
-/// search is therefore done before this as a rule where those limits are in
-/// effect and the server answers. It is not where the server sets a longer
-/// `statement_timeout`, which the app keeps, where a connection pooler does
-/// not carry the limits along, or where a connection has gone silent: a
-/// search can then outlast its turn ([`SearchGate::run`]).
-const SEARCH_TURN_LIMIT: Duration = Duration::from_secs(150);
+/// Against `PostgreSQL` a search waits up to 5 s for a connection
+/// (`db::postgres::pool_options`), and each of its two statements runs up to
+/// 10 s, the limit a search's statements have, which is 25 s. The other
+/// steps do not have that limit. The transaction's begin and end and the
+/// two statements that read and set the limit have the limit of the app's
+/// other statements, a minute as a rule, and none where a connection
+/// pooler drops the session's settings; the pool's check of the connection
+/// when it goes back, and the read of the local database that follows,
+/// have none. They touch none of the app's tables in the shared database
+/// and wait for no lock there, and take a moment as a rule, which the rest
+/// of the turn is for. So a search that the server answers is done before
+/// this as a rule, and not always: on a server that takes long over those
+/// steps as well, and on a connection that has gone silent, a search
+/// outlasts its turn and is given up while it goes on
+/// ([`SearchGate::run`]).
+const SEARCH_TURN_LIMIT: Duration = Duration::from_secs(60);
 
 /// How many searches there are at the most that have not ended: the one
 /// that has its turn, and those that were given up at
@@ -630,8 +635,8 @@ const SEARCHES_UNENDED_AT_MOST: usize = 3;
 ///
 /// A search reads every folder and every session the user can see: its
 /// pattern begins with a wildcard, which no index serves. In `PostgreSQL`
-/// mode those are statements against the shared database, each on one of the
-/// pool's ten connections and for as long as `statement_timeout` lets it
+/// mode those are statements against the shared database, on one of the
+/// pool's ten connections and for as long as their time limit lets them
 /// run. Without the gate, searches that are asked for faster than the
 /// database answers them run side by side: they load the server by their
 /// number, and can take every connection of the pool, so that the user's

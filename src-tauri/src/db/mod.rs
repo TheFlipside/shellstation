@@ -122,6 +122,20 @@ pub trait DatabaseProvider: Send + Sync {
     async fn move_session(&self, id: Uuid, new_folder_id: Uuid) -> DbResult<()>;
     async fn delete_session(&self, id: Uuid) -> DbResult<()>;
     async fn search_sessions(&self, query: &str) -> DbResult<Vec<Session>>;
+    /// What a search for `query` finds: the folders of
+    /// [`Self::search_folders`] and the sessions of
+    /// [`Self::search_sessions`], read one after the other. This is what the
+    /// app searches by. As it is here it sets no limit to the two reads,
+    /// which is how `SQLite` is searched, where the database is the user's
+    /// own file. The `PostgreSQL` provider has its own, in which the two
+    /// statements have a time limit shorter than the one the app's other
+    /// statements have; a provider for a database that is shared needs the
+    /// same.
+    async fn search(&self, query: &str) -> DbResult<(Vec<Folder>, Vec<Session>)> {
+        let folders = self.search_folders(query).await?;
+        let sessions = self.search_sessions(query).await?;
+        Ok((folders, sessions))
+    }
 
     // ── Reordering ───────────────────────────────────────────────────────
 

@@ -22,6 +22,7 @@ use sqlx::{Row, SqlitePool};
 use uuid::Uuid;
 
 use super::models::{Folder, Session};
+use super::postgres::limit_statement_time;
 use super::DbResult;
 use crate::highlight::{HighlightRule, MAX_RULES_PER_PROFILE};
 
@@ -454,7 +455,7 @@ async fn read_central(pg: &sqlx::PgPool) -> DbResult<Central> {
         .begin()
         .await
         .map_err(|e| format!("Failed to begin transaction: {e}"))?;
-    limit_statement_time(&mut tx).await?;
+    limit_statement_time(&mut tx, TAKE_OVER_STATEMENT_TIMEOUT_MS).await?;
 
     let rows = sqlx::query(
         "SELECT id, name, rules, sort_order FROM ( \
@@ -518,34 +519,6 @@ async fn read_central(pg: &sqlx::PgPool) -> DbResult<Central> {
         sessions,
         not_read,
     })
-}
-
-/// Let no statement of the transaction on `conn` take longer than
-/// [`TAKE_OVER_STATEMENT_TIMEOUT_MS`]. A shorter limit that is in effect, the
-/// server's or the app's, stays; the limit set here ends with the
-/// transaction.
-///
-/// What is in effect is read as the number of milliseconds that
-/// `pg_settings` gives as text, and compared here, so that the statement
-/// compares nothing but two `text`s.
-async fn limit_statement_time(conn: &mut sqlx::PgConnection) -> DbResult<()> {
-    let current: String = sqlx::query_scalar(
-        "SELECT setting FROM pg_catalog.pg_settings WHERE name = 'statement_timeout'",
-    )
-    .fetch_one(&mut *conn)
-    .await
-    .map_err(|e| format!("Failed to read the statement timeout: {e}"))?;
-    // `0` is no limit; so is anything that is no number.
-    let current = current.parse::<i64>().unwrap_or(0);
-    if current > 0 && current <= TAKE_OVER_STATEMENT_TIMEOUT_MS {
-        return Ok(());
-    }
-    sqlx::query("SELECT pg_catalog.set_config('statement_timeout', $1, true)")
-        .bind(TAKE_OVER_STATEMENT_TIMEOUT_MS.to_string())
-        .execute(&mut *conn)
-        .await
-        .map_err(|e| format!("Failed to set the statement timeout: {e}"))?;
-    Ok(())
 }
 
 /// Of `sessions`, the IDs of those in `folder` and in the folders below it,
