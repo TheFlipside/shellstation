@@ -1,24 +1,37 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
 import {
   DndContext,
-  DragOverlay,
   PointerSensor,
-  KeyboardSensor,
   useSensor,
   useSensors,
   type DragStartEvent,
-  type DragEndEvent,
-  type Modifier,
 } from "@dnd-kit/core";
 import { isJumpHostCandidate, jumpHostForCopy, useSessionStore } from "../stores/sessionStore";
 import type { Folder, Session } from "../stores/sessionStore";
 import { useToastStore } from "../stores/toastStore";
-import { SessionTree, indexTree, parseDndId, flattenVisibleItems } from "./SessionTree";
+import {
+  SessionTree,
+  TreeDragContext,
+  indexTree,
+  parseDndId,
+  flattenVisibleItems,
+  type TreeDrag,
+} from "./SessionTree";
+import {
+  canDrag,
+  dropAt,
+  dropPointAt,
+  dropTree,
+  sameDrop,
+  type DragItem,
+  type Drop,
+} from "../treeDrop";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
-import { dialogOpen } from "./DialogKeys";
+import { dialogOpen, useOnDialogOpen } from "./DialogKeys";
 import { FolderDialog } from "./FolderDialog";
 import { MoveDialog } from "./MoveDialog";
 import { SearchField } from "./SearchField";
@@ -64,6 +77,20 @@ interface MoveTarget {
   id: string;
   type: "folder" | "session";
 }
+
+/**
+ * How long a dragged item has to be held over a closed folder before the
+ * folder opens, in milliseconds, so that a folder inside it can be reached
+ * in the same drag.
+ */
+export const DRAG_OPEN_MS = 700;
+
+/**
+ * Where the dragged item's preview is, from the pointer, in pixels: to the
+ * right of it and below, so that it covers neither the row the pointer is on
+ * nor the line that says where a drop goes.
+ */
+const DRAG_PREVIEW_OFFSET = { x: 12, y: 16 };
 
 export function SessionSidebar(): React.JSX.Element {
   const { t } = useTranslation();
@@ -134,13 +161,19 @@ export function SessionSidebar(): React.JSX.Element {
     id: string;
     name: string;
   } | null>(null);
-  const [activeItem, setActiveItem] = useState<{
-    type: "folder" | "session";
-    id: string;
-  } | null>(null);
+  // The item being dragged, and what dropping it where the pointer is would
+  // do, which is what the tree marks. The ref has the drop that the state
+  // was last set to, to tell whether a new one differs.
+  const [activeItem, setActiveItem] = useState<DragItem | null>(null);
+  const [drop, setDrop] = useState<Drop | null>(null);
+  const dropRef = useRef<Drop | null>(null);
+  // Where the pointer was last, in the window.
+  const pointer = useRef<{ x: number; y: number } | null>(null);
+  const previewRef = useRef<HTMLDivElement | null>(null);
 
-  // Track whether a reorder is in progress to avoid double-firing.
-  const reordering = useRef(false);
+  // Whether a drop is being carried out. Nothing is picked up until the tree
+  // that comes of it is there: a drop would be judged by the tree before it.
+  const [placing, setPlacing] = useState(false);
   const treeRef = useRef<HTMLDivElement>(null);
 
   // One-shot scroll target. Set by handlers that mutate the tree (delete,
@@ -175,36 +208,33 @@ export function SessionSidebar(): React.JSX.Element {
     }
   }, [searchResults]);
 
-  const sensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
-    useSensor(KeyboardSensor),
-  );
+  // An item is picked up with the pointer alone. The library's keyboard
+  // sensor picks one up on Enter and Space, which are the tree's own keys:
+  // Enter on a row that had been clicked connected or opened it and picked
+  // it up as well, to be dropped by whatever Enter or Space came next.
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
 
   const { autoRefreshInterval, uiScale } = useSettingsStore();
+  const zoom = uiScale / 100;
 
-  // Compensate for CSS zoom on the sidebar container so dnd-kit positions
-  // the drag overlay correctly at non-100% UI scale. Two coupled effects:
-  //   - dnd-kit reports draggingNodeRect in screen pixels (post-zoom), so
-  //     the overlay is placed too far down/right by rect * (zoom - 1).
-  //   - dnd-kit reports the cursor transform pre-multiplied by zoom, so the
-  //     overlay translates further than the cursor each frame.
-  // The combined correction divides (transform - rect * (zoom - 1)) by zoom,
-  // cancelling both the initial-position excess and the movement
-  // amplification at once.
-  const zoomModifier = useCallback<Modifier>(
-    ({ transform, draggingNodeRect }) => {
-      const zoom = uiScale / 100;
-      const dx = draggingNodeRect ? draggingNodeRect.left * (zoom - 1) : 0;
-      const dy = draggingNodeRect ? draggingNodeRect.top * (zoom - 1) : 0;
-      return {
-        ...transform,
-        x: (transform.x - dx) / zoom,
-        y: (transform.y - dy) / zoom,
-      };
+  // The preview is outside the sidebar, which is scaled with CSS `zoom`, and
+  // is placed by the pointer's own coordinates, so no scale comes between
+  // the two. It is scaled to the sidebar's size by a transform of its own.
+  const placePreview = useCallback((): void => {
+    const preview = previewRef.current;
+    const at = pointer.current;
+    if (!preview || !at) return;
+    const x = String(at.x + DRAG_PREVIEW_OFFSET.x);
+    const y = String(at.y + DRAG_PREVIEW_OFFSET.y);
+    preview.style.transform = `translate(${x}px, ${y}px) scale(${String(zoom)})`;
+  }, [zoom]);
+  const setPreview = useCallback(
+    (preview: HTMLDivElement | null): void => {
+      previewRef.current = preview;
+      placePreview();
     },
-    [uiScale],
+    [placePreview],
   );
-  const dndModifiers = useMemo(() => [zoomModifier], [zoomModifier]);
 
   const loadHighlightProfiles = useHighlightStore((s) => s.loadProfiles);
   const loadCredentialProfiles = useCredentialProfilesStore((s) => s.loadAll);
@@ -522,88 +552,6 @@ export function SessionSidebar(): React.JSX.Element {
       setCtx({ x: e.clientX, y: e.clientY, id, type });
     },
     [],
-  );
-
-  const handleDragStart = useCallback((event: DragStartEvent): void => {
-    const parsed = parseDndId(String(event.active.id));
-    if (parsed) setActiveItem(parsed);
-  }, []);
-
-  const handleDragEnd = useCallback(
-    (event: DragEndEvent): void => {
-      setActiveItem(null);
-      const { active, over } = event;
-      if (!over || active.id === over.id || reordering.current) return;
-
-      const activeParsed = parseDndId(String(active.id));
-      const overParsed = parseDndId(String(over.id));
-      if (!activeParsed || !overParsed) return;
-
-      // Only allow reordering among same type and same parent.
-      if (activeParsed.type !== overParsed.type) return;
-
-      reordering.current = true;
-
-      if (activeParsed.type === "folder") {
-        const activeFolder = folders.find((f) => f.id === activeParsed.id);
-        const overFolder = folders.find((f) => f.id === overParsed.id);
-        if (!activeFolder || !overFolder) {
-          reordering.current = false;
-          return;
-        }
-        // Only reorder within same parent.
-        if (activeFolder.parent_id !== overFolder.parent_id) {
-          reordering.current = false;
-          return;
-        }
-        const parentId = activeFolder.parent_id;
-        const siblings = folders.filter((f) => f.parent_id === parentId);
-        const ids = siblings.map((f) => f.id);
-        const fromIdx = ids.indexOf(activeParsed.id);
-        const toIdx = ids.indexOf(overParsed.id);
-        if (fromIdx === -1 || toIdx === -1) {
-          reordering.current = false;
-          return;
-        }
-        ids.splice(fromIdx, 1);
-        ids.splice(toIdx, 0, activeParsed.id);
-        store
-          .reorderFolders(parentId, ids)
-          .catch(noop)
-          .finally(() => {
-            reordering.current = false;
-          });
-      } else {
-        const activeSession = sessions.find((s) => s.id === activeParsed.id);
-        const overSession = sessions.find((s) => s.id === overParsed.id);
-        if (!activeSession || !overSession) {
-          reordering.current = false;
-          return;
-        }
-        if (activeSession.folder_id !== overSession.folder_id) {
-          reordering.current = false;
-          return;
-        }
-        const folderId = activeSession.folder_id;
-        const siblings = sessions.filter((s) => s.folder_id === folderId);
-        const ids = siblings.map((s) => s.id);
-        const fromIdx = ids.indexOf(activeParsed.id);
-        const toIdx = ids.indexOf(overParsed.id);
-        if (fromIdx === -1 || toIdx === -1) {
-          reordering.current = false;
-          return;
-        }
-        ids.splice(fromIdx, 1);
-        ids.splice(toIdx, 0, activeParsed.id);
-        store
-          .reorderSessions(folderId, ids)
-          .catch(noop)
-          .finally(() => {
-            reordering.current = false;
-          });
-      }
-    },
-    [folders, sessions, store],
   );
 
   const handleSortRootAlphabetically = useCallback((): void => {
@@ -1046,6 +994,129 @@ export function SessionSidebar(): React.JSX.Element {
   // lists that a search found.
   const treeIndex = useMemo(() => indexTree(folders, sessions), [folders, sessions]);
 
+  // ── Drag and drop ──────────────────────────────────────────────────
+
+  const dropData = useMemo(
+    () => dropTree(folders, sessions, treeIndex, expandedFolderIds, isPgMode, pgUser),
+    [folders, sessions, treeIndex, expandedFolderIds, isPgMode, pgUser],
+  );
+  const searching = searchResults !== null;
+
+  const endDrag = useCallback((): void => {
+    pointer.current = null;
+    dropRef.current = null;
+    setDrop(null);
+    setActiveItem(null);
+  }, []);
+
+  const handleDragStart = useCallback((event: DragStartEvent): void => {
+    const parsed = parseDndId(String(event.active.id));
+    // Nothing is picked up under a dialog, as one that opened between the
+    // press and the first move.
+    if (!parsed || dialogOpen()) return;
+    const from = event.activatorEvent;
+    pointer.current = from instanceof MouseEvent ? { x: from.clientX, y: from.clientY } : null;
+    setActiveItem(parsed);
+  }, []);
+
+  // What a drop of the dragged item would do where the pointer is now. A
+  // dialog covers the window, so nothing is under the pointer but the
+  // dialog; the question is not left to that alone.
+  const dropNow = useCallback((): Drop | null => {
+    const at = pointer.current;
+    const tree = treeRef.current;
+    // The tree is not what a search lists, where nothing is dropped.
+    if (!activeItem || !at || !tree || searching || dialogOpen()) return null;
+    const point = dropPointAt(at.x, at.y, tree, zoom);
+    return point ? dropAt(activeItem, point, dropData) : null;
+  }, [activeItem, dropData, searching, zoom]);
+
+  // A dialog that opens while an item is held ends the drag: the release
+  // that follows, under the dialog, drops nothing.
+  useOnDialogOpen(endDrag);
+
+  const handleDragEnd = useCallback((): void => {
+    // Asked again at the release, and not taken from the last move: the
+    // tree may have been read again since, and what was under the pointer
+    // then may not be now.
+    const dropped = dropNow();
+    endDrag();
+    if (!dropped || placing) return;
+    setPlacing(true);
+    // Within the chain, so that whatever comes of it ends in the `finally`.
+    Promise.resolve()
+      .then(() => store.applyDrop(dropped))
+      .then(() => {
+        // Shown where it is now.
+        if (dropped.parentId !== null) expandFolder(dropped.parentId);
+        selectItem(dropped.item.id, dropped.item.type);
+        setPendingScrollId(dropped.item.id);
+      })
+      .catch((err: unknown) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        useToastStore.getState().addToast(msg);
+      })
+      .finally(() => {
+        setPlacing(false);
+      });
+  }, [dropNow, endDrag, placing, store, expandFolder, selectItem]);
+
+  // While an item is dragged: where the pointer is, and what a drop there
+  // would do. The tree scrolls under a pointer that is held still, and it
+  // changes, as when a folder opens, so both are a reason to look again.
+  useEffect(() => {
+    if (!activeItem) return;
+    const tree = treeRef.current;
+    const judge = (): void => {
+      const next = dropNow();
+      if (sameDrop(dropRef.current, next)) return;
+      dropRef.current = next;
+      setDrop(next);
+    };
+    const handleMove = (e: PointerEvent): void => {
+      if (!e.isPrimary) return;
+      pointer.current = { x: e.clientX, y: e.clientY };
+      placePreview();
+      judge();
+    };
+    document.addEventListener("pointermove", handleMove);
+    tree?.addEventListener("scroll", judge, { passive: true });
+    judge();
+    return () => {
+      document.removeEventListener("pointermove", handleMove);
+      tree?.removeEventListener("scroll", judge);
+    };
+  }, [activeItem, dropNow, placePreview]);
+
+  // A closed folder that an item is held over, to go into it, opens. Only
+  // that folder's being closed counts, so that a folder opened or closed
+  // elsewhere meanwhile does not start the time over.
+  const intoFolder = drop?.mark.kind === "into" ? drop.mark.folderId : null;
+  const heldOver = intoFolder !== null && !expandedFolderIds.has(intoFolder) ? intoFolder : null;
+  useEffect(() => {
+    if (heldOver === null) return;
+    const timer = window.setTimeout(() => {
+      expandFolder(heldOver);
+    }, DRAG_OPEN_MS);
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [heldOver, expandFolder]);
+
+  const dropMark = drop?.mark ?? null;
+  const treeDrag = useMemo<TreeDrag>(
+    () => ({
+      canDrag: (item) => !placing && canDrag(item, dropData),
+      dragged: activeItem,
+      mark: dropMark,
+    }),
+    [placing, dropData, activeItem, dropMark],
+  );
+
+  // The dragged item, for its preview. One that is gone from the tree while
+  // it is held, as after a refresh, has none.
+  const dragged = getActiveItemData();
+
   // The folders a search found, held to the same rule: one that the tree
   // does not show is not listed.
   const foundFolders = useMemo(
@@ -1166,12 +1237,14 @@ export function SessionSidebar(): React.JSX.Element {
       </div>
       <DndContext
         sensors={sensors}
-        modifiers={dndModifiers}
         onDragStart={handleDragStart}
         onDragEnd={handleDragEnd}
+        onDragCancel={endDrag}
       >
         <div
-          className="sidebar-tree"
+          className={`sidebar-tree${activeItem ? " sidebar-tree-dragging" : ""}${
+            dropMark?.kind === "end" ? " sidebar-tree-drop-end" : ""
+          }`}
           role="tree"
           tabIndex={0}
           onKeyDown={handleTreeKeyDown}
@@ -1189,13 +1262,15 @@ export function SessionSidebar(): React.JSX.Element {
               onSessionDoubleClick={handleSessionDoubleClick}
             />
           ) : (
-            <SessionTree
-              parentId={null}
-              depth={0}
-              index={treeIndex}
-              onContextMenu={handleContextMenu}
-              onSessionDoubleClick={handleSessionDoubleClick}
-            />
+            <TreeDragContext.Provider value={treeDrag}>
+              <SessionTree
+                parentId={null}
+                depth={0}
+                index={treeIndex}
+                onContextMenu={handleContextMenu}
+                onSessionDoubleClick={handleSessionDoubleClick}
+              />
+            </TreeDragContext.Provider>
           )}
           {!searchResults && folders.length === 0 && orphanShared.length === 0 && (
             <div className="sidebar-empty">{t("sidebar.empty")}</div>
@@ -1270,35 +1345,25 @@ export function SessionSidebar(): React.JSX.Element {
             </div>
           )}
         </div>
-        {/* Under the dialogs (100 in App.css), and not at the library's
-            999: a host-key prompt can appear while an item is dragged. */}
-        <DragOverlay zIndex={95}>
-          {(() => {
-            const { folder, session } = getActiveItemData();
-            if (folder) {
-              return (
-                <div className="tree-item-drag-overlay">
-                  <span className="tree-icon">
-                    <FolderIcon />
-                  </span>
-                  <span className="tree-label">{folder.name}</span>
-                </div>
-              );
-            }
-            if (session) {
-              return (
-                <div className="tree-item-drag-overlay">
-                  <span className="tree-icon">
-                    <SessionIconComponent iconKey={session.icon} />
-                  </span>
-                  <span className="tree-label">{session.name}</span>
-                </div>
-              );
-            }
-            return null;
-          })()}
-        </DragOverlay>
       </DndContext>
+
+      {/* The dragged item's preview, beside the pointer. In the body, as the
+          context menu is: the sidebar is scaled, and what is fixed inside it
+          is placed in its units and not the window's. */}
+      {(dragged.folder ?? dragged.session) &&
+        createPortal(
+          <div ref={setPreview} className="tree-item-drag-overlay" aria-hidden="true">
+            <span className="tree-icon">
+              {dragged.session ? (
+                <SessionIconComponent iconKey={dragged.session.icon} />
+              ) : (
+                <FolderIcon />
+              )}
+            </span>
+            <span className="tree-label">{(dragged.folder ?? dragged.session)?.name}</span>
+          </div>,
+          document.body,
+        )}
 
       {ctx && (
         <ContextMenu

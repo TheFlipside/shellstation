@@ -1,8 +1,8 @@
-import React from "react";
-import { SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
-import { CSS } from "@dnd-kit/utilities";
+import React, { createContext, useContext } from "react";
+import { useDraggable } from "@dnd-kit/core";
 import type { Folder, Session } from "../stores/sessionStore";
 import { useSessionStore } from "../stores/sessionStore";
+import type { DragItem, DropMark } from "../treeDrop";
 import { FolderIcon, SharedFolderIcon, SessionIconComponent } from "./SessionIcons";
 
 /**
@@ -42,7 +42,7 @@ const NO_SESSIONS: readonly Session[] = [];
  *
  * An item can be on the page more than once there: a session under its
  * folder and as a result of its own, and a folder that was found under
- * another that was. The items of such a tree are therefore not sortable, and
+ * another that was. The items of such a tree are therefore not dragged, and
  * their drag-and-drop IDs get the ID of the folder that was found in front
  * (`of`), so that no two are alike.
  *
@@ -122,7 +122,42 @@ export function dndIdIn(resultOf: string | undefined, dndId: string): string {
   return resultOf === undefined ? dndId : `result-${resultOf}:${dndId}`;
 }
 
-function SortableFolder({
+/**
+ * What the sidebar tells the rows of its tree about dragging: which of them
+ * can be picked up, which one is being dragged, and where a drop would go
+ * just now (`mark`). A tree without a sidebar around it lets every row be
+ * picked up, and dims and marks none.
+ *
+ * The dragged row is the sidebar's to say, not the library's: the sidebar
+ * ends a drag when a dialog opens, while the library has it going until the
+ * button is let go.
+ */
+export interface TreeDrag {
+  canDrag: (item: DragItem) => boolean;
+  dragged: DragItem | null;
+  mark: DropMark | null;
+}
+
+const ANY_ROW: TreeDrag = { canDrag: () => true, dragged: null, mark: null };
+
+/** Whether a row is the one being dragged. */
+function isDragged(drag: TreeDrag, type: DragItem["type"], id: string): boolean {
+  return drag.dragged?.type === type && drag.dragged.id === id;
+}
+
+export const TreeDragContext = createContext<TreeDrag>(ANY_ROW);
+
+/** The classes that show a drop's mark on a row. */
+function markClasses(mark: DropMark | null, id: string): string {
+  if (mark === null) return "";
+  if (mark.kind === "into") return mark.folderId === id ? " tree-item-drop-into" : "";
+  if (mark.kind === "line" && mark.rowId === id) {
+    return mark.edge === "top" ? " tree-item-drop-before" : " tree-item-drop-after";
+  }
+  return "";
+}
+
+function DraggableFolder({
   folder,
   depth,
   index,
@@ -143,26 +178,29 @@ function SortableFolder({
   const isExpanded = !listedApart && expandedFolderIds.has(folder.id);
   const isSelected = selectedItemId === folder.id;
 
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+  const drag = useContext(TreeDragContext);
+  const draggable = result === undefined && drag.canDrag({ type: "folder", id: folder.id });
+  // The row is what is picked up; what the folder lists goes with it, dimmed.
+  // The library's attributes for a draggable are left out: they call the row
+  // a button to be picked up with the space bar, and it is a tree item that
+  // is picked up with the pointer.
+  const { listeners, setNodeRef } = useDraggable({
     id: dndIdIn(result?.of, folderDndId(folder.id)),
     data: { type: "folder" as const, id: folder.id, parentId: folder.parent_id },
-    disabled: result !== undefined,
+    disabled: !draggable,
   });
-
-  const style: React.CSSProperties = {
-    transform: CSS.Transform.toString(transform),
-    transition: transition ?? undefined,
-    opacity: isDragging ? 0.4 : undefined,
-  };
+  const marked = result === undefined ? markClasses(drag.mark, folder.id) : "";
+  const isDragging = result === undefined && isDragged(drag, "folder", folder.id);
 
   return (
-    <div ref={setNodeRef} style={style}>
+    <div style={{ opacity: isDragging ? 0.4 : undefined }}>
       <div
-        {...(result === undefined ? attributes : {})}
+        ref={setNodeRef}
         {...listeners}
-        className={`tree-item tree-folder ${isSelected ? "tree-item-selected" : ""}`}
+        className={`tree-item tree-folder${isSelected ? " tree-item-selected" : ""}${marked}`}
         style={{ "--tree-depth": depth } as React.CSSProperties}
         data-item-id={folder.id}
+        data-item-type="folder"
         onClick={() => {
           selectItem(folder.id, "folder");
         }}
@@ -223,7 +261,7 @@ function SortableFolder({
   );
 }
 
-function SortableSession({
+function DraggableSession({
   session,
   depth,
   onContextMenu,
@@ -239,26 +277,26 @@ function SortableSession({
   const { selectedItemId, selectItem } = useSessionStore();
   const isSelected = selectedItemId === session.id;
 
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+  const drag = useContext(TreeDragContext);
+  const draggable = result === undefined && drag.canDrag({ type: "session", id: session.id });
+  const { listeners, setNodeRef } = useDraggable({
     id: dndIdIn(result?.of, sessionDndId(session.id)),
     data: { type: "session" as const, id: session.id, folderId: session.folder_id },
-    disabled: result !== undefined,
+    disabled: !draggable,
   });
-
-  const style: React.CSSProperties = {
-    transform: CSS.Transform.toString(transform),
-    transition: transition ?? undefined,
-    opacity: isDragging ? 0.4 : undefined,
-  };
+  const marked = result === undefined ? markClasses(drag.mark, session.id) : "";
+  const isDragging = result === undefined && isDragged(drag, "session", session.id);
 
   return (
     <div
       ref={setNodeRef}
-      {...(result === undefined ? attributes : {})}
       {...listeners}
-      style={{ ...style, "--tree-depth": depth } as React.CSSProperties}
-      className={`tree-item tree-session ${isSelected ? "tree-item-selected" : ""}`}
+      style={
+        { opacity: isDragging ? 0.4 : undefined, "--tree-depth": depth } as React.CSSProperties
+      }
+      className={`tree-item tree-session${isSelected ? " tree-item-selected" : ""}${marked}`}
       data-item-id={session.id}
+      data-item-type="session"
       onClick={() => {
         selectItem(session.id, "session");
       }}
@@ -302,36 +340,29 @@ export function SessionTree({
   const childSessions =
     parentId === null ? NO_SESSIONS : (index.sessions.get(parentId) ?? NO_SESSIONS);
 
-  const folderDndIds = childFolders.map((f) => dndIdIn(result?.of, folderDndId(f.id)));
-  const sessionDndIds = childSessions.map((s) => dndIdIn(result?.of, sessionDndId(s.id)));
-
   return (
     <div role="group">
-      <SortableContext items={folderDndIds} strategy={verticalListSortingStrategy}>
-        {childFolders.map((folder) => (
-          <SortableFolder
-            key={folder.id}
-            folder={folder}
-            depth={depth}
-            index={index}
-            onContextMenu={onContextMenu}
-            onSessionDoubleClick={onSessionDoubleClick}
-            result={result}
-          />
-        ))}
-      </SortableContext>
-      <SortableContext items={sessionDndIds} strategy={verticalListSortingStrategy}>
-        {childSessions.map((session) => (
-          <SortableSession
-            key={session.id}
-            session={session}
-            depth={depth}
-            onContextMenu={onContextMenu}
-            onSessionDoubleClick={onSessionDoubleClick}
-            result={result}
-          />
-        ))}
-      </SortableContext>
+      {childFolders.map((folder) => (
+        <DraggableFolder
+          key={folder.id}
+          folder={folder}
+          depth={depth}
+          index={index}
+          onContextMenu={onContextMenu}
+          onSessionDoubleClick={onSessionDoubleClick}
+          result={result}
+        />
+      ))}
+      {childSessions.map((session) => (
+        <DraggableSession
+          key={session.id}
+          session={session}
+          depth={depth}
+          onContextMenu={onContextMenu}
+          onSessionDoubleClick={onSessionDoubleClick}
+          result={result}
+        />
+      ))}
     </div>
   );
 }

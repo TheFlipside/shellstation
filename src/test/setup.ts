@@ -29,6 +29,10 @@ Element.prototype.checkVisibility = function (this: Element): boolean {
   return this.closest("[data-not-shown]") === null;
 };
 
+// jsdom ships no elementFromPoint either. The session tree asks it what a
+// dragged item is over; nothing is at any point unless a test says so.
+document.elementFromPoint = (): Element | null => null;
+
 // jsdom ships no matchMedia. useTheme() subscribes to the OS dark-mode
 // preference through it; report "light" and never emit changes.
 Object.defineProperty(window, "matchMedia", {

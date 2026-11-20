@@ -1595,14 +1595,59 @@ body,
   user-select: none;
   transition: background-color 0.1s;
   min-height: 24px;
+  /* For the line that says where a dragged item goes. */
+  position: relative;
 }
 
 .tree-item:hover {
   background: var(--color-surface0);
 }
 
-.tree-item-selected {
+/* While an item is dragged the pointer is over rows all the time, and a row
+   is marked only where a drop would go. */
+.sidebar-tree-dragging .tree-item:hover {
+  background: none;
+}
+
+.tree-item-selected,
+.sidebar-tree-dragging .tree-item-selected:hover {
   background: var(--color-surface0);
+}
+
+/* Where a dragged item goes: into a folder, or before or after a row. The
+   line starts where the row's content does, which says how deep it goes. */
+.tree-item-drop-into,
+.sidebar-tree-dragging .tree-item-drop-into:hover {
+  background: var(--color-surface1);
+  box-shadow: inset 0 0 0 1px var(--color-blue);
+}
+
+.tree-item-drop-before::before,
+.tree-item-drop-after::after {
+  content: "";
+  position: absolute;
+  left: calc(var(--tree-depth, 0) * 16px + 8px);
+  right: 4px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--color-blue);
+  pointer-events: none;
+  /* Above the row beside this one, which the line reaches into. A row is no
+     stacking context of its own, or the line would stay under that row. */
+  z-index: 1;
+}
+
+.tree-item-drop-before::before {
+  top: -1px;
+}
+
+.tree-item-drop-after::after {
+  bottom: -1px;
+}
+
+/* The end of the top level, for a folder dropped below the rows. */
+.sidebar-tree-drop-end {
+  box-shadow: inset 0 0 0 1px var(--color-blue);
 }
 
 .tree-chevron {
@@ -1660,11 +1705,21 @@ body,
   max-width: 60%;
 }
 
-/* Drag-and-drop overlay (floating clone of dragged item) */
+/* The preview of a dragged item, beside the pointer. It is in the body and
+   placed by a transform (SessionSidebar.tsx). Under the dialogs (100) and
+   above the toasts: a host-key prompt can appear while an item is dragged,
+   which ends the drag, and the preview is not over it in the meantime.
+   It takes no pointer events, so that what is under it is what is hit. */
 .tree-item-drag-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 95;
+  transform-origin: 0 0;
   display: flex;
   align-items: center;
   gap: 4px;
+  max-width: 240px;
   padding: 3px 8px;
   font-size: 12px;
   background: var(--color-surface1);

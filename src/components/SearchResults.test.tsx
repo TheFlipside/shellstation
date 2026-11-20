@@ -163,7 +163,7 @@ function row(id: string): HTMLElement {
   return found[0];
 }
 
-/** What begins a drag of a sortable item: the press of the primary pointer. */
+/** What begins a drag of an item of the tree: the press of the primary pointer. */
 function press(target: HTMLElement): void {
   fireEvent.pointerDown(target, { isPrimary: true, button: 0, clientX: 5, clientY: 5 });
 }
@@ -516,8 +516,12 @@ describe("SearchResults", () => {
     renderTree();
 
     const inTree = row(production.id);
-    expect(inTree.getAttribute("aria-roledescription")).toBe("sortable");
+    // A tree item and nothing else: it is picked up with the pointer, and
+    // is not announced as a button to be picked up with a key.
     expect(inTree.getAttribute("role")).toBe("treeitem");
+    expect(inTree.getAttribute("aria-roledescription")).toBeNull();
+    expect(inTree.getAttribute("aria-describedby")).toBeNull();
+    expect(inTree.getAttribute("aria-pressed")).toBeNull();
     press(inTree);
     expect(onDragStart).toHaveBeenCalledOnce();
   });
@@ -542,7 +546,7 @@ describe("SearchResults", () => {
       press(item);
     }
     expect(onDragStart).not.toHaveBeenCalled();
-    // Nor is any of them announced as sortable, or as something disabled.
+    // Nor is any of them announced as draggable, or as something disabled.
     expect(document.querySelectorAll("[aria-roledescription]")).toHaveLength(0);
     expect(document.querySelectorAll("[aria-disabled]")).toHaveLength(0);
   });

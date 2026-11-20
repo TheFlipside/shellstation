@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { useAppStore } from "./appStore";
 import { useTerminalStore, type TabMeta } from "./terminalStore";
 import { invokeConnect } from "../page";
+import type { Drop } from "../treeDrop";
 
 export interface Folder {
   id: string;
@@ -212,8 +213,14 @@ interface SessionState {
   folderBulkEditSessions: (folderId: string, edit: BulkSessionEdit) => Promise<number>;
 
   // Reordering
-  reorderFolders: (parentId: string | null, orderedIds: string[]) => Promise<void>;
-  reorderSessions: (folderId: string, orderedIds: string[]) => Promise<void>;
+  /**
+   * Does what a drop in the tree says (`dropAt` in `treeDrop.ts`): moves the
+   * item to another folder where it says so, and puts its siblings there in
+   * the order it gives. The tree is read again whatever comes of it: where
+   * the move was done and the order was refused, the item is in the folder,
+   * at its end.
+   */
+  applyDrop: (drop: Drop) => Promise<void>;
   sortFolderAlphabetically: (parentId: string | null, recursive?: boolean) => Promise<void>;
   sortSessionsAlphabetically: (folderId: string) => Promise<void>;
   sortSessionsByHostname: (folderId: string) => Promise<void>;
@@ -571,13 +578,27 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
   // ── Reordering ──────────────────────────────────────────────────────
 
-  reorderFolders: async (parentId, orderedIds) => {
-    await invoke("folder_reorder", { parentId, orderedIds });
-    await get().loadAll();
-  },
-
-  reorderSessions: async (folderId, orderedIds) => {
-    await invoke("session_reorder", { folderId, orderedIds });
+  applyDrop: async ({ item, parentId, moves, order }) => {
+    // `dropAt` gives no such drop: a session is always in a folder.
+    if (item.type === "session" && parentId === null) {
+      throw new Error("A session cannot be at the top level.");
+    }
+    try {
+      if (item.type === "folder") {
+        if (moves) await invoke("folder_move", { id: item.id, newParentId: parentId });
+        if (order) await invoke("folder_reorder", { parentId, orderedIds: order });
+      } else {
+        if (moves) await invoke("session_move", { id: item.id, newFolderId: parentId });
+        if (order) await invoke("session_reorder", { folderId: parentId, orderedIds: order });
+      }
+    } catch (failure) {
+      // The first step may be done. What the tree shows is what is there;
+      // a refresh that fails as well leaves the first failure to be told.
+      await get()
+        .loadAll()
+        .catch(() => undefined);
+      throw failure;
+    }
     await get().loadAll();
   },
 
