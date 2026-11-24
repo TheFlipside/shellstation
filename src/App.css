@@ -396,6 +396,66 @@ body,
   background: color-mix(in srgb, var(--btn-color) 40%, var(--color-surface0));
 }
 
+/* While a button is dragged the one under the pointer is not highlighted:
+   the line says where a drop goes. */
+.command-bar-row-dragging .command-bar-btn:hover,
+.command-bar-row-dragging .command-bar-btn:active {
+  background: color-mix(in srgb, var(--btn-color) 18%, var(--color-surface0));
+  border-color: color-mix(in srgb, var(--btn-color) 50%, transparent);
+}
+
+.command-bar-btn-dragged {
+  opacity: 0.4;
+}
+
+/* Where a dragged button goes: a line in the gap before or after a button. */
+.command-bar-btn-drop-before,
+.command-bar-btn-drop-after {
+  position: relative;
+}
+
+.command-bar-btn-drop-before::before,
+.command-bar-btn-drop-after::after {
+  content: "";
+  position: absolute;
+  top: -1px;
+  bottom: -1px;
+  width: 2px;
+  border-radius: 1px;
+  background: var(--color-blue);
+  pointer-events: none;
+}
+
+/* The bar's gap is 4px, and the line is in its middle, past the border. */
+.command-bar-btn-drop-before::before {
+  left: -4px;
+}
+
+.command-bar-btn-drop-after::after {
+  right: -4px;
+}
+
+.command-bar-drag-preview {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 95;
+  transform-origin: 0 0;
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  padding: 3px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--btn-color);
+  background: color-mix(in srgb, var(--btn-color) 18%, var(--color-surface0));
+  border: 1px solid var(--btn-color);
+  border-radius: 4px;
+  box-shadow: 0 4px 12px var(--color-shadow);
+  white-space: nowrap;
+  pointer-events: none;
+}
+
 .command-bar-toggle {
   padding: 3px 6px;
   border: none;

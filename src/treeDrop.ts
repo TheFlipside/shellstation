@@ -13,6 +13,7 @@
  */
 import type { Folder, Session } from "./stores/sessionStore";
 import type { TreeIndex } from "./components/SessionTree";
+import { boxScale } from "./zoomBox";
 
 export interface DragItem {
   type: "folder" | "session";
@@ -268,19 +269,13 @@ export function sameDrop(a: Drop | null, b: Drop | null): boolean {
 
 /**
  * How far down a row the pointer is, from 0 at its top to 1 at its bottom.
- *
- * The sidebar is scaled with CSS `zoom`, and engines disagree on what
- * `getBoundingClientRect` returns under it: the box as it is on the screen
- * (Chromium), which is what the pointer's coordinates are in, or the box as
- * laid out, before the zoom (WebKitGTK). Which of the two it is shows in the
- * rectangle's height against the laid-out one, and a laid-out rectangle is
- * scaled to the screen before the pointer is held against it.
+ * The sidebar is scaled with CSS `zoom`, which engines report differently
+ * (`boxScale`).
  */
 function ratioIn(row: HTMLElement, y: number, zoom: number): number {
   const rect = row.getBoundingClientRect();
   if (rect.height <= 0) return 0.5;
-  const measured = row.offsetHeight > 0 ? rect.height / row.offsetHeight : zoom;
-  const scale = Math.abs(measured - zoom) <= Math.abs(measured - 1) ? 1 : zoom;
+  const scale = boxScale(row, rect, zoom);
   const ratio = (y - rect.top * scale) / (rect.height * scale);
   return Math.min(1, Math.max(0, ratio));
 }

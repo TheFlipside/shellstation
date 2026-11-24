@@ -1,5 +1,15 @@
-import React, { useCallback, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
+import {
+  DndContext,
+  PointerSensor,
+  useDraggable,
+  useSensor,
+  useSensors,
+  type DndContextProps,
+  type DragStartEvent,
+} from "@dnd-kit/core";
 import { invoke } from "@tauri-apps/api/core";
 import { readText } from "@tauri-apps/plugin-clipboard-manager";
 import { useSettingsStore, type CommandButton } from "../stores/settingsStore";
@@ -11,6 +21,8 @@ import {
 } from "./CommandButtonDialog";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
+import { dialogOpen, useOnDialogOpen } from "./DialogKeys";
+import { buttonDropAt, buttonPointAt, sameButtonDrop, type ButtonDrop } from "../buttonDrop";
 import {
   isSessionClosedError,
   reportSessionClosed,
@@ -179,6 +191,82 @@ async function executeCommand(
   }
 }
 
+/**
+ * Where the dragged button's preview is, from the pointer, in pixels: to the
+ * right of it and below, as in the session tree, so that it covers neither
+ * the button the pointer is on nor the line that says where a drop goes.
+ */
+const DRAG_PREVIEW_OFFSET = { x: 12, y: 16 };
+
+/**
+ * The library would announce every drag to a screen reader by the buttons'
+ * ids, which are UUIDs, and describe a button as one to pick up with the
+ * space bar, which presses it. A button is picked up with the pointer only,
+ * so it says nothing.
+ */
+const SILENT_DRAG: DndContextProps["accessibility"] = {
+  announcements: {
+    onDragStart: () => undefined,
+    onDragOver: () => undefined,
+    onDragEnd: () => undefined,
+    onDragCancel: () => undefined,
+  },
+  screenReaderInstructions: { draggable: "" },
+};
+
+interface CommandBarButtonProps {
+  button: CommandButton;
+  /** Whether this button is the one being dragged. */
+  dragged: boolean;
+  /** Whether any button is: the buttons then show no command as a tooltip. */
+  dragging: boolean;
+  /** Where a drop would go, if beside this button. */
+  dropSide: "before" | "after" | null;
+  onRun: (button: CommandButton) => void;
+  onMenu: (button: CommandButton, x: number, y: number) => void;
+}
+
+/**
+ * A button of the bar, which is picked up with the pointer to go to another
+ * place. The library's attributes for a draggable are left off: they would
+ * have a screen reader announce a button to be picked up with the space bar,
+ * which presses it. The context menu's Move left and Move right are the way
+ * without a pointer.
+ */
+function CommandBarButton({
+  button,
+  dragged,
+  dragging,
+  dropSide,
+  onRun,
+  onMenu,
+}: CommandBarButtonProps): React.JSX.Element {
+  const { listeners, setNodeRef } = useDraggable({ id: button.id });
+  let className = "command-bar-btn";
+  if (dragged) className += " command-bar-btn-dragged";
+  if (dropSide) className += ` command-bar-btn-drop-${dropSide}`;
+  return (
+    <button
+      ref={setNodeRef}
+      {...listeners}
+      type="button"
+      className={className}
+      data-button-id={button.id}
+      style={{ "--btn-color": button.color } as React.CSSProperties}
+      title={dragging ? undefined : button.command}
+      onClick={() => {
+        onRun(button);
+      }}
+      onContextMenu={(e) => {
+        e.preventDefault();
+        onMenu(button, e.clientX, e.clientY);
+      }}
+    >
+      {button.name}
+    </button>
+  );
+}
+
 interface CommandBarProps {
   uiScale: number;
 }
@@ -239,6 +327,124 @@ export function CommandBar({ uiScale }: CommandBarProps): React.JSX.Element {
     }
     focusActiveTerminal();
   }, [freeformInput, focusActiveTerminal]);
+
+  // ── Drag and drop ──────────────────────────────────────────────────
+
+  // A button is picked up with the pointer alone, once it has moved 5 px
+  // with the primary button down; a press that moves less is a click. The
+  // library's keyboard sensor would pick one up on Enter and Space, which
+  // press it. After a drag the library stops the click that the release
+  // makes, so a dropped button sends nothing.
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
+  const zoom = uiScale / 100;
+  const [draggedId, setDraggedId] = useState<string | null>(null);
+  const [drop, setDrop] = useState<ButtonDrop | null>(null);
+  const dropRef = useRef<ButtonDrop | null>(null);
+  // Where the pointer was last, in the window.
+  const pointer = useRef<{ x: number; y: number } | null>(null);
+  const rowRef = useRef<HTMLDivElement | null>(null);
+  const previewRef = useRef<HTMLDivElement | null>(null);
+
+  // The preview is outside the bar, which is scaled with CSS `zoom`, and is
+  // placed by the pointer's own coordinates, so no scale comes between the
+  // two. It is scaled to the bar's size by a transform of its own.
+  const placePreview = useCallback((): void => {
+    const preview = previewRef.current;
+    const at = pointer.current;
+    if (!preview || !at) return;
+    const x = String(at.x + DRAG_PREVIEW_OFFSET.x);
+    const y = String(at.y + DRAG_PREVIEW_OFFSET.y);
+    preview.style.transform = `translate(${x}px, ${y}px) scale(${String(zoom)})`;
+  }, [zoom]);
+  const setPreview = useCallback(
+    (preview: HTMLDivElement | null): void => {
+      previewRef.current = preview;
+      placePreview();
+    },
+    [placePreview],
+  );
+
+  const endDrag = useCallback((): void => {
+    pointer.current = null;
+    dropRef.current = null;
+    setDrop(null);
+    setDraggedId(null);
+  }, []);
+
+  // A press on a button gives it the focus, and a dragged button is not
+  // clicked, which gives it back to the terminal. Left on the button, the
+  // focus would have the next Enter or Space typed "into the terminal"
+  // press it and send its command. Not under a dialog, which does not move
+  // the focus (§5.6 of the design).
+  const endDragAndRefocus = useCallback((): void => {
+    endDrag();
+    const row = rowRef.current;
+    if (row?.contains(document.activeElement) && !dialogOpen()) focusActiveTerminal();
+  }, [endDrag, focusActiveTerminal]);
+
+  const handleDragStart = useCallback((event: DragStartEvent): void => {
+    // Nothing is picked up under a dialog, as one that opened between the
+    // press and the first move.
+    if (dialogOpen()) return;
+    const from = event.activatorEvent;
+    pointer.current = from instanceof MouseEvent ? { x: from.clientX, y: from.clientY } : null;
+    setDraggedId(String(event.active.id));
+  }, []);
+
+  // What a drop of the dragged button would do where the pointer is now,
+  // against the buttons as the store has them now.
+  const dropNow = useCallback((): ButtonDrop | null => {
+    const at = pointer.current;
+    const row = rowRef.current;
+    if (draggedId === null || !at || !row || dialogOpen()) return null;
+    const point = buttonPointAt(at.x, at.y, row, zoom);
+    if (!point) return null;
+    const ids = useSettingsStore.getState().commandButtons.map((b) => b.id);
+    return buttonDropAt(ids, draggedId, point);
+  }, [draggedId, zoom]);
+
+  // A dialog that opens while a button is held ends the drag: the release
+  // that follows, under the dialog, drops nothing.
+  useOnDialogOpen(endDrag);
+
+  const handleDragEnd = useCallback((): void => {
+    // Asked again at the release, and not taken from the last move.
+    const dropped = dropNow();
+    endDragAndRefocus();
+    if (dropped) reorderCommandButtons(dropped.from, dropped.to);
+  }, [dropNow, endDragAndRefocus, reorderCommandButtons]);
+
+  // While a button is dragged: where the pointer is, and what a drop there
+  // would do.
+  useEffect(() => {
+    if (draggedId === null) return;
+    const judge = (): void => {
+      const next = dropNow();
+      if (sameButtonDrop(dropRef.current, next)) return;
+      dropRef.current = next;
+      setDrop(next);
+    };
+    const handleMove = (e: PointerEvent): void => {
+      if (!e.isPrimary) return;
+      pointer.current = { x: e.clientX, y: e.clientY };
+      placePreview();
+      judge();
+    };
+    document.addEventListener("pointermove", handleMove);
+    judge();
+    return () => {
+      document.removeEventListener("pointermove", handleMove);
+    };
+  }, [draggedId, dropNow, placePreview]);
+
+  const openButtonMenu = useCallback((btn: CommandButton, x: number, y: number): void => {
+    setBtnCtx({ x, y, buttonId: btn.id });
+  }, []);
+
+  // The dragged button, for its preview. One that is gone while it is held
+  // has none.
+  const draggedButton =
+    draggedId === null ? undefined : commandButtons.find((b) => b.id === draggedId);
 
   const handleSave = useCallback(
     (data: CommandButtonFormData) => {
@@ -337,7 +543,10 @@ export function CommandBar({ uiScale }: CommandBarProps): React.JSX.Element {
   return (
     <>
       <div className="command-bar" style={{ "--ui-scale": uiScale / 100 } as React.CSSProperties}>
-        <div className="command-bar-row">
+        <div
+          ref={rowRef}
+          className={`command-bar-row${draggedId === null ? "" : " command-bar-row-dragging"}`}
+        >
           <button
             type="button"
             className="command-bar-toggle"
@@ -360,24 +569,26 @@ export function CommandBar({ uiScale }: CommandBarProps): React.JSX.Element {
               >
                 +
               </button>
-              {commandButtons.map((btn) => (
-                <button
-                  key={btn.id}
-                  type="button"
-                  className="command-bar-btn"
-                  style={{ "--btn-color": btn.color } as React.CSSProperties}
-                  title={btn.command}
-                  onClick={() => {
-                    handleButtonClick(btn);
-                  }}
-                  onContextMenu={(e) => {
-                    e.preventDefault();
-                    setBtnCtx({ x: e.clientX, y: e.clientY, buttonId: btn.id });
-                  }}
-                >
-                  {btn.name}
-                </button>
-              ))}
+              <DndContext
+                sensors={sensors}
+                autoScroll={false}
+                accessibility={SILENT_DRAG}
+                onDragStart={handleDragStart}
+                onDragEnd={handleDragEnd}
+                onDragCancel={endDragAndRefocus}
+              >
+                {commandButtons.map((btn) => (
+                  <CommandBarButton
+                    key={btn.id}
+                    button={btn}
+                    dragged={btn.id === draggedId}
+                    dragging={draggedId !== null}
+                    dropSide={drop?.mark.id === btn.id ? drop.mark.side : null}
+                    onRun={handleButtonClick}
+                    onMenu={openButtonMenu}
+                  />
+                ))}
+              </DndContext>
             </>
           )}
         </div>
@@ -425,6 +636,20 @@ export function CommandBar({ uiScale }: CommandBarProps): React.JSX.Element {
           </div>
         )}
       </div>
+      {/* The dragged button's preview, beside the pointer. In the body, as the
+          tree's is, and under the dialogs. */}
+      {draggedButton &&
+        createPortal(
+          <div
+            ref={setPreview}
+            className="command-bar-drag-preview"
+            style={{ "--btn-color": draggedButton.color } as React.CSSProperties}
+            aria-hidden="true"
+          >
+            {draggedButton.name}
+          </div>,
+          document.body,
+        )}
       {dialogState && (
         <CommandButtonDialog
           initial={dialogState.initial}
