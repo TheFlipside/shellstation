@@ -16,6 +16,8 @@
     "newSubfolder": "Nueva subcarpeta",
     "rename": "Renombrar",
     "moveTo": "Mover a…",
+    "moveUp": "Subir",
+    "moveDown": "Bajar",
     "delete": "Eliminar",
     "connect": "Conectar",
     "edit": "Editar",

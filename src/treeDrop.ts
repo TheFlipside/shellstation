@@ -4,7 +4,8 @@
  * A drag ends on a row of the tree or on the empty part below the rows.
  * `dropPointAt` says which, from where the pointer is, and `dropAt` says what
  * a drop there does, or `null` where it does nothing: into a folder, or
- * between two of its siblings. The rules are here and not in the sidebar so
+ * between two of its siblings. `stepDrop` is the same without a pointer: one
+ * place up or down among its siblings. The rules are here and not in the sidebar so
  * that they can be tested without a layout.
  *
  * The backend decides in the end (`folder_move`, `session_move` and the two
@@ -243,6 +244,46 @@ export function dropAt(item: DragItem, point: DropPoint, tree: DropTree): Drop |
   }
   const session = tree.sessions.get(item.id);
   return session ? dropSession(session, point, tree) : null;
+}
+
+/**
+ * What moving `item` one place up or down among its siblings does, or `null`
+ * where it cannot go that way: the way to put an item in another place
+ * without a pointer. It is a drop beside the nearest sibling of its kind in
+ * that direction, as the pointer would make it, under the same rules. In
+ * PostgreSQL mode that is the nearest of the user's own: the place beside
+ * another user's row is not the user's to give, so a step goes past it.
+ * Folders and sessions are listed apart, so a session goes no higher than
+ * the first session of its folder.
+ */
+export function stepDrop(item: DragItem, step: "up" | "down", tree: DropTree): Drop | null {
+  if (!canDrag(item, tree)) return null;
+  let parentId: string | null;
+  let siblings: string[];
+  if (item.type === "folder") {
+    const folder = tree.folders.get(item.id);
+    if (!folder) return null;
+    parentId = folder.parent_id;
+    if (parentId !== null && !takes(parentId, tree, item.id)) return null;
+    siblings = ids(tree.index.folders.get(parentId));
+  } else {
+    const session = tree.sessions.get(item.id);
+    if (!session) return null;
+    parentId = session.folder_id;
+    if (!takes(parentId, tree)) return null;
+    siblings = ids(tree.index.sessions.get(parentId));
+  }
+  const at = siblings.indexOf(item.id);
+  if (at === -1) return null;
+  const rowOwned = (id: string): boolean => {
+    const row = item.type === "folder" ? tree.folders.get(id) : tree.sessions.get(id);
+    return row !== undefined && owned(row, tree);
+  };
+  const up = step === "up";
+  for (let i = up ? at - 1 : at + 1; i >= 0 && i < siblings.length; i += up ? -1 : 1) {
+    if (rowOwned(siblings[i])) return beside(item, parentId, parentId, siblings, siblings[i], !up);
+  }
+  return null;
 }
 
 /** Whether two drops are the same, in what they show and in what they do. */

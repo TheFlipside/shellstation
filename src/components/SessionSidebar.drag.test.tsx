@@ -876,3 +876,211 @@ describe("dragging in PostgreSQL mode", () => {
     expect(changes).toEqual([]);
   });
 });
+
+describe("moving an item without a pointer", () => {
+  function menuItem(label: string): HTMLButtonElement {
+    const found = screen.getByText(label).closest("button");
+    if (!found) throw new Error(`no menu item ${label}`);
+    return found;
+  }
+
+  function openMenu(id: string): void {
+    fireEvent.contextMenu(row(id), { clientX: 40, clientY: 40 });
+  }
+
+  function altKey(key: "ArrowUp" | "ArrowDown", more: Partial<KeyboardEventInit> = {}): void {
+    fireEvent.keyDown(tree(), { key, altKey: true, ...more });
+  }
+
+  it("puts the selected session one place down on Alt+Down, and keeps it selected", async () => {
+    await renderSidebar();
+    fireEvent.click(row("lab-1"));
+    altKey("ArrowDown");
+    await settle();
+
+    expect(changes).toEqual([
+      {
+        command: "session_reorder",
+        args: { folderId: "Lab", orderedIds: ["lab-2", "lab-1", "lab-3"] },
+      },
+    ]);
+    expect(rows().slice(0, 5)).toEqual(["0:Lab", "1:Racks", "1:lab-2", "1:lab-1", "1:lab-3"]);
+    expect(useSessionStore.getState().selectedItemId).toBe("lab-1");
+  });
+
+  it("puts the selected folder one place up on Alt+Up", async () => {
+    await renderSidebar([]);
+    fireEvent.click(row("Spare"));
+    altKey("ArrowUp");
+    await settle();
+
+    expect(changes).toEqual([
+      {
+        command: "folder_reorder",
+        args: { parentId: null, orderedIds: ["Lab", "Spare", "Prod"] },
+      },
+    ]);
+    expect(rows()).toEqual(["0:Lab", "0:Spare", "0:Prod"]);
+    expect(useSessionStore.getState().selectedItemId).toBe("Spare");
+  });
+
+  it("asks for nothing beyond the first or the last, and moves no selection there", async () => {
+    await renderSidebar();
+    fireEvent.click(row("lab-1"));
+    altKey("ArrowUp");
+    expect(useSessionStore.getState().selectedItemId).toBe("lab-1");
+    fireEvent.click(row("lab-3"));
+    altKey("ArrowDown");
+    expect(useSessionStore.getState().selectedItemId).toBe("lab-3");
+    await settle();
+    expect(changes).toEqual([]);
+  });
+
+  it("asks for nothing with another modifier held, or with nothing selected", async () => {
+    await renderSidebar();
+    for (const more of [{ ctrlKey: true }, { shiftKey: true }, { metaKey: true }]) {
+      fireEvent.click(row("lab-1"));
+      altKey("ArrowDown", more);
+    }
+    act(() => {
+      useSessionStore.setState({ selectedItemId: null, selectedItemType: null });
+    });
+    altKey("ArrowDown");
+    await settle();
+    expect(changes).toEqual([]);
+  });
+
+  it("asks for one step at a time", async () => {
+    await renderSidebar();
+    fireEvent.click(row("lab-1"));
+    altKey("ArrowDown");
+    altKey("ArrowDown");
+    await settle();
+    expect(changes).toEqual([
+      {
+        command: "session_reorder",
+        args: { folderId: "Lab", orderedIds: ["lab-2", "lab-1", "lab-3"] },
+      },
+    ]);
+  });
+
+  it("still moves the selection on an arrow without Alt", async () => {
+    await renderSidebar();
+    fireEvent.click(row("lab-1"));
+    fireEvent.keyDown(tree(), { key: "ArrowDown" });
+    await settle();
+    expect(changes).toEqual([]);
+    expect(useSessionStore.getState().selectedItemId).toBe("lab-2");
+  });
+
+  it("moves nothing in what a search lists", async () => {
+    await renderSidebar();
+    act(() => {
+      useSessionStore.setState({
+        searchQuery: "lab",
+        searchResults: { folders: [], sessions: initialSessions.slice(0, 3) },
+      });
+    });
+    fireEvent.click(row("lab-1"));
+    expect(useSessionStore.getState().selectedItemId).toBe("lab-1");
+    altKey("ArrowDown");
+    await settle();
+    expect(changes).toEqual([]);
+    openMenu("lab-2");
+    expect(menuItem("contextMenu.moveUp").disabled).toBe(true);
+    expect(menuItem("contextMenu.moveDown").disabled).toBe(true);
+  });
+
+  it("offers Move Up and Move Down in the context menu, greyed out where it cannot go", async () => {
+    await renderSidebar();
+    openMenu("lab-1");
+    expect(menuItem("contextMenu.moveUp").disabled).toBe(true);
+    expect(menuItem("contextMenu.moveDown").disabled).toBe(false);
+    fireEvent.click(menuItem("contextMenu.moveDown"));
+    await settle();
+
+    expect(changes).toEqual([
+      {
+        command: "session_reorder",
+        args: { folderId: "Lab", orderedIds: ["lab-2", "lab-1", "lab-3"] },
+      },
+    ]);
+    expect(useSessionStore.getState().selectedItemId).toBe("lab-1");
+
+    openMenu("Prod");
+    expect(menuItem("contextMenu.moveUp").disabled).toBe(false);
+    expect(menuItem("contextMenu.moveDown").disabled).toBe(false);
+    fireEvent.click(menuItem("contextMenu.moveUp"));
+    await settle();
+    expect(changes[1]).toEqual({
+      command: "folder_reorder",
+      args: { parentId: null, orderedIds: ["Prod", "Lab", "Spare"] },
+    });
+  });
+
+  it("tells what the backend refuses", async () => {
+    refused = { command: "session_reorder", message: "Failed to reorder sessions" };
+    await renderSidebar();
+    fireEvent.click(row("lab-2"));
+    altKey("ArrowUp");
+    await settle();
+    expect(useToastStore.getState().toasts.map((toast) => toast.message)).toEqual([
+      "Failed to reorder sessions",
+    ]);
+  });
+
+  describe("in PostgreSQL mode", () => {
+    beforeEach(() => {
+      stored = {
+        folders: [
+          folder("Mine", null, "alice"),
+          { ...folder("Theirs", null, "bob"), visibility: "shared" },
+          folder("Mine too", null, "alice"),
+        ],
+        sessions: [
+          session("mine-1", "Mine", "alice"),
+          { ...session("theirs-1", "Theirs", "bob"), visibility: "shared" },
+          { ...session("theirs-2", "Theirs", "bob"), visibility: "shared" },
+        ],
+      };
+      useAppStore.setState({ dbBackend: "postgres", pgUser: "alice" });
+    });
+
+    it("goes past another user's folder, and moves none of theirs", async () => {
+      await renderSidebar([]);
+      fireEvent.click(row("Theirs"));
+      altKey("ArrowDown");
+      await settle();
+      expect(changes).toEqual([]);
+
+      fireEvent.click(row("Mine too"));
+      altKey("ArrowUp");
+      await settle();
+      expect(changes).toEqual([
+        {
+          command: "folder_reorder",
+          args: { parentId: null, orderedIds: ["Mine too", "Mine", "Theirs"] },
+        },
+      ]);
+    });
+
+    it("offers no step for another user's items, and takes none from the keys", async () => {
+      await renderSidebar(["Theirs"]);
+      openMenu("theirs-1");
+      expect(screen.getByText("contextMenu.connect")).not.toBeNull();
+      expect(screen.queryByText("contextMenu.moveUp")).toBeNull();
+      expect(screen.queryByText("contextMenu.moveDown")).toBeNull();
+      fireEvent.keyDown(document, { code: "Escape", key: "Escape" });
+
+      openMenu("Theirs");
+      expect(screen.queryByText("contextMenu.moveUp")).toBeNull();
+      expect(screen.queryByText("contextMenu.moveDown")).toBeNull();
+      fireEvent.keyDown(document, { code: "Escape", key: "Escape" });
+
+      fireEvent.click(row("theirs-1"));
+      altKey("ArrowDown");
+      await settle();
+      expect(changes).toEqual([]);
+    });
+  });
+});

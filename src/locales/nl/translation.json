@@ -16,6 +16,8 @@
     "newSubfolder": "Nieuwe submap",
     "rename": "Hernoemen",
     "moveTo": "Verplaatsen naar…",
+    "moveUp": "Omhoog",
+    "moveDown": "Omlaag",
     "delete": "Verwijderen",
     "connect": "Verbinden",
     "edit": "Bewerken",

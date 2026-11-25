@@ -16,6 +16,8 @@
     "newSubfolder": "새 하위 폴더",
     "rename": "이름 변경",
     "moveTo": "이동…",
+    "moveUp": "위로 이동",
+    "moveDown": "아래로 이동",
     "delete": "삭제",
     "connect": "연결",
     "edit": "편집",

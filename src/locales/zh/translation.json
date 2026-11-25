@@ -16,6 +16,8 @@
     "newSubfolder": "新建子文件夹",
     "rename": "重命名",
     "moveTo": "移动到…",
+    "moveUp": "上移",
+    "moveDown": "下移",
     "delete": "删除",
     "connect": "连接",
     "edit": "编辑",

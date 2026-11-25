@@ -16,6 +16,8 @@
     "newSubfolder": "New Subfolder",
     "rename": "Rename",
     "moveTo": "Move To…",
+    "moveUp": "Move Up",
+    "moveDown": "Move Down",
     "delete": "Delete",
     "connect": "Connect",
     "edit": "Edit",

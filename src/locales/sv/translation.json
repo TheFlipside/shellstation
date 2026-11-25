@@ -16,6 +16,8 @@
     "newSubfolder": "Ny undermapp",
     "rename": "Byt namn",
     "moveTo": "Flytta till…",
+    "moveUp": "Flytta upp",
+    "moveDown": "Flytta ned",
     "delete": "Ta bort",
     "connect": "Anslut",
     "edit": "Redigera",

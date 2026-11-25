@@ -16,6 +16,8 @@
     "newSubfolder": "新規サブフォルダー",
     "rename": "名前を変更",
     "moveTo": "移動先…",
+    "moveUp": "上へ移動",
+    "moveDown": "下へ移動",
     "delete": "削除",
     "connect": "接続",
     "edit": "編集",

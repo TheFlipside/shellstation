@@ -16,6 +16,8 @@
     "newSubfolder": "Neuer Unterordner",
     "rename": "Umbenennen",
     "moveTo": "Verschieben nach…",
+    "moveUp": "Nach oben",
+    "moveDown": "Nach unten",
     "delete": "Löschen",
     "connect": "Verbinden",
     "edit": "Bearbeiten",

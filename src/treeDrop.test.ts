@@ -23,6 +23,7 @@ import {
   dropPointAt,
   dropTree,
   sameDrop,
+  stepDrop,
   type DragItem,
   type Drop,
   type DropPoint,
@@ -444,6 +445,149 @@ describe("in PostgreSQL mode", () => {
   it("does not fold role names", () => {
     const asUpper = tree([], { pgMode: true, pgUser: "Alice" }, all);
     expect(canDrag(aFolder("Mine"), asUpper)).toBe(false);
+  });
+});
+
+describe("a step up or down", () => {
+  it("puts a session one place up or down among the sessions of its folder", () => {
+    expect(stepDrop(aSession("a2"), "up", tree())).toEqual({
+      mark: { kind: "line", rowId: "a1", edge: "top" },
+      item: aSession("a2"),
+      parentId: "A",
+      moves: false,
+      order: ["a2", "a1", "a3"],
+    });
+    expect(stepDrop(aSession("a2"), "down", tree())?.order).toEqual(["a1", "a3", "a2"]);
+    expect(stepDrop(aSession("a1"), "down", tree())?.order).toEqual(["a2", "a1", "a3"]);
+  });
+
+  it("puts a folder one place up or down among the folders of its parent", () => {
+    expect(stepDrop(aFolder("B"), "up", tree())).toEqual({
+      mark: { kind: "line", rowId: "A", edge: "top" },
+      item: aFolder("B"),
+      parentId: null,
+      moves: false,
+      order: ["B", "A", "C"],
+    });
+    expect(stepDrop(aFolder("A1"), "down", tree())).toEqual({
+      mark: { kind: "line", rowId: "A2", edge: "bottom" },
+      item: aFolder("A1"),
+      parentId: "A",
+      moves: false,
+      order: ["A2", "A1"],
+    });
+  });
+
+  it("goes past an open folder's content, and not into it", () => {
+    expect(stepDrop(aFolder("A"), "down", tree(["A", "B"]))).toEqual({
+      mark: { kind: "line", rowId: "B", edge: "bottom" },
+      item: aFolder("A"),
+      parentId: null,
+      moves: false,
+      order: ["B", "A", "C"],
+    });
+  });
+
+  it("goes nowhere beyond the first or the last", () => {
+    expect(stepDrop(aSession("a1"), "up", tree())).toBeNull();
+    expect(stepDrop(aSession("a3"), "down", tree())).toBeNull();
+    expect(stepDrop(aSession("x1"), "up", tree())).toBeNull();
+    expect(stepDrop(aFolder("A"), "up", tree())).toBeNull();
+    expect(stepDrop(aFolder("C"), "down", tree())).toBeNull();
+    expect(stepDrop(aFolder("A2"), "down", tree())).toBeNull();
+  });
+
+  it("moves nothing that is not in the tree, or whose folder does not lead to the top", () => {
+    expect(stepDrop(aSession("gone"), "up", tree())).toBeNull();
+    expect(stepDrop(aFolder("gone"), "down", tree())).toBeNull();
+    const lost = {
+      folders: [folder("Lost", "missing")],
+      sessions: [session("l1", "Lost"), session("l2", "Lost")],
+    };
+    expect(stepDrop(aSession("l2"), "up", tree([], {}, lost))).toBeNull();
+    const lostFolders = { folders: [folder("L1", "missing"), folder("L2", "missing")], sessions };
+    expect(stepDrop(aFolder("L2"), "up", tree([], {}, lostFolders))).toBeNull();
+    // A ring of folders, and a folder inside itself.
+    const ring = {
+      folders: [folder("R1", "R2"), folder("R2", "R1"), folder("R3", "R1"), folder("S", "S")],
+      sessions: [],
+    };
+    expect(stepDrop(aFolder("R3"), "up", tree([], {}, ring))).toBeNull();
+    expect(stepDrop(aFolder("S"), "up", tree([], {}, ring))).toBeNull();
+  });
+
+  describe("in PostgreSQL mode", () => {
+    // bob's rows are shared, as alice sees only those of his.
+    const shared = <T extends { visibility: string }>(row: T): T => ({
+      ...row,
+      visibility: "shared",
+    });
+    const pgFolders = [
+      folder("Mine", null, "alice"),
+      shared(folder("Theirs", null, "bob")),
+      folder("Other", null, "alice"),
+      folder("Inside", "Theirs", "alice"),
+      folder("Next", "Theirs", "alice"),
+    ];
+    const pgSessions = [
+      session("m1", "Mine", "alice"),
+      session("m2", "Mine", "alice"),
+      shared(session("theirs-here", "Mine", "bob")),
+      session("m3", "Mine", "alice"),
+      shared(session("t1", "Theirs", "bob")),
+      session("mine-there", "Theirs", "alice"),
+    ];
+    const all = { folders: pgFolders, sessions: pgSessions };
+    const asAlice = (): DropTree => tree([], { pgMode: true, pgUser: "alice" }, all);
+
+    it("goes past another user's row to the nearest of the user's own", () => {
+      // Theirs is bob's, at the top level among alice's folders.
+      expect(stepDrop(aFolder("Other"), "up", asAlice())?.order).toEqual([
+        "Other",
+        "Mine",
+        "Theirs",
+      ]);
+      expect(stepDrop(aFolder("Mine"), "down", asAlice())?.order).toEqual([
+        "Theirs",
+        "Other",
+        "Mine",
+      ]);
+      expect(stepDrop(aSession("m2"), "down", asAlice())?.order).toEqual([
+        "m1",
+        "theirs-here",
+        "m3",
+        "m2",
+      ]);
+      expect(stepDrop(aSession("m3"), "up", asAlice())?.order).toEqual([
+        "m1",
+        "m3",
+        "m2",
+        "theirs-here",
+      ]);
+    });
+
+    it("goes nowhere where only other users' rows are beyond it", () => {
+      const lastMine = {
+        folders: pgFolders,
+        sessions: [session("m1", "Mine", "alice"), shared(session("theirs-here", "Mine", "bob"))],
+      };
+      const t = tree([], { pgMode: true, pgUser: "alice" }, lastMine);
+      expect(stepDrop(aSession("m1"), "down", t)).toBeNull();
+    });
+
+    it("moves nothing of another user's, nor in another user's folder", () => {
+      expect(stepDrop(aFolder("Theirs"), "up", asAlice())).toBeNull();
+      expect(stepDrop(aSession("theirs-here"), "up", asAlice())).toBeNull();
+      expect(stepDrop(aSession("mine-there"), "up", asAlice())).toBeNull();
+      expect(stepDrop(aFolder("Inside"), "down", asAlice())).toBeNull();
+      expect(stepDrop(aFolder("Next"), "up", asAlice())).toBeNull();
+    });
+
+    it("moves nothing while the role is not known", () => {
+      const unknown = tree([], { pgMode: true, pgUser: null }, all);
+      expect(stepDrop(aSession("m2"), "up", unknown)).toBeNull();
+      expect(stepDrop(aFolder("Other"), "up", unknown)).toBeNull();
+    });
   });
 });
 

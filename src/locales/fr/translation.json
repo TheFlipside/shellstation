@@ -16,6 +16,8 @@
     "newSubfolder": "Nouveau sous-dossier",
     "rename": "Renommer",
     "moveTo": "Déplacer vers…",
+    "moveUp": "Monter",
+    "moveDown": "Descendre",
     "delete": "Supprimer",
     "connect": "Connecter",
     "edit": "Modifier",

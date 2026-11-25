@@ -16,6 +16,8 @@
     "newSubfolder": "Nuova sottocartella",
     "rename": "Rinomina",
     "moveTo": "Sposta in…",
+    "moveUp": "Sposta su",
+    "moveDown": "Sposta giù",
     "delete": "Elimina",
     "connect": "Connetti",
     "edit": "Modifica",

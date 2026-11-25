@@ -16,6 +16,8 @@
     "newSubfolder": "Yeni Alt Klasör",
     "rename": "Yeniden Adlandır",
     "moveTo": "Taşı…",
+    "moveUp": "Yukarı Taşı",
+    "moveDown": "Aşağı Taşı",
     "delete": "Sil",
     "connect": "Bağlan",
     "edit": "Düzenle",

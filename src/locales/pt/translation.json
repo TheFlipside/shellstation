@@ -16,6 +16,8 @@
     "newSubfolder": "Nova subpasta",
     "rename": "Renomear",
     "moveTo": "Mover para…",
+    "moveUp": "Mover para cima",
+    "moveDown": "Mover para baixo",
     "delete": "Excluir",
     "connect": "Conectar",
     "edit": "Editar",

@@ -26,6 +26,7 @@ import {
   dropPointAt,
   dropTree,
   sameDrop,
+  stepDrop,
   type DragItem,
   type Drop,
 } from "../treeDrop";
@@ -174,6 +175,9 @@ export function SessionSidebar(): React.JSX.Element {
   // Whether a drop is being carried out. Nothing is picked up until the tree
   // that comes of it is there: a drop would be judged by the tree before it.
   const [placing, setPlacing] = useState(false);
+  // The same, at once: two keys pressed before the state shows would both
+  // pass a check of the state.
+  const placingRef = useRef(false);
   const treeRef = useRef<HTMLDivElement>(null);
 
   // One-shot scroll target. Set by handlers that mutate the tree (delete,
@@ -350,13 +354,66 @@ export function SessionSidebar(): React.JSX.Element {
     }
   }, [searchResults, selectedItemId]);
 
+  // Everything by the folder it is in, for the tree and for what a folder
+  // lists that a search found.
+  const treeIndex = useMemo(() => indexTree(folders, sessions), [folders, sessions]);
+
+  // The tree as a drop is judged by, with the pointer or with the keys.
+  const dropData = useMemo(
+    () => dropTree(folders, sessions, treeIndex, expandedFolderIds, isPgMode, pgUser),
+    [folders, sessions, treeIndex, expandedFolderIds, isPgMode, pgUser],
+  );
+  const searching = searchResults !== null;
+
+  // Carries out a drop, from the pointer or from the keys, and shows what
+  // was moved where it is now.
+  const placeDrop = useCallback(
+    (dropped: Drop): void => {
+      if (placingRef.current) return;
+      placingRef.current = true;
+      setPlacing(true);
+      // Within the chain, so that whatever comes of it ends in the `finally`.
+      Promise.resolve()
+        .then(() => useSessionStore.getState().applyDrop(dropped))
+        .then(() => {
+          if (dropped.parentId !== null) expandFolder(dropped.parentId);
+          selectItem(dropped.item.id, dropped.item.type);
+          setPendingScrollId(dropped.item.id);
+        })
+        .catch((err: unknown) => {
+          const msg = err instanceof Error ? err.message : String(err);
+          useToastStore.getState().addToast(msg);
+        })
+        .finally(() => {
+          placingRef.current = false;
+          setPlacing(false);
+        });
+    },
+    [expandFolder, selectItem],
+  );
+
+  // One place up or down among its siblings, the way without a pointer.
+  // Not in what a search lists, whose order is not the tree's.
+  const stepItem = useCallback(
+    (item: DragItem, step: "up" | "down"): Drop | null =>
+      searching || placing ? null : stepDrop(item, step, dropData),
+    [searching, placing, dropData],
+  );
+
   // Arrow-key and Enter navigation within the session tree.
   const handleTreeKeyDown = useCallback(
     (e: React.KeyboardEvent): void => {
       // Skip all tree key handling when a modal dialog is open — the dialog
       // captures Enter/Escape via its own hooks but cannot prevent the tree's
       // React onKeyDown from firing first.
-      if (confirmDialog || folderDialog || sessionDialog || loginSession || highlightSession)
+      if (
+        confirmDialog ||
+        folderDialog ||
+        sessionDialog ||
+        loginSession ||
+        highlightSession ||
+        dialogOpen()
+      )
         return;
 
       const key = e.key;
@@ -478,6 +535,18 @@ export function SessionSidebar(): React.JSX.Element {
       if (!["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(key)) return;
       e.preventDefault();
 
+      // Alt+Up and Alt+Down put the selected item one place up or down.
+      const onlyAlt = e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey;
+      if (onlyAlt && (key === "ArrowUp" || key === "ArrowDown")) {
+        if (!selectedItemId || !selectedItemType) return;
+        const step = stepItem(
+          { type: selectedItemType, id: selectedItemId },
+          key === "ArrowUp" ? "up" : "down",
+        );
+        if (step) placeDrop(step);
+        return;
+      }
+
       const visible = flattenVisibleItems(folders, sessions, expandedFolderIds);
       if (visible.length === 0) return;
 
@@ -543,6 +612,8 @@ export function SessionSidebar(): React.JSX.Element {
       clearSelection,
       isPgMode,
       pgUser,
+      stepItem,
+      placeDrop,
       t,
     ],
   );
@@ -565,6 +636,23 @@ export function SessionSidebar(): React.JSX.Element {
     }
     return { session: sessions.find((s) => s.id === activeItem.id) };
   }, [activeItem, folders, sessions]);
+
+  // Move Up and Move Down, for an item the user may move: greyed out where
+  // it cannot go that way.
+  const stepItems = useCallback(
+    (item: DragItem): ContextMenuItem[] =>
+      (["up", "down"] as const).map((step) => {
+        const drop = stepItem(item, step);
+        return {
+          label: t(step === "up" ? "contextMenu.moveUp" : "contextMenu.moveDown"),
+          disabled: drop === null,
+          onClick: () => {
+            if (drop) placeDrop(drop);
+          },
+        };
+      }),
+    [stepItem, placeDrop, t],
+  );
 
   const getContextItems = useCallback((): ContextMenuItem[] => {
     if (!ctx) return [];
@@ -647,6 +735,7 @@ export function SessionSidebar(): React.JSX.Element {
                   setMoveTarget({ id: ctx.id, type: "folder" });
                 },
               },
+              ...stepItems({ type: "folder", id: ctx.id }),
             ]
           : []),
         ...(ownerFolder
@@ -785,6 +874,7 @@ export function SessionSidebar(): React.JSX.Element {
                 setMoveTarget({ id: ctx.id, type: "session" });
               },
             },
+            ...stepItems({ type: "session", id: ctx.id }),
           ]
         : []),
       ...(ownerSession
@@ -849,6 +939,7 @@ export function SessionSidebar(): React.JSX.Element {
     clearSelection,
     deleteFolder,
     deleteSession,
+    stepItems,
   ]);
 
   const handleFolderSubmit = useCallback(
@@ -990,17 +1081,7 @@ export function SessionSidebar(): React.JSX.Element {
     return searchResults.sessions.filter((s) => reachableFolderIds.has(s.folder_id));
   }, [searchResults, sessions, reachableFolderIds]);
 
-  // Everything by the folder it is in, for the tree and for what a folder
-  // lists that a search found.
-  const treeIndex = useMemo(() => indexTree(folders, sessions), [folders, sessions]);
-
   // ── Drag and drop ──────────────────────────────────────────────────
-
-  const dropData = useMemo(
-    () => dropTree(folders, sessions, treeIndex, expandedFolderIds, isPgMode, pgUser),
-    [folders, sessions, treeIndex, expandedFolderIds, isPgMode, pgUser],
-  );
-  const searching = searchResults !== null;
 
   const endDrag = useCallback((): void => {
     pointer.current = null;
@@ -1041,25 +1122,8 @@ export function SessionSidebar(): React.JSX.Element {
     // then may not be now.
     const dropped = dropNow();
     endDrag();
-    if (!dropped || placing) return;
-    setPlacing(true);
-    // Within the chain, so that whatever comes of it ends in the `finally`.
-    Promise.resolve()
-      .then(() => store.applyDrop(dropped))
-      .then(() => {
-        // Shown where it is now.
-        if (dropped.parentId !== null) expandFolder(dropped.parentId);
-        selectItem(dropped.item.id, dropped.item.type);
-        setPendingScrollId(dropped.item.id);
-      })
-      .catch((err: unknown) => {
-        const msg = err instanceof Error ? err.message : String(err);
-        useToastStore.getState().addToast(msg);
-      })
-      .finally(() => {
-        setPlacing(false);
-      });
-  }, [dropNow, endDrag, placing, store, expandFolder, selectItem]);
+    if (dropped) placeDrop(dropped);
+  }, [dropNow, endDrag, placeDrop]);
 
   // While an item is dragged: where the pointer is, and what a drop there
   // would do. The tree scrolls under a pointer that is held still, and it
