@@ -46,6 +46,17 @@ pub(crate) fn search_pattern(query: &str) -> Option<String> {
     Some(pattern)
 }
 
+/// `ids` with each one where it comes first. A reorder or sort numbers a row
+/// by its place in the list, in one statement for the whole list, so the
+/// list gives each row one place.
+pub(crate) fn first_of_each(ids: &[String]) -> Vec<&str> {
+    let mut seen = std::collections::HashSet::new();
+    ids.iter()
+        .map(String::as_str)
+        .filter(|id| seen.insert(*id))
+        .collect()
+}
+
 /// Compare two hostnames with numeric IP-address awareness.
 /// IPv4 addresses sort before IPv6 (enum variant order of `IpAddr`), both
 /// sort before non-IP hostnames.  Among IPs, octets/hextets are compared

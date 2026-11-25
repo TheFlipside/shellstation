@@ -1038,6 +1038,31 @@ async fn keep_session_order(
     keep_order(kept, Kind::Session, Some(folder), order, listed).await
 }
 
+/// The most IDs a reorder takes. The window sends every item the place
+/// lists, so this is the most items a place can have and still be put in
+/// another order: twice as many sessions as one data import takes. A reorder
+/// is one statement for the list (see the backends' `reorder_*`), but its
+/// work, and that of keeping the order, grows with the list, which the
+/// webview chooses. The cap bounds that work, not the message the list came
+/// in, which IPC has read whole by the time the command runs.
+const MAX_REORDER_IDS: usize = 100_000;
+
+/// `ordered_ids`, the order a reorder is given, as IDs. Refused, before any
+/// is parsed, when there are more than [`MAX_REORDER_IDS`]. An ID that does
+/// not read as one is not quoted in the error, since it can be of any length.
+fn reorder_ids(ordered_ids: &[String]) -> Result<Vec<Uuid>, String> {
+    if ordered_ids.len() > MAX_REORDER_IDS {
+        return Err(format!(
+            "Too many items to reorder: {} (at most {MAX_REORDER_IDS})",
+            ordered_ids.len()
+        ));
+    }
+    ordered_ids
+        .iter()
+        .map(|s| Uuid::parse_str(s).map_err(|e| format!("Invalid UUID in the order: {e}")))
+        .collect()
+}
+
 #[tauri::command]
 pub async fn folder_reorder(
     state: State<'_, DbState>,
@@ -1050,10 +1075,7 @@ pub async fn folder_reorder(
         .as_deref()
         .map(|s| Uuid::parse_str(s).map_err(|e| format!("Invalid parent_id: {e}")))
         .transpose()?;
-    let uuids: Vec<Uuid> = ordered_ids
-        .iter()
-        .map(|s| Uuid::parse_str(s).map_err(|e| format!("Invalid UUID '{s}': {e}")))
-        .collect::<Result<_, _>>()?;
+    let uuids = reorder_ids(&ordered_ids)?;
     state.0.reorder_folders(parent_uuid, uuids.clone()).await?;
     keep_folder_order(
         &*state.0,
@@ -1073,10 +1095,7 @@ pub async fn session_reorder(
     ordered_ids: Vec<String>,
 ) -> Result<(), String> {
     let folder_uuid = Uuid::parse_str(&folder_id).map_err(|e| format!("Invalid folder_id: {e}"))?;
-    let uuids: Vec<Uuid> = ordered_ids
-        .iter()
-        .map(|s| Uuid::parse_str(s).map_err(|e| format!("Invalid UUID '{s}': {e}")))
-        .collect::<Result<_, _>>()?;
+    let uuids = reorder_ids(&ordered_ids)?;
     state.0.reorder_sessions(folder_uuid, uuids.clone()).await?;
     keep_session_order(
         &*state.0,
@@ -1817,6 +1836,27 @@ mod tests {
             owner: owner.to_string(),
             visibility: "shared".to_string(),
         }
+    }
+
+    #[test]
+    fn a_reorder_takes_a_list_of_limited_length() {
+        let id = Uuid::new_v4();
+        let ids = vec![id.to_string(); MAX_REORDER_IDS];
+        assert_eq!(reorder_ids(&ids).unwrap(), vec![id; MAX_REORDER_IDS]);
+        assert!(reorder_ids(&[]).unwrap().is_empty());
+        // One more is refused before any is parsed, also one that is no ID.
+        let mut ids = ids;
+        ids.push("not an id".to_string());
+        let refused = reorder_ids(&ids).unwrap_err();
+        assert!(
+            refused.starts_with("Too many items to reorder"),
+            "{refused}"
+        );
+        // An ID that is not one is not quoted back.
+        let long = "x".repeat(10_000);
+        let refused = reorder_ids(std::slice::from_ref(&long)).unwrap_err();
+        assert!(refused.starts_with("Invalid UUID"), "{refused}");
+        assert!(!refused.contains(&long[..64]), "{refused}");
     }
 
     #[test]

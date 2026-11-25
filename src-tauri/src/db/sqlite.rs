@@ -13,7 +13,9 @@ use super::models::{
     UpdateSession,
 };
 use super::update_builder::{BindVal, Dialect, SessionColumn, UpdateBuilder};
-use super::{cmp_hostname, search_pattern, BulkSessionEdit, DatabaseProvider, DbResult};
+use super::{
+    cmp_hostname, first_of_each, search_pattern, BulkSessionEdit, DatabaseProvider, DbResult,
+};
 
 pub struct SqliteProvider {
     pool: SqlitePool,
@@ -35,6 +37,57 @@ fn ids_of(rows: &[SqliteRow]) -> Vec<Uuid> {
     rows.iter()
         .filter_map(|row| Uuid::parse_str(row.get("id")).ok())
         .collect()
+}
+
+/// The statement of [`number_folders`]: one statement for the whole list,
+/// as in `PostgreSQL`. The list is bound as a JSON array, and `json_each`
+/// gives each ID its place in it, from 0. A statement for each ID made a
+/// reorder as many statements long as the list it was given, with the
+/// database's write lock held throughout.
+const NUMBER_FOLDERS: &str = "UPDATE folders SET sort_order = o.key \
+     FROM json_each(?1) AS o \
+     WHERE folders.id = o.value AND folders.parent_id IS ?2";
+
+/// As [`NUMBER_FOLDERS`], for sessions.
+const NUMBER_SESSIONS: &str = "UPDATE sessions SET sort_order = o.key \
+     FROM json_each(?1) AS o \
+     WHERE sessions.id = o.value AND sessions.folder_id = ?2";
+
+/// `ids`, each where it comes first, as the JSON array that
+/// [`NUMBER_FOLDERS`] and [`NUMBER_SESSIONS`] take.
+fn id_array(ids: &[String]) -> DbResult<String> {
+    serde_json::to_string(&first_of_each(ids)).map_err(|e| format!("Failed to list IDs: {e}"))
+}
+
+/// Number the folders in `parent` (`None`: the top level) by their place in
+/// `ids`; an ID that is not one of them numbers nothing.
+async fn number_folders(
+    conn: &mut sqlx::SqliteConnection,
+    parent: Option<&str>,
+    ids: &[String],
+) -> DbResult<()> {
+    sqlx::query(NUMBER_FOLDERS)
+        .bind(id_array(ids)?)
+        .bind(parent)
+        .execute(&mut *conn)
+        .await
+        .map_err(|e| format!("Failed to reorder folders: {e}"))?;
+    Ok(())
+}
+
+/// As [`number_folders`], for the sessions in `folder`.
+async fn number_sessions(
+    conn: &mut sqlx::SqliteConnection,
+    folder: &str,
+    ids: &[String],
+) -> DbResult<()> {
+    sqlx::query(NUMBER_SESSIONS)
+        .bind(id_array(ids)?)
+        .bind(folder)
+        .execute(&mut *conn)
+        .await
+        .map_err(|e| format!("Failed to reorder sessions: {e}"))?;
+    Ok(())
 }
 
 fn parse_optional_uuid(s: Option<&str>) -> DbResult<Option<Uuid>> {
@@ -475,15 +528,8 @@ impl DatabaseProvider for SqliteProvider {
             .await
             .map_err(|e| format!("Failed to begin transaction: {e}"))?;
 
-        for (i, id) in ordered_ids.iter().enumerate() {
-            sqlx::query("UPDATE folders SET sort_order = ? WHERE id = ? AND parent_id IS ?")
-                .bind(i as i32)
-                .bind(id.to_string())
-                .bind(&parent_str)
-                .execute(&mut *tx)
-                .await
-                .map_err(|e| format!("Failed to reorder folders: {e}"))?;
-        }
+        let ids: Vec<String> = ordered_ids.iter().map(Uuid::to_string).collect();
+        number_folders(&mut tx, parent_str.as_deref(), &ids).await?;
 
         tx.commit()
             .await
@@ -500,15 +546,8 @@ impl DatabaseProvider for SqliteProvider {
             .await
             .map_err(|e| format!("Failed to begin transaction: {e}"))?;
 
-        for (i, id) in ordered_ids.iter().enumerate() {
-            sqlx::query("UPDATE sessions SET sort_order = ? WHERE id = ? AND folder_id = ?")
-                .bind(i as i32)
-                .bind(id.to_string())
-                .bind(&folder_str)
-                .execute(&mut *tx)
-                .await
-                .map_err(|e| format!("Failed to reorder sessions: {e}"))?;
-        }
+        let ids: Vec<String> = ordered_ids.iter().map(Uuid::to_string).collect();
+        number_sessions(&mut tx, &folder_str, &ids).await?;
 
         tx.commit()
             .await
@@ -532,15 +571,8 @@ impl DatabaseProvider for SqliteProvider {
                 .await
                 .map_err(|e| format!("Failed to sort folders: {e}"))?;
 
-        for (i, row) in rows.iter().enumerate() {
-            let id: String = row.get("id");
-            sqlx::query("UPDATE folders SET sort_order = ? WHERE id = ?")
-                .bind(i as i32)
-                .bind(&id)
-                .execute(&mut *tx)
-                .await
-                .map_err(|e| format!("Failed to sort folders: {e}"))?;
-        }
+        let ids: Vec<String> = rows.iter().map(|row| row.get("id")).collect();
+        number_folders(&mut tx, parent_str.as_deref(), &ids).await?;
 
         tx.commit()
             .await
@@ -564,15 +596,8 @@ impl DatabaseProvider for SqliteProvider {
                 .await
                 .map_err(|e| format!("Failed to sort sessions: {e}"))?;
 
-        for (i, row) in rows.iter().enumerate() {
-            let id: String = row.get("id");
-            sqlx::query("UPDATE sessions SET sort_order = ? WHERE id = ?")
-                .bind(i as i32)
-                .bind(&id)
-                .execute(&mut *tx)
-                .await
-                .map_err(|e| format!("Failed to sort sessions: {e}"))?;
-        }
+        let ids: Vec<String> = rows.iter().map(|row| row.get("id")).collect();
+        number_sessions(&mut tx, &folder_str, &ids).await?;
 
         tx.commit()
             .await
@@ -603,22 +628,15 @@ impl DatabaseProvider for SqliteProvider {
             .collect();
         pairs.sort_by(|a, b| cmp_hostname(&a.1, &b.1));
 
-        for (i, (id, _)) in pairs.iter().enumerate() {
-            sqlx::query("UPDATE sessions SET sort_order = ? WHERE id = ? AND folder_id = ?")
-                .bind(i as i32)
-                .bind(id)
-                .bind(&folder_str)
-                .execute(&mut *tx)
-                .await
-                .map_err(|e| format!("Failed to sort sessions: {e}"))?;
-        }
+        let ids: Vec<String> = pairs.into_iter().map(|(id, _)| id).collect();
+        number_sessions(&mut tx, &folder_str, &ids).await?;
 
         tx.commit()
             .await
             .map_err(|e| format!("Failed to commit: {e}"))?;
-        Ok(pairs
+        Ok(ids
             .iter()
-            .filter_map(|(id, _)| Uuid::parse_str(id).ok())
+            .filter_map(|id| Uuid::parse_str(id).ok())
             .collect())
     }
 
@@ -1472,5 +1490,252 @@ mod tests {
         assert!(folders_found(&db, r"\%").await.is_empty());
         // A query with a NUL in it finds nothing.
         assert!(folders_found(&db, "lab\0").await.is_empty());
+    }
+
+    async fn add_session(db: &SqliteProvider, folder: Uuid, name: &str, host: &str) -> Uuid {
+        db.create_session(NewSession {
+            folder_id: folder,
+            name: name.to_string(),
+            hostname: host.to_string(),
+            port: 22,
+            protocol: "ssh".to_string(),
+            username: String::new(),
+            auth_method: "password".to_string(),
+            jump_host_id: None,
+            tags: "[]".to_string(),
+            icon: "desktop".to_string(),
+            highlight_profile_id: None,
+            credential_profile_id: None,
+            legacy_algorithms: false,
+            login_sequence_id: None,
+        })
+        .await
+        .unwrap()
+        .id
+    }
+
+    /// The names and numbers of the sessions in `folder`, in their order.
+    async fn sessions_in(db: &SqliteProvider, folder: Uuid) -> Vec<(String, i32)> {
+        let mut sessions = db.list_all_sessions().await.unwrap();
+        sessions.retain(|s| s.folder_id == folder);
+        sessions
+            .into_iter()
+            .map(|s| (s.name, s.sort_order))
+            .collect()
+    }
+
+    /// The names and numbers of the folders in `parent`, in their order.
+    async fn folders_in(db: &SqliteProvider, parent: Option<Uuid>) -> Vec<(String, i32)> {
+        let mut folders = db.list_folders().await.unwrap();
+        folders.retain(|f| f.parent_id == parent);
+        folders
+            .into_iter()
+            .map(|f| (f.name, f.sort_order))
+            .collect()
+    }
+
+    fn named(listed: &[(String, i32)]) -> Vec<&str> {
+        listed.iter().map(|(name, _)| name.as_str()).collect()
+    }
+
+    #[tokio::test]
+    async fn a_reorder_numbers_the_sessions_of_its_folder_by_their_place() {
+        let db = database_with(&[]).await;
+        let lab = db.list_folders().await.unwrap()[0].id;
+        let other = db
+            .create_folder(NewFolder {
+                name: "other".to_string(),
+                parent_id: None,
+            })
+            .await
+            .unwrap()
+            .id;
+        let one = add_session(&db, lab, "one", "a.example").await;
+        let two = add_session(&db, lab, "two", "b.example").await;
+        let three = add_session(&db, lab, "three", "c.example").await;
+        let elsewhere = add_session(&db, other, "elsewhere", "d.example").await;
+
+        db.reorder_sessions(lab, vec![three, one, two])
+            .await
+            .unwrap();
+        assert_eq!(
+            sessions_in(&db, lab).await,
+            [
+                ("three".to_string(), 0),
+                ("one".to_string(), 1),
+                ("two".to_string(), 2)
+            ]
+        );
+
+        // An ID given twice takes its first place, an ID of another folder's
+        // session or of none numbers nothing, and the places of the others
+        // are their places in the list as it was given.
+        db.reorder_sessions(lab, vec![Uuid::new_v4(), two, elsewhere, two, one, three])
+            .await
+            .unwrap();
+        assert_eq!(
+            sessions_in(&db, lab).await,
+            [
+                ("two".to_string(), 1),
+                ("one".to_string(), 3),
+                ("three".to_string(), 4)
+            ]
+        );
+        assert_eq!(
+            sessions_in(&db, other).await,
+            [("elsewhere".to_string(), 0)]
+        );
+
+        // An empty list changes nothing.
+        db.reorder_sessions(lab, Vec::new()).await.unwrap();
+        assert_eq!(named(&sessions_in(&db, lab).await), ["two", "one", "three"]);
+    }
+
+    #[tokio::test]
+    async fn a_reorder_numbers_the_folders_of_its_place_by_their_place() {
+        let db = database_with(&[]).await;
+        let lab = db.list_folders().await.unwrap()[0].id;
+        let mut top = vec![lab];
+        for name in ["beta", "alpha"] {
+            top.push(
+                db.create_folder(NewFolder {
+                    name: name.to_string(),
+                    parent_id: None,
+                })
+                .await
+                .unwrap()
+                .id,
+            );
+        }
+        let mut inner = Vec::new();
+        for name in ["x", "y"] {
+            inner.push(
+                db.create_folder(NewFolder {
+                    name: name.to_string(),
+                    parent_id: Some(lab),
+                })
+                .await
+                .unwrap()
+                .id,
+            );
+        }
+
+        // At the top level, with a folder of another place in the list,
+        // which keeps its number.
+        db.reorder_folders(None, vec![top[2], inner[1], top[0], top[1]])
+            .await
+            .unwrap();
+        assert_eq!(
+            folders_in(&db, None).await,
+            [
+                ("alpha".to_string(), 0),
+                ("lab".to_string(), 2),
+                ("beta".to_string(), 3)
+            ]
+        );
+        assert_eq!(named(&folders_in(&db, Some(lab)).await), ["x", "y"]);
+
+        db.reorder_folders(Some(lab), vec![inner[1], inner[0]])
+            .await
+            .unwrap();
+        assert_eq!(
+            folders_in(&db, Some(lab)).await,
+            [("y".to_string(), 0), ("x".to_string(), 1)]
+        );
+        assert_eq!(
+            named(&folders_in(&db, None).await),
+            ["alpha", "lab", "beta"]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_sort_numbers_what_it_sorted() {
+        let db = database_with(&[]).await;
+        let lab = db.list_folders().await.unwrap()[0].id;
+        let c = add_session(&db, lab, "c", "10.0.0.2").await;
+        let a = add_session(&db, lab, "a", "10.0.0.10").await;
+        let b = add_session(&db, lab, "b", "10.0.0.1").await;
+
+        assert_eq!(
+            db.sort_sessions_alphabetically(lab).await.unwrap(),
+            [a, b, c]
+        );
+        assert_eq!(
+            sessions_in(&db, lab).await,
+            [
+                ("a".to_string(), 0),
+                ("b".to_string(), 1),
+                ("c".to_string(), 2)
+            ]
+        );
+        assert_eq!(db.sort_sessions_by_hostname(lab).await.unwrap(), [b, c, a]);
+        assert_eq!(
+            sessions_in(&db, lab).await,
+            [
+                ("b".to_string(), 0),
+                ("c".to_string(), 1),
+                ("a".to_string(), 2)
+            ]
+        );
+
+        for name in ["zulu", "mike"] {
+            db.create_folder(NewFolder {
+                name: name.to_string(),
+                parent_id: None,
+            })
+            .await
+            .unwrap();
+        }
+        let sorted = db.sort_folders_alphabetically(None).await.unwrap();
+        assert_eq!(sorted.len(), 3);
+        assert_eq!(
+            folders_in(&db, None).await,
+            [
+                ("lab".to_string(), 0),
+                ("mike".to_string(), 1),
+                ("zulu".to_string(), 2)
+            ]
+        );
+
+        // Below a folder, and the other places keep their numbers.
+        let mut inner = Vec::new();
+        for name in ["y", "x"] {
+            inner.push(
+                db.create_folder(NewFolder {
+                    name: name.to_string(),
+                    parent_id: Some(lab),
+                })
+                .await
+                .unwrap()
+                .id,
+            );
+        }
+        db.reorder_folders(None, vec![sorted[2], sorted[0], sorted[1]])
+            .await
+            .unwrap();
+        assert_eq!(
+            db.sort_folders_alphabetically(Some(lab)).await.unwrap(),
+            [inner[1], inner[0]]
+        );
+        assert_eq!(
+            folders_in(&db, Some(lab)).await,
+            [("x".to_string(), 0), ("y".to_string(), 1)]
+        );
+        assert_eq!(named(&folders_in(&db, None).await), ["zulu", "lab", "mike"]);
+
+        // A session sort leaves the sessions of another folder alone.
+        let other = inner[0];
+        add_session(&db, other, "q", "10.0.0.9").await;
+        add_session(&db, other, "p", "10.0.0.8").await;
+        db.sort_sessions_alphabetically(other).await.unwrap();
+        db.reorder_sessions(lab, vec![c, a, b]).await.unwrap();
+        db.sort_sessions_by_hostname(other).await.unwrap();
+        assert_eq!(named(&sessions_in(&db, lab).await), ["c", "a", "b"]);
+        db.sort_sessions_alphabetically(other).await.unwrap();
+        assert_eq!(named(&sessions_in(&db, lab).await), ["c", "a", "b"]);
+        assert_eq!(
+            sessions_in(&db, other).await,
+            [("p".to_string(), 0), ("q".to_string(), 1)]
+        );
     }
 }

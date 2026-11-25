@@ -13,7 +13,9 @@ use super::models::{
     UpdateSession,
 };
 use super::update_builder::{BindVal, Dialect, SessionColumn, UpdateBuilder};
-use super::{cmp_hostname, search_pattern, BulkSessionEdit, DatabaseProvider, DbResult};
+use super::{
+    cmp_hostname, first_of_each, search_pattern, BulkSessionEdit, DatabaseProvider, DbResult,
+};
 
 /// The limits every connection of the app sets for itself, as `name` and
 /// value pairs: how long a statement waits for a lock, how long a statement
@@ -439,16 +441,6 @@ async fn number_own_sessions(
         .await
         .map_err(|e| format!("Failed to reorder sessions: {e}"))?;
     Ok(())
-}
-
-/// `ids` with each one where it comes first. A row is numbered by its place
-/// in the list, so the list gives each row one place.
-fn first_of_each(ids: &[String]) -> Vec<&str> {
-    let mut seen = std::collections::HashSet::new();
-    ids.iter()
-        .map(String::as_str)
-        .filter(|id| seen.insert(*id))
-        .collect()
 }
 
 #[async_trait]
