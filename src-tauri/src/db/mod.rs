@@ -2,6 +2,7 @@ pub mod models;
 pub mod postgres;
 pub mod session_highlights;
 pub mod sqlite;
+pub mod tree_order;
 pub mod update_builder;
 
 use std::cmp::Ordering;
@@ -105,6 +106,31 @@ pub trait DatabaseProvider: Send + Sync {
 
     async fn create_folder(&self, folder: NewFolder) -> DbResult<Folder>;
     async fn list_folders(&self) -> DbResult<Vec<Folder>>;
+
+    /// The folders in `parent` (`None`: the top level) that can be seen, by
+    /// ID with their owner. A provider for a large shared database reads
+    /// only that place; this one reads every folder.
+    async fn folder_owners_in(&self, parent: Option<Uuid>) -> DbResult<Vec<(Uuid, String)>> {
+        Ok(self
+            .list_folders()
+            .await?
+            .into_iter()
+            .filter(|f| f.parent_id == parent)
+            .map(|f| (f.id, f.owner))
+            .collect())
+    }
+
+    /// The sessions in `folder` that can be seen, by ID with their owner, as
+    /// [`Self::folder_owners_in`] has the folders.
+    async fn session_owners_in(&self, folder: Uuid) -> DbResult<Vec<(Uuid, String)>> {
+        Ok(self
+            .list_all_sessions()
+            .await?
+            .into_iter()
+            .filter(|s| s.folder_id == folder)
+            .map(|s| (s.id, s.owner))
+            .collect())
+    }
     /// The folders whose name has `query` in it, by the rules of
     /// [`search_pattern`] and in the order of [`Self::list_folders`]. Only a
     /// folder's own name is looked at, not the names of the folders above it.
@@ -140,7 +166,10 @@ pub trait DatabaseProvider: Send + Sync {
     // ── Reordering ───────────────────────────────────────────────────────
 
     /// Persist a custom order for sibling folders under the given parent.
-    /// `ordered_ids` contains every folder `ID` in the desired sequence.
+    /// `ordered_ids` contains every folder `ID` in the desired sequence. In
+    /// `PostgreSQL` mode only the user's own folders are numbered, by their
+    /// place in it; where other users' come among them is kept locally
+    /// (`tree_order`).
     async fn reorder_folders(
         &self,
         parent_id: Option<Uuid>,
@@ -151,14 +180,19 @@ pub trait DatabaseProvider: Send + Sync {
     async fn reorder_sessions(&self, folder_id: Uuid, ordered_ids: Vec<Uuid>) -> DbResult<()>;
 
     /// Reset `sort_order` for sibling folders so they appear alphabetically.
-    async fn sort_folders_alphabetically(&self, parent_id: Option<Uuid>) -> DbResult<()>;
+    /// Returns the folders there in that order, as a reorder takes them:
+    /// in `PostgreSQL` mode other users' as well, which are not numbered.
+    async fn sort_folders_alphabetically(&self, parent_id: Option<Uuid>) -> DbResult<Vec<Uuid>>;
 
-    /// Reset `sort_order` for sessions inside a folder so they appear alphabetically.
-    async fn sort_sessions_alphabetically(&self, folder_id: Uuid) -> DbResult<()>;
+    /// Reset `sort_order` for sessions inside a folder so they appear
+    /// alphabetically. Returns them in that order, as
+    /// [`Self::sort_folders_alphabetically`] does.
+    async fn sort_sessions_alphabetically(&self, folder_id: Uuid) -> DbResult<Vec<Uuid>>;
 
     /// Reset `sort_order` for sessions inside a folder so they appear sorted by
-    /// hostname, with proper numeric ordering for IP addresses.
-    async fn sort_sessions_by_hostname(&self, folder_id: Uuid) -> DbResult<()>;
+    /// hostname, with proper numeric ordering for IP addresses. Returns them
+    /// in that order, as [`Self::sort_folders_alphabetically`] does.
+    async fn sort_sessions_by_hostname(&self, folder_id: Uuid) -> DbResult<Vec<Uuid>>;
 
     // ── Credentials (metadata — secrets live in OS keychain) ─────────────
     //

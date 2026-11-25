@@ -10,9 +10,8 @@
  * of the top level. Nothing goes where it already is, no folder goes into
  * itself or below itself, no session goes to the top level, and in PostgreSQL
  * mode a user moves only what is their own, into folders that are their own
- * up to the top, and to a place beside a row of their own: a reorder changes
- * only the user's own rows, so the place beside another user's is not theirs
- * to give.
+ * up to the top. There it goes beside any row, another user's as well: the
+ * backend keeps where other users' rows are shown among the user's own.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Folder, Session } from "./stores/sessionStore";
@@ -396,13 +395,33 @@ describe("in PostgreSQL mode", () => {
     expect(dropAt(aFolder("Inside"), below, asAlice(["Theirs"]))?.moves).toBe(true);
   });
 
-  it("puts nothing beside another user's row, whose place is not the user's to give", () => {
-    // At the top level, which is everyone's, and in a folder of the user's own.
-    expect(dropAt(aFolder("Other"), onFolder("Theirs", 0.1), asAlice())).toBeNull();
-    expect(dropAt(aFolder("Mine"), onFolder("Theirs", 0.9), asAlice())).toBeNull();
-    expect(dropAt(aFolder("Sub"), onFolder("Theirs", 0.1), asAlice(["Mine"]))).toBeNull();
-    expect(dropAt(aSession("m1"), onSession("theirs-here", 0.1), asAlice(["Mine"]))).toBeNull();
-    expect(dropAt(aSession("m1"), onSession("theirs-here", 0.9), asAlice(["Mine"]))).toBeNull();
+  it("puts an item beside another user's row in a place of the user's own", () => {
+    // At the top level, which is everyone's.
+    expect(dropAt(aFolder("Other"), onFolder("Theirs", 0.1), asAlice())).toEqual({
+      mark: { kind: "line", rowId: "Theirs", edge: "top" },
+      item: aFolder("Other"),
+      parentId: null,
+      moves: false,
+      order: ["Mine", "Other", "Theirs"],
+    });
+    expect(dropAt(aFolder("Mine"), onFolder("Theirs", 0.9), asAlice())?.order).toEqual([
+      "Theirs",
+      "Mine",
+      "Other",
+    ]);
+    // Out of a folder, to the top level.
+    const sub = dropAt(aFolder("Sub"), onFolder("Theirs", 0.1), asAlice(["Mine"]));
+    expect(sub?.moves).toBe(true);
+    expect(sub?.order).toEqual(["Mine", "Sub", "Theirs", "Other"]);
+    // In a folder of the user's own.
+    expect(dropAt(aSession("m1"), onSession("theirs-here", 0.1), asAlice(["Mine"]))?.order).toEqual(
+      ["m2", "m1", "theirs-here"],
+    );
+    expect(dropAt(aSession("m1"), onSession("theirs-here", 0.9), asAlice(["Mine"]))?.order).toEqual(
+      ["m2", "theirs-here", "m1"],
+    );
+    // Not where the item is already.
+    expect(dropAt(aSession("m2"), onSession("theirs-here", 0.1), asAlice(["Mine"]))).toBeNull();
   });
 
   it("puts a folder beside one of the user's own at the top level, among everyone's", () => {
@@ -540,39 +559,42 @@ describe("a step up or down", () => {
     const all = { folders: pgFolders, sessions: pgSessions };
     const asAlice = (): DropTree => tree([], { pgMode: true, pgUser: "alice" }, all);
 
-    it("goes past another user's row to the nearest of the user's own", () => {
+    it("steps past another user's row as past one of the user's own", () => {
       // Theirs is bob's, at the top level among alice's folders.
-      expect(stepDrop(aFolder("Other"), "up", asAlice())?.order).toEqual([
-        "Other",
-        "Mine",
-        "Theirs",
-      ]);
+      expect(stepDrop(aFolder("Other"), "up", asAlice())).toEqual({
+        mark: { kind: "line", rowId: "Theirs", edge: "top" },
+        item: aFolder("Other"),
+        parentId: null,
+        moves: false,
+        order: ["Mine", "Other", "Theirs"],
+      });
       expect(stepDrop(aFolder("Mine"), "down", asAlice())?.order).toEqual([
         "Theirs",
-        "Other",
         "Mine",
+        "Other",
       ]);
       expect(stepDrop(aSession("m2"), "down", asAlice())?.order).toEqual([
         "m1",
         "theirs-here",
-        "m3",
         "m2",
+        "m3",
       ]);
       expect(stepDrop(aSession("m3"), "up", asAlice())?.order).toEqual([
         "m1",
-        "m3",
         "m2",
+        "m3",
         "theirs-here",
       ]);
     });
 
-    it("goes nowhere where only other users' rows are beyond it", () => {
+    it("steps beside another user's row where only that row is beyond it", () => {
       const lastMine = {
         folders: pgFolders,
         sessions: [session("m1", "Mine", "alice"), shared(session("theirs-here", "Mine", "bob"))],
       };
       const t = tree([], { pgMode: true, pgUser: "alice" }, lastMine);
-      expect(stepDrop(aSession("m1"), "down", t)).toBeNull();
+      expect(stepDrop(aSession("m1"), "down", t)?.order).toEqual(["theirs-here", "m1"]);
+      expect(stepDrop(aSession("m1"), "up", t)).toBeNull();
     });
 
     it("moves nothing of another user's, nor in another user's folder", () => {

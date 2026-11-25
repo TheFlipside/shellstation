@@ -14,7 +14,10 @@ use crate::db::models::{
     CredentialProfile, DataFingerprint, Folder, NewFolder, NewSession, Session, UpdateSession,
 };
 use crate::db::session_highlights::{sessions_below, SessionHighlightState, SessionHighlights};
-use crate::db::{CredentialDbState, DatabaseProvider, DbState, HighlightDbState, PgUserState};
+use crate::db::tree_order::{Kind, TreeOrder, TreeOrderState};
+use crate::db::{
+    CredentialDbState, DatabaseProvider, DbResult, DbState, HighlightDbState, PgUserState,
+};
 use crate::login_pins::{needs_confirmation, LoginPinState, UsedAs};
 use crate::session_logger::SessionLogState;
 use crate::ssh::{establish_ssh_connection, SshConnectParams, SshState};
@@ -52,8 +55,18 @@ pub async fn folder_create(
 }
 
 #[tauri::command]
-pub async fn folder_list(state: State<'_, DbState>) -> Result<Vec<Folder>, String> {
-    state.0.list_folders().await
+pub async fn folder_list(
+    state: State<'_, DbState>,
+    tree_order: State<'_, TreeOrderState>,
+    pg_user: State<'_, PgUserState>,
+) -> Result<Vec<Folder>, String> {
+    let mut folders = state.0.list_folders().await?;
+    if let Some(local) = tree_order.0.as_ref() {
+        local
+            .arrange_folders(&mut folders, pg_user.0.as_deref())
+            .await;
+    }
+    Ok(folders)
 }
 
 #[tauri::command]
@@ -114,6 +127,7 @@ pub async fn folder_move(
 pub async fn folder_delete(
     state: State<'_, DbState>,
     highlights: State<'_, SessionHighlightState>,
+    tree_order: State<'_, TreeOrderState>,
     id: String,
 ) -> Result<(), String> {
     let folder = parse_uuid(&id)?;
@@ -123,11 +137,54 @@ pub async fn folder_delete(
         Some(_) => visible_sessions_below(&*state.0, folder).await,
         None => Vec::new(),
     };
+    // The folders that go with it, for the orders kept for them.
+    let places = match tree_order.0.as_ref() {
+        Some(_) => match state.0.list_folders().await {
+            Ok(folders) => folders_below(folder, &folders),
+            Err(e) => {
+                tracing::warn!(
+                    "Could not list the folders of a folder that is being deleted; the orders kept for those below it are not dropped: {e:?}"
+                );
+                vec![folder]
+            }
+        },
+        None => Vec::new(),
+    };
     state.0.delete_folder(folder).await?;
     if let Some(local) = highlights.0.as_ref() {
         forget_highlights(local, &gone).await;
     }
+    if let Some(local) = tree_order.0.as_ref() {
+        // The folders are gone either way: what stays is a row that nothing
+        // reads.
+        if let Err(e) = local.forget(&places).await {
+            tracing::warn!("Could not drop the orders of deleted folders: {e:?}");
+        }
+    }
     Ok(())
+}
+
+/// `folder` and the folders below it, going by `folders`, each once, so that
+/// this ends on folders that name each other as their parent.
+fn folders_below(folder: Uuid, folders: &[Folder]) -> Vec<Uuid> {
+    let mut children: std::collections::HashMap<Uuid, Vec<Uuid>> = std::collections::HashMap::new();
+    for f in folders {
+        if let Some(parent) = f.parent_id {
+            children.entry(parent).or_default().push(f.id);
+        }
+    }
+    let mut below = vec![folder];
+    let mut seen = HashSet::from([folder]);
+    let mut i = 0;
+    while let Some(&current) = below.get(i) {
+        for &child in children.get(&current).into_iter().flatten() {
+            if seen.insert(child) {
+                below.push(child);
+            }
+        }
+        i += 1;
+    }
+    below
 }
 
 /// The sessions in `folder` and below it that this user can see, whoever
@@ -402,10 +459,17 @@ pub async fn session_get(
 pub async fn session_list_all(
     state: State<'_, DbState>,
     highlights: State<'_, SessionHighlightState>,
+    tree_order: State<'_, TreeOrderState>,
+    pg_user: State<'_, PgUserState>,
 ) -> Result<Vec<Session>, String> {
     let mut sessions = state.0.list_all_sessions().await?;
     if let Some(local) = highlights.0.as_ref() {
         local.overlay(&mut sessions).await;
+    }
+    if let Some(local) = tree_order.0.as_ref() {
+        local
+            .arrange_sessions(&mut sessions, pg_user.0.as_deref())
+            .await;
     }
     Ok(sessions)
 }
@@ -893,9 +957,92 @@ pub(crate) async fn set_item_visibility(
 
 // ── Reordering commands ──────────────────────────────────────────────
 
+/// Where the order the user gives a place is kept besides the database, in
+/// `PostgreSQL` mode: the local orders, and the role they go by. `None` in
+/// `SQLite` mode, and while the role is not known, when no row is the
+/// user's own and nothing is laid out by an order.
+fn kept_orders<'a>(
+    tree_order: &'a TreeOrderState,
+    pg_user: &'a PgUserState,
+) -> Option<(&'a TreeOrder, &'a str)> {
+    Some((tree_order.0.as_ref()?, pg_user.0.as_deref()?))
+}
+
+/// What a command says when the user's own rows are in their new order and
+/// keeping the order failed after that.
+fn order_not_kept(e: impl std::fmt::Display) -> String {
+    format!(
+        "Your own items are in their new order, but other users' may not be where you put them: {e}"
+    )
+}
+
+/// Keep `order` as the order of what `place` lists of `kind`, so that other
+/// users' rows there are shown where it puts them (`tree_order`). `listed`
+/// is what the place lists that the user can see, by ID with its owner. Of
+/// `order`, the IDs the place lists are kept, each once. Where none of them
+/// is another user's, the order kept before is forgotten: the numbers of the
+/// user's own rows say it all.
+///
+/// It comes after the database has the new order, so an error says that.
+async fn keep_order(
+    (local, role): (&TreeOrder, &str),
+    kind: Kind,
+    place: Option<Uuid>,
+    order: &[Uuid],
+    listed: DbResult<Vec<(Uuid, String)>>,
+) -> Result<(), String> {
+    let own: std::collections::HashMap<Uuid, bool> = listed
+        .map_err(order_not_kept)?
+        .into_iter()
+        .map(|(id, owner)| (id, owner == role))
+        .collect();
+    let mut seen = HashSet::new();
+    let order: Vec<Uuid> = order
+        .iter()
+        .copied()
+        .filter(|id| own.contains_key(id) && seen.insert(*id))
+        .collect();
+    let mixed = order.iter().any(|id| own.get(id) == Some(&false));
+    local
+        .record(kind, place, if mixed { &order } else { &[] })
+        .await
+        .map_err(order_not_kept)
+}
+
+/// Keep `order`, the folders of `parent` in their new order, where orders
+/// are kept (`kept`, see [`kept_orders`]).
+async fn keep_folder_order(
+    db: &dyn DatabaseProvider,
+    kept: Option<(&TreeOrder, &str)>,
+    parent: Option<Uuid>,
+    order: &[Uuid],
+) -> Result<(), String> {
+    let Some(kept) = kept else {
+        return Ok(());
+    };
+    let listed = db.folder_owners_in(parent).await;
+    keep_order(kept, Kind::Folder, parent, order, listed).await
+}
+
+/// As [`keep_folder_order`], for the sessions of `folder`.
+async fn keep_session_order(
+    db: &dyn DatabaseProvider,
+    kept: Option<(&TreeOrder, &str)>,
+    folder: Uuid,
+    order: &[Uuid],
+) -> Result<(), String> {
+    let Some(kept) = kept else {
+        return Ok(());
+    };
+    let listed = db.session_owners_in(folder).await;
+    keep_order(kept, Kind::Session, Some(folder), order, listed).await
+}
+
 #[tauri::command]
 pub async fn folder_reorder(
     state: State<'_, DbState>,
+    tree_order: State<'_, TreeOrderState>,
+    pg_user: State<'_, PgUserState>,
     parent_id: Option<String>,
     ordered_ids: Vec<String>,
 ) -> Result<(), String> {
@@ -907,12 +1054,21 @@ pub async fn folder_reorder(
         .iter()
         .map(|s| Uuid::parse_str(s).map_err(|e| format!("Invalid UUID '{s}': {e}")))
         .collect::<Result<_, _>>()?;
-    state.0.reorder_folders(parent_uuid, uuids).await
+    state.0.reorder_folders(parent_uuid, uuids.clone()).await?;
+    keep_folder_order(
+        &*state.0,
+        kept_orders(&tree_order, &pg_user),
+        parent_uuid,
+        &uuids,
+    )
+    .await
 }
 
 #[tauri::command]
 pub async fn session_reorder(
     state: State<'_, DbState>,
+    tree_order: State<'_, TreeOrderState>,
+    pg_user: State<'_, PgUserState>,
     folder_id: String,
     ordered_ids: Vec<String>,
 ) -> Result<(), String> {
@@ -921,12 +1077,21 @@ pub async fn session_reorder(
         .iter()
         .map(|s| Uuid::parse_str(s).map_err(|e| format!("Invalid UUID '{s}': {e}")))
         .collect::<Result<_, _>>()?;
-    state.0.reorder_sessions(folder_uuid, uuids).await
+    state.0.reorder_sessions(folder_uuid, uuids.clone()).await?;
+    keep_session_order(
+        &*state.0,
+        kept_orders(&tree_order, &pg_user),
+        folder_uuid,
+        &uuids,
+    )
+    .await
 }
 
 #[tauri::command]
 pub async fn folder_sort_alphabetically(
     state: State<'_, DbState>,
+    tree_order: State<'_, TreeOrderState>,
+    pg_user: State<'_, PgUserState>,
     parent_id: Option<String>,
     recursive: Option<bool>,
 ) -> Result<(), String> {
@@ -934,30 +1099,59 @@ pub async fn folder_sort_alphabetically(
         .as_deref()
         .map(|s| Uuid::parse_str(s).map_err(|e| format!("Invalid parent_id: {e}")))
         .transpose()?;
-    sort_children_alphabetically(&state.0, parent_uuid, recursive.unwrap_or(false)).await
+    sort_children_alphabetically(
+        &state.0,
+        kept_orders(&tree_order, &pg_user),
+        parent_uuid,
+        recursive.unwrap_or(false),
+    )
+    .await
 }
 
 #[tauri::command]
 pub async fn session_sort_alphabetically(
     state: State<'_, DbState>,
+    tree_order: State<'_, TreeOrderState>,
+    pg_user: State<'_, PgUserState>,
     folder_id: String,
 ) -> Result<(), String> {
     let folder_uuid = Uuid::parse_str(&folder_id).map_err(|e| format!("Invalid folder_id: {e}"))?;
-    state.0.sort_sessions_alphabetically(folder_uuid).await
+    let order = state.0.sort_sessions_alphabetically(folder_uuid).await?;
+    keep_session_order(
+        &*state.0,
+        kept_orders(&tree_order, &pg_user),
+        folder_uuid,
+        &order,
+    )
+    .await
 }
 
 #[tauri::command]
 pub async fn session_sort_by_hostname(
     state: State<'_, DbState>,
+    tree_order: State<'_, TreeOrderState>,
+    pg_user: State<'_, PgUserState>,
     folder_id: String,
 ) -> Result<(), String> {
     let folder_uuid = Uuid::parse_str(&folder_id).map_err(|e| format!("Invalid folder_id: {e}"))?;
-    state.0.sort_sessions_by_hostname(folder_uuid).await
+    let order = state.0.sort_sessions_by_hostname(folder_uuid).await?;
+    keep_session_order(
+        &*state.0,
+        kept_orders(&tree_order, &pg_user),
+        folder_uuid,
+        &order,
+    )
+    .await
 }
 
 /// Sort the immediate children (folders + sessions) of a parent folder
 /// alphabetically.  When `recursive` is true, descend into every subfolder
-/// and do the same.
+/// and do the same. Where orders are kept (`kept`, see [`kept_orders`]),
+/// each place's new order is kept as well, so that other users' rows are
+/// sorted in among the user's own. A place whose order could not be kept
+/// does not stop the walk: what was sorted stays sorted, and the first such
+/// error is returned at the end, unless a sort fails later, which ends the
+/// walk with its own error.
 ///
 /// A folder is gone into once: folders that name each other as their
 /// parent, as a database may have from statements of someone's own, would
@@ -966,10 +1160,12 @@ pub async fn session_sort_by_hostname(
 /// order of folders, not what they are in.
 async fn sort_children_alphabetically(
     db: &std::sync::Arc<dyn super::super::db::DatabaseProvider>,
+    kept: Option<(&TreeOrder, &str)>,
     parent_id: Option<Uuid>,
     recursive: bool,
 ) -> Result<(), String> {
     let mut all_folders = None;
+    let mut not_kept = None;
     let mut seen = HashSet::new();
     let mut to_sort = vec![parent_id];
     while let Some(parent) = to_sort.pop() {
@@ -978,9 +1174,17 @@ async fn sort_children_alphabetically(
                 continue;
             }
         }
-        db.sort_folders_alphabetically(parent).await?;
-        if let Some(pid) = parent {
-            db.sort_sessions_alphabetically(pid).await?;
+        let folder_order = db.sort_folders_alphabetically(parent).await?;
+        let kept_folders = keep_folder_order(&**db, kept, parent, &folder_order).await;
+        let kept_sessions = match parent {
+            Some(pid) => {
+                let session_order = db.sort_sessions_alphabetically(pid).await?;
+                keep_session_order(&**db, kept, pid, &session_order).await
+            }
+            None => Ok(()),
+        };
+        if let Err(e) = kept_folders.and(kept_sessions) {
+            not_kept.get_or_insert(e);
         }
         if recursive {
             let folders = match &all_folders {
@@ -995,7 +1199,7 @@ async fn sort_children_alphabetically(
             );
         }
     }
-    Ok(())
+    not_kept.map_or(Ok(()), Err)
 }
 
 // ── Connect a saved session ──────────────────────────────────────────
@@ -1769,7 +1973,7 @@ mod tests {
                 .unwrap();
             tokio::time::timeout(
                 std::time::Duration::from_secs(10),
-                sort_children_alphabetically(&db, Some(start), true),
+                sort_children_alphabetically(&db, None, Some(start), true),
             )
             .await
             .expect("the sort did not end")
@@ -1782,7 +1986,7 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
-        sort_children_alphabetically(&db, Some(ring_b), false)
+        sort_children_alphabetically(&db, None, Some(ring_b), false)
             .await
             .unwrap();
         assert_eq!(names_in(ring_b).await, ["alpha", "ring a", "zeta"]);
@@ -1794,7 +1998,7 @@ mod tests {
         db.move_folder(own, Some(own)).await.unwrap();
         tokio::time::timeout(
             std::time::Duration::from_secs(10),
-            sort_children_alphabetically(&db, Some(own), true),
+            sort_children_alphabetically(&db, None, Some(own), true),
         )
         .await
         .expect("the sort did not end")

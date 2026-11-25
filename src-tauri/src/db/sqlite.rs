@@ -29,6 +29,14 @@ fn parse_uuid(s: &str) -> DbResult<Uuid> {
     Uuid::parse_str(s).map_err(|e| format!("Invalid UUID '{s}': {e}"))
 }
 
+/// The `id` column of `rows`, as IDs; one that does not read as one is left
+/// out.
+fn ids_of(rows: &[SqliteRow]) -> Vec<Uuid> {
+    rows.iter()
+        .filter_map(|row| Uuid::parse_str(row.get("id")).ok())
+        .collect()
+}
+
 fn parse_optional_uuid(s: Option<&str>) -> DbResult<Option<Uuid>> {
     match s {
         Some(v) => Ok(Some(parse_uuid(v)?)),
@@ -508,7 +516,7 @@ impl DatabaseProvider for SqliteProvider {
         Ok(())
     }
 
-    async fn sort_folders_alphabetically(&self, parent_id: Option<Uuid>) -> DbResult<()> {
+    async fn sort_folders_alphabetically(&self, parent_id: Option<Uuid>) -> DbResult<Vec<Uuid>> {
         let parent_str = parent_id.map(|u| u.to_string());
 
         let mut tx = self
@@ -517,11 +525,12 @@ impl DatabaseProvider for SqliteProvider {
             .await
             .map_err(|e| format!("Failed to begin transaction: {e}"))?;
 
-        let rows = sqlx::query("SELECT id FROM folders WHERE parent_id IS ? ORDER BY name ASC")
-            .bind(&parent_str)
-            .fetch_all(&mut *tx)
-            .await
-            .map_err(|e| format!("Failed to sort folders: {e}"))?;
+        let rows =
+            sqlx::query("SELECT id FROM folders WHERE parent_id IS ? ORDER BY name ASC, id ASC")
+                .bind(&parent_str)
+                .fetch_all(&mut *tx)
+                .await
+                .map_err(|e| format!("Failed to sort folders: {e}"))?;
 
         for (i, row) in rows.iter().enumerate() {
             let id: String = row.get("id");
@@ -536,10 +545,10 @@ impl DatabaseProvider for SqliteProvider {
         tx.commit()
             .await
             .map_err(|e| format!("Failed to commit: {e}"))?;
-        Ok(())
+        Ok(ids_of(&rows))
     }
 
-    async fn sort_sessions_alphabetically(&self, folder_id: Uuid) -> DbResult<()> {
+    async fn sort_sessions_alphabetically(&self, folder_id: Uuid) -> DbResult<Vec<Uuid>> {
         let folder_str = folder_id.to_string();
 
         let mut tx = self
@@ -548,11 +557,12 @@ impl DatabaseProvider for SqliteProvider {
             .await
             .map_err(|e| format!("Failed to begin transaction: {e}"))?;
 
-        let rows = sqlx::query("SELECT id FROM sessions WHERE folder_id = ? ORDER BY name ASC")
-            .bind(&folder_str)
-            .fetch_all(&mut *tx)
-            .await
-            .map_err(|e| format!("Failed to sort sessions: {e}"))?;
+        let rows =
+            sqlx::query("SELECT id FROM sessions WHERE folder_id = ? ORDER BY name ASC, id ASC")
+                .bind(&folder_str)
+                .fetch_all(&mut *tx)
+                .await
+                .map_err(|e| format!("Failed to sort sessions: {e}"))?;
 
         for (i, row) in rows.iter().enumerate() {
             let id: String = row.get("id");
@@ -567,10 +577,10 @@ impl DatabaseProvider for SqliteProvider {
         tx.commit()
             .await
             .map_err(|e| format!("Failed to commit: {e}"))?;
-        Ok(())
+        Ok(ids_of(&rows))
     }
 
-    async fn sort_sessions_by_hostname(&self, folder_id: Uuid) -> DbResult<()> {
+    async fn sort_sessions_by_hostname(&self, folder_id: Uuid) -> DbResult<Vec<Uuid>> {
         let folder_str = folder_id.to_string();
 
         let mut tx = self
@@ -579,11 +589,13 @@ impl DatabaseProvider for SqliteProvider {
             .await
             .map_err(|e| format!("Failed to begin transaction: {e}"))?;
 
-        let rows = sqlx::query("SELECT id, hostname FROM sessions WHERE folder_id = ?")
-            .bind(&folder_str)
-            .fetch_all(&mut *tx)
-            .await
-            .map_err(|e| format!("Failed to sort sessions: {e}"))?;
+        let rows = sqlx::query(
+            "SELECT id, hostname FROM sessions WHERE folder_id = ? ORDER BY name ASC, id ASC",
+        )
+        .bind(&folder_str)
+        .fetch_all(&mut *tx)
+        .await
+        .map_err(|e| format!("Failed to sort sessions: {e}"))?;
 
         let mut pairs: Vec<(String, String)> = rows
             .iter()
@@ -604,7 +616,10 @@ impl DatabaseProvider for SqliteProvider {
         tx.commit()
             .await
             .map_err(|e| format!("Failed to commit: {e}"))?;
-        Ok(())
+        Ok(pairs
+            .iter()
+            .filter_map(|(id, _)| Uuid::parse_str(id).ok())
+            .collect())
     }
 
     // ── Credentials ──────────────────────────────────────────────────────

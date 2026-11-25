@@ -345,6 +345,112 @@ async fn search_within(
     Ok((folders, sessions))
 }
 
+/// `ids`, the ones that read as IDs.
+fn parse_ids(ids: &[String]) -> Vec<Uuid> {
+    ids.iter()
+        .filter_map(|id| Uuid::parse_str(id).ok())
+        .collect()
+}
+
+/// Lock the role's own sessions in `folder`, so that two reorders or sorts
+/// of it do not interleave. Only the role's own: those are the rows it
+/// writes, and waiting for a lock on another user's would let whoever holds
+/// it keep this user from ordering a folder of their own.
+///
+/// `FOR NO KEY UPDATE`, which is what the `UPDATE` of `sort_order` takes
+/// anyway: `FOR UPDATE` would also wait for the key share lock of a foreign
+/// key, which another user holds on a session of this user's while their
+/// transaction that wrote a mapping for it is open (§4.5.3). By `id`, so
+/// that two of these lock the rows in the same order.
+async fn lock_own_sessions(conn: &mut sqlx::PgConnection, folder: &str) -> DbResult<()> {
+    sqlx::query(
+        "SELECT id FROM sessions \
+         WHERE folder_id = $1 AND owner = current_user \
+         ORDER BY id FOR NO KEY UPDATE",
+    )
+    .bind(folder)
+    .fetch_all(&mut *conn)
+    .await
+    .map_err(|e| format!("Failed to lock sessions for reorder: {e}"))?;
+    Ok(())
+}
+
+/// Lock the role's own folders in `parent` (`None`: the top level), as
+/// [`lock_own_sessions`] does sessions.
+async fn lock_own_folders(conn: &mut sqlx::PgConnection, parent: Option<&str>) -> DbResult<()> {
+    sqlx::query(
+        "SELECT id FROM folders \
+         WHERE parent_id IS NOT DISTINCT FROM $1 AND owner = current_user \
+         ORDER BY id FOR NO KEY UPDATE",
+    )
+    .bind(parent)
+    .fetch_all(&mut *conn)
+    .await
+    .map_err(|e| format!("Failed to lock folders for reorder: {e}"))?;
+    Ok(())
+}
+
+/// The statement of [`number_own_folders`]: one statement for the whole
+/// list, whose rows of other users' match no row it may update. A place
+/// lists whatever other users share there, and a statement for each ID
+/// would let them make the user's sort as many round trips long, with the
+/// user's own rows locked.
+const NUMBER_OWN_FOLDERS: &str = "UPDATE folders SET sort_order = (o.place - 1)::int \
+     FROM unnest($1::text[]) WITH ORDINALITY AS o(id, place) \
+     WHERE folders.id = o.id \
+     AND folders.parent_id IS NOT DISTINCT FROM $2 \
+     AND folders.owner = current_user";
+
+/// As [`NUMBER_OWN_FOLDERS`], for sessions.
+const NUMBER_OWN_SESSIONS: &str = "UPDATE sessions SET sort_order = (o.place - 1)::int \
+     FROM unnest($1::text[]) WITH ORDINALITY AS o(id, place) \
+     WHERE sessions.id = o.id \
+     AND sessions.folder_id = $2 \
+     AND sessions.owner = current_user";
+
+/// Number the role's own folders in `parent` by their place in `ids`, as
+/// [`number_own_sessions`] does sessions.
+async fn number_own_folders(
+    conn: &mut sqlx::PgConnection,
+    parent: Option<&str>,
+    ids: &[String],
+) -> DbResult<()> {
+    sqlx::query(NUMBER_OWN_FOLDERS)
+        .bind(first_of_each(ids))
+        .bind(parent)
+        .execute(&mut *conn)
+        .await
+        .map_err(|e| format!("Failed to reorder folders: {e}"))?;
+    Ok(())
+}
+
+/// Number the role's own sessions in `folder` by their place in `ids`, the
+/// sessions there in their new order. Another user's are left as they are:
+/// a row is its owner's alone to change.
+async fn number_own_sessions(
+    conn: &mut sqlx::PgConnection,
+    folder: &str,
+    ids: &[String],
+) -> DbResult<()> {
+    sqlx::query(NUMBER_OWN_SESSIONS)
+        .bind(first_of_each(ids))
+        .bind(folder)
+        .execute(&mut *conn)
+        .await
+        .map_err(|e| format!("Failed to reorder sessions: {e}"))?;
+    Ok(())
+}
+
+/// `ids` with each one where it comes first. A row is numbered by its place
+/// in the list, so the list gives each row one place.
+fn first_of_each(ids: &[String]) -> Vec<&str> {
+    let mut seen = std::collections::HashSet::new();
+    ids.iter()
+        .map(String::as_str)
+        .filter(|id| seen.insert(*id))
+        .collect()
+}
+
 #[async_trait]
 impl DatabaseProvider for PostgresProvider {
     // ── Folders ──────────────────────────────────────────────────────────
@@ -362,7 +468,7 @@ impl DatabaseProvider for PostgresProvider {
 
         if let Some(ref target) = parent_str {
             if sqlx::query(
-                "SELECT 1 FROM folders WHERE id = $1 AND owner = current_user FOR UPDATE",
+                "SELECT 1 FROM folders WHERE id = $1 AND owner = current_user FOR NO KEY UPDATE",
             )
             .bind(target)
             .fetch_optional(&mut *tx)
@@ -375,7 +481,7 @@ impl DatabaseProvider for PostgresProvider {
         }
 
         // Lock sibling rows to prevent concurrent sort_order races.
-        // FOR UPDATE cannot be combined with aggregates, so we lock first
+        // A row lock cannot be combined with aggregates, so we lock first
         // and then compute the max in a separate query.
         //
         // Only the user's own siblings: at the top level the siblings
@@ -385,7 +491,7 @@ impl DatabaseProvider for PostgresProvider {
         // sort_order there are told apart by name.
         sqlx::query(
             "SELECT id FROM folders \
-             WHERE parent_id IS NOT DISTINCT FROM $1 AND owner = current_user FOR UPDATE",
+             WHERE parent_id IS NOT DISTINCT FROM $1 AND owner = current_user ORDER BY id FOR NO KEY UPDATE",
         )
         .bind(&parent_str)
         .fetch_all(&mut *tx)
@@ -442,6 +548,29 @@ impl DatabaseProvider for PostgresProvider {
         .map_err(|e| format!("Failed to list folders: {e}"))?;
 
         rows.iter().map(row_to_folder).collect()
+    }
+
+    async fn folder_owners_in(&self, parent: Option<Uuid>) -> DbResult<Vec<(Uuid, String)>> {
+        let rows =
+            sqlx::query("SELECT id, owner FROM folders WHERE parent_id IS NOT DISTINCT FROM $1")
+                .bind(parent.map(|id| id.to_string()))
+                .fetch_all(&self.pool)
+                .await
+                .map_err(|e| format!("Failed to list folders: {e}"))?;
+        rows.iter()
+            .map(|row| Ok((parse_uuid(row.get("id"))?, row.get("owner"))))
+            .collect()
+    }
+
+    async fn session_owners_in(&self, folder: Uuid) -> DbResult<Vec<(Uuid, String)>> {
+        let rows = sqlx::query("SELECT id, owner FROM sessions WHERE folder_id = $1")
+            .bind(folder.to_string())
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| format!("Failed to list sessions: {e}"))?;
+        rows.iter()
+            .map(|row| Ok((parse_uuid(row.get("id"))?, row.get("owner"))))
+            .collect()
     }
 
     async fn search_folders(&self, query: &str) -> DbResult<Vec<Folder>> {
@@ -516,19 +645,21 @@ impl DatabaseProvider for PostgresProvider {
             .await
             .map_err(|e| format!("Failed to begin transaction: {e}"))?;
 
-        if sqlx::query("SELECT 1 FROM folders WHERE id = $1 AND owner = current_user FOR UPDATE")
-            .bind(&id_str)
-            .fetch_optional(&mut *tx)
-            .await
-            .map_err(|e| format!("Failed to check folder ownership: {e}"))?
-            .is_none()
+        if sqlx::query(
+            "SELECT 1 FROM folders WHERE id = $1 AND owner = current_user FOR NO KEY UPDATE",
+        )
+        .bind(&id_str)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(|e| format!("Failed to check folder ownership: {e}"))?
+        .is_none()
         {
             return Err("You can only move folders you own".to_string());
         }
 
         if let Some(ref target) = parent_str {
             if sqlx::query(
-                "SELECT 1 FROM folders WHERE id = $1 AND owner = current_user FOR UPDATE",
+                "SELECT 1 FROM folders WHERE id = $1 AND owner = current_user FOR NO KEY UPDATE",
             )
             .bind(target)
             .fetch_optional(&mut *tx)
@@ -544,7 +675,7 @@ impl DatabaseProvider for PostgresProvider {
         // sort_order races; see `create_folder` for why only those.
         sqlx::query(
             "SELECT id FROM folders \
-             WHERE parent_id IS NOT DISTINCT FROM $1 AND owner = current_user FOR UPDATE",
+             WHERE parent_id IS NOT DISTINCT FROM $1 AND owner = current_user ORDER BY id FOR NO KEY UPDATE",
         )
         .bind(&parent_str)
         .fetch_all(&mut *tx)
@@ -607,12 +738,14 @@ impl DatabaseProvider for PostgresProvider {
             .await
             .map_err(|e| format!("Failed to begin transaction: {e}"))?;
 
-        if sqlx::query("SELECT 1 FROM folders WHERE id = $1 AND owner = current_user FOR UPDATE")
-            .bind(&folder_str)
-            .fetch_optional(&mut *tx)
-            .await
-            .map_err(|e| format!("Failed to check target folder ownership: {e}"))?
-            .is_none()
+        if sqlx::query(
+            "SELECT 1 FROM folders WHERE id = $1 AND owner = current_user FOR NO KEY UPDATE",
+        )
+        .bind(&folder_str)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(|e| format!("Failed to check target folder ownership: {e}"))?
+        .is_none()
         {
             return Err("You can only create sessions in your own folders".to_string());
         }
@@ -624,7 +757,7 @@ impl DatabaseProvider for PostgresProvider {
         // Lock the user's own sibling sessions to prevent concurrent
         // sort_order races; see `create_folder` for why only those.
         sqlx::query(
-            "SELECT id FROM sessions WHERE folder_id = $1 AND owner = current_user FOR UPDATE",
+            "SELECT id FROM sessions WHERE folder_id = $1 AND owner = current_user ORDER BY id FOR NO KEY UPDATE",
         )
         .bind(&folder_str)
         .fetch_all(&mut *tx)
@@ -799,22 +932,26 @@ impl DatabaseProvider for PostgresProvider {
             .await
             .map_err(|e| format!("Failed to begin transaction: {e}"))?;
 
-        if sqlx::query("SELECT 1 FROM sessions WHERE id = $1 AND owner = current_user FOR UPDATE")
-            .bind(&id_str)
-            .fetch_optional(&mut *tx)
-            .await
-            .map_err(|e| format!("Failed to check session ownership: {e}"))?
-            .is_none()
+        if sqlx::query(
+            "SELECT 1 FROM sessions WHERE id = $1 AND owner = current_user FOR NO KEY UPDATE",
+        )
+        .bind(&id_str)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(|e| format!("Failed to check session ownership: {e}"))?
+        .is_none()
         {
             return Err("You can only move sessions you own".to_string());
         }
 
-        if sqlx::query("SELECT 1 FROM folders WHERE id = $1 AND owner = current_user FOR UPDATE")
-            .bind(&folder_str)
-            .fetch_optional(&mut *tx)
-            .await
-            .map_err(|e| format!("Failed to check target folder ownership: {e}"))?
-            .is_none()
+        if sqlx::query(
+            "SELECT 1 FROM folders WHERE id = $1 AND owner = current_user FOR NO KEY UPDATE",
+        )
+        .bind(&folder_str)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(|e| format!("Failed to check target folder ownership: {e}"))?
+        .is_none()
         {
             return Err("You can only move items into your own folders".to_string());
         }
@@ -822,7 +959,7 @@ impl DatabaseProvider for PostgresProvider {
         // Lock the user's own sibling sessions in the target folder to
         // prevent sort_order races; see `create_folder` for why only those.
         sqlx::query(
-            "SELECT id FROM sessions WHERE folder_id = $1 AND owner = current_user FOR UPDATE",
+            "SELECT id FROM sessions WHERE folder_id = $1 AND owner = current_user ORDER BY id FOR NO KEY UPDATE",
         )
         .bind(&folder_str)
         .fetch_all(&mut *tx)
@@ -893,28 +1030,9 @@ impl DatabaseProvider for PostgresProvider {
             .await
             .map_err(|e| format!("Failed to begin transaction: {e}"))?;
 
-        // Lock only owned rows to prevent interleaved reorders.
-        sqlx::query(
-            "SELECT id FROM folders \
-             WHERE parent_id IS NOT DISTINCT FROM $1 AND owner = current_user FOR UPDATE",
-        )
-        .bind(&parent_str)
-        .fetch_all(&mut *tx)
-        .await
-        .map_err(|e| format!("Failed to lock folders for reorder: {e}"))?;
-
-        for (i, id) in ordered_ids.iter().enumerate() {
-            sqlx::query(
-                "UPDATE folders SET sort_order = $1 \
-                 WHERE id = $2 AND parent_id IS NOT DISTINCT FROM $3 AND owner = current_user",
-            )
-            .bind(i as i32)
-            .bind(id.to_string())
-            .bind(&parent_str)
-            .execute(&mut *tx)
-            .await
-            .map_err(|e| format!("Failed to reorder folders: {e}"))?;
-        }
+        lock_own_folders(&mut tx, parent_str.as_deref()).await?;
+        let ids: Vec<String> = ordered_ids.iter().map(Uuid::to_string).collect();
+        number_own_folders(&mut tx, parent_str.as_deref(), &ids).await?;
 
         tx.commit()
             .await
@@ -931,28 +1049,9 @@ impl DatabaseProvider for PostgresProvider {
             .await
             .map_err(|e| format!("Failed to begin transaction: {e}"))?;
 
-        // Lock only owned rows to prevent interleaved reorders.
-        sqlx::query(
-            "SELECT id FROM sessions \
-             WHERE folder_id = $1 AND owner = current_user FOR UPDATE",
-        )
-        .bind(&folder_str)
-        .fetch_all(&mut *tx)
-        .await
-        .map_err(|e| format!("Failed to lock sessions for reorder: {e}"))?;
-
-        for (i, id) in ordered_ids.iter().enumerate() {
-            sqlx::query(
-                "UPDATE sessions SET sort_order = $1 \
-                 WHERE id = $2 AND folder_id = $3 AND owner = current_user",
-            )
-            .bind(i as i32)
-            .bind(id.to_string())
-            .bind(&folder_str)
-            .execute(&mut *tx)
-            .await
-            .map_err(|e| format!("Failed to reorder sessions: {e}"))?;
-        }
+        lock_own_sessions(&mut tx, &folder_str).await?;
+        let ids: Vec<String> = ordered_ids.iter().map(Uuid::to_string).collect();
+        number_own_sessions(&mut tx, &folder_str, &ids).await?;
 
         tx.commit()
             .await
@@ -960,7 +1059,11 @@ impl DatabaseProvider for PostgresProvider {
         Ok(())
     }
 
-    async fn sort_folders_alphabetically(&self, parent_id: Option<Uuid>) -> DbResult<()> {
+    // A sort is a reorder by the sorted list of everything the place lists
+    // that the role can see: its own rows are numbered by their place in it,
+    // as `reorder_folders` numbers them, and the list goes back so that
+    // where other users' rows come among them is kept as well (`tree_order`).
+    async fn sort_folders_alphabetically(&self, parent_id: Option<Uuid>) -> DbResult<Vec<Uuid>> {
         let parent_str = parent_id.map(|u| u.to_string());
 
         let mut tx = self
@@ -969,36 +1072,26 @@ impl DatabaseProvider for PostgresProvider {
             .await
             .map_err(|e| format!("Failed to begin transaction: {e}"))?;
 
+        lock_own_folders(&mut tx, parent_str.as_deref()).await?;
         let rows = sqlx::query(
             "SELECT id FROM folders \
-             WHERE parent_id IS NOT DISTINCT FROM $1 AND owner = current_user \
-             ORDER BY name ASC FOR UPDATE",
+             WHERE parent_id IS NOT DISTINCT FROM $1 \
+             ORDER BY name ASC, id ASC",
         )
         .bind(&parent_str)
         .fetch_all(&mut *tx)
         .await
         .map_err(|e| format!("Failed to sort folders: {e}"))?;
+        let ids: Vec<String> = rows.iter().map(|row| row.get("id")).collect();
 
-        for (i, row) in rows.iter().enumerate() {
-            let id: String = row.get("id");
-            sqlx::query(
-                "UPDATE folders SET sort_order = $1 \
-                 WHERE id = $2 AND owner = current_user",
-            )
-            .bind(i as i32)
-            .bind(&id)
-            .execute(&mut *tx)
-            .await
-            .map_err(|e| format!("Failed to sort folders: {e}"))?;
-        }
-
+        number_own_folders(&mut tx, parent_str.as_deref(), &ids).await?;
         tx.commit()
             .await
             .map_err(|e| format!("Failed to commit: {e}"))?;
-        Ok(())
+        Ok(parse_ids(&ids))
     }
 
-    async fn sort_sessions_alphabetically(&self, folder_id: Uuid) -> DbResult<()> {
+    async fn sort_sessions_alphabetically(&self, folder_id: Uuid) -> DbResult<Vec<Uuid>> {
         let folder_str = folder_id.to_string();
 
         let mut tx = self
@@ -1007,37 +1100,23 @@ impl DatabaseProvider for PostgresProvider {
             .await
             .map_err(|e| format!("Failed to begin transaction: {e}"))?;
 
-        let rows = sqlx::query(
-            "SELECT id FROM sessions \
-             WHERE folder_id = $1 AND owner = current_user \
-             ORDER BY name ASC FOR UPDATE",
-        )
-        .bind(&folder_str)
-        .fetch_all(&mut *tx)
-        .await
-        .map_err(|e| format!("Failed to sort sessions: {e}"))?;
+        lock_own_sessions(&mut tx, &folder_str).await?;
+        let rows =
+            sqlx::query("SELECT id FROM sessions WHERE folder_id = $1 ORDER BY name ASC, id ASC")
+                .bind(&folder_str)
+                .fetch_all(&mut *tx)
+                .await
+                .map_err(|e| format!("Failed to sort sessions: {e}"))?;
+        let ids: Vec<String> = rows.iter().map(|row| row.get("id")).collect();
 
-        for (i, row) in rows.iter().enumerate() {
-            let id: String = row.get("id");
-            sqlx::query(
-                "UPDATE sessions SET sort_order = $1 \
-                 WHERE id = $2 AND folder_id = $3 AND owner = current_user",
-            )
-            .bind(i as i32)
-            .bind(&id)
-            .bind(&folder_str)
-            .execute(&mut *tx)
-            .await
-            .map_err(|e| format!("Failed to sort sessions: {e}"))?;
-        }
-
+        number_own_sessions(&mut tx, &folder_str, &ids).await?;
         tx.commit()
             .await
             .map_err(|e| format!("Failed to commit: {e}"))?;
-        Ok(())
+        Ok(parse_ids(&ids))
     }
 
-    async fn sort_sessions_by_hostname(&self, folder_id: Uuid) -> DbResult<()> {
+    async fn sort_sessions_by_hostname(&self, folder_id: Uuid) -> DbResult<Vec<Uuid>> {
         let folder_str = folder_id.to_string();
 
         let mut tx = self
@@ -1046,9 +1125,11 @@ impl DatabaseProvider for PostgresProvider {
             .await
             .map_err(|e| format!("Failed to begin transaction: {e}"))?;
 
+        lock_own_sessions(&mut tx, &folder_str).await?;
+        // By name first, so that sessions with the same host come in the
+        // same order every time.
         let rows = sqlx::query(
-            "SELECT id, hostname FROM sessions \
-             WHERE folder_id = $1 AND owner = current_user FOR UPDATE",
+            "SELECT id, hostname FROM sessions WHERE folder_id = $1 ORDER BY name ASC, id ASC",
         )
         .bind(&folder_str)
         .fetch_all(&mut *tx)
@@ -1060,24 +1141,13 @@ impl DatabaseProvider for PostgresProvider {
             .map(|r| (r.get("id"), r.get("hostname")))
             .collect();
         pairs.sort_by(|a, b| cmp_hostname(&a.1, &b.1));
+        let ids: Vec<String> = pairs.into_iter().map(|(id, _)| id).collect();
 
-        for (i, (id, _)) in pairs.iter().enumerate() {
-            sqlx::query(
-                "UPDATE sessions SET sort_order = $1 \
-                 WHERE id = $2 AND folder_id = $3 AND owner = current_user",
-            )
-            .bind(i as i32)
-            .bind(id)
-            .bind(&folder_str)
-            .execute(&mut *tx)
-            .await
-            .map_err(|e| format!("Failed to sort sessions: {e}"))?;
-        }
-
+        number_own_sessions(&mut tx, &folder_str, &ids).await?;
         tx.commit()
             .await
             .map_err(|e| format!("Failed to commit: {e}"))?;
-        Ok(())
+        Ok(parse_ids(&ids))
     }
 
     // ── Credentials ──────────────────────────────────────────────────────

@@ -48,8 +48,9 @@ export interface Drop {
   /**
    * The items of its kind there, with it among them, in their new order.
    * `null` leaves it where a move puts it, at the end. In PostgreSQL mode
-   * other users' items can be among them: the backend gives each of the
-   * user's own its place in the list and leaves the others as they are.
+   * other users' items can be among them: the backend numbers the user's own
+   * by their place in the list, leaves the others' numbers as they are, and
+   * keeps the list, by which the others are shown where it puts them.
    */
   order: string[] | null;
 }
@@ -145,11 +146,10 @@ function into(
 
 /**
  * A drop before or after `row`, a sibling-to-be of the item's own kind in
- * `parentId`. `siblings` are the items of that kind there, as listed.
- *
- * The row is one of the user's own (the callers see to it). A reorder
- * changes only the user's own rows, so the place beside another user's
- * cannot be promised: where that row is listed is its owner's.
+ * `parentId`. `siblings` are the items of that kind there, as listed. The
+ * row can be another user's, where `parentId` is a place the user may put
+ * things in (the callers see to that): where it is shown among the user's
+ * own is the user's, kept by the backend with the order.
  */
 function beside(
   item: DragItem,
@@ -204,7 +204,6 @@ function dropFolder(dragged: Folder, point: DropPoint, tree: DropTree): Drop | n
   const after = point.ratio > 1 - FOLDER_EDGE && !listsContent(row.id, tree);
   if (!before && !after) return into(item, from, row.id, tree, dragged.id);
 
-  if (!owned(row, tree)) return null;
   const parentId = row.parent_id;
   if (parentId !== null && !takes(parentId, tree, dragged.id)) return null;
   return beside(item, from, parentId, ids(tree.index.folders.get(parentId)), row.id, after);
@@ -219,7 +218,7 @@ function dropSession(dragged: Session, point: DropPoint, tree: DropTree): Drop |
   if (point.type === "folder") return into(item, from, point.id, tree);
 
   const row = tree.sessions.get(point.id);
-  if (!row || row.id === dragged.id || !owned(row, tree)) return null;
+  if (!row || row.id === dragged.id) return null;
   const folderId = row.folder_id;
   if (!takes(folderId, tree)) return null;
   const siblings = ids(tree.index.sessions.get(folderId));
@@ -249,12 +248,10 @@ export function dropAt(item: DragItem, point: DropPoint, tree: DropTree): Drop |
 /**
  * What moving `item` one place up or down among its siblings does, or `null`
  * where it cannot go that way: the way to put an item in another place
- * without a pointer. It is a drop beside the nearest sibling of its kind in
- * that direction, as the pointer would make it, under the same rules. In
- * PostgreSQL mode that is the nearest of the user's own: the place beside
- * another user's row is not the user's to give, so a step goes past it.
- * Folders and sessions are listed apart, so a session goes no higher than
- * the first session of its folder.
+ * without a pointer. It is a drop beside the next sibling of its kind in
+ * that direction, whoever's it is, as the pointer would make it, under the
+ * same rules. Folders and sessions are listed apart, so a session goes no
+ * higher than the first session of its folder.
  */
 export function stepDrop(item: DragItem, step: "up" | "down", tree: DropTree): Drop | null {
   if (!canDrag(item, tree)) return null;
@@ -275,15 +272,10 @@ export function stepDrop(item: DragItem, step: "up" | "down", tree: DropTree): D
   }
   const at = siblings.indexOf(item.id);
   if (at === -1) return null;
-  const rowOwned = (id: string): boolean => {
-    const row = item.type === "folder" ? tree.folders.get(id) : tree.sessions.get(id);
-    return row !== undefined && owned(row, tree);
-  };
   const up = step === "up";
-  for (let i = up ? at - 1 : at + 1; i >= 0 && i < siblings.length; i += up ? -1 : 1) {
-    if (rowOwned(siblings[i])) return beside(item, parentId, parentId, siblings, siblings[i], !up);
-  }
-  return null;
+  const next = up ? at - 1 : at + 1;
+  if (next < 0 || next >= siblings.length) return null;
+  return beside(item, parentId, parentId, siblings, siblings[next], !up);
 }
 
 /** Whether two drops are the same, in what they show and in what they do. */

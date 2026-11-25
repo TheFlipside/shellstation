@@ -51,6 +51,7 @@ use config::{ConfigState, DbBackend};
 use db::postgres::PostgresProvider;
 use db::session_highlights::{SessionHighlightState, SessionHighlights};
 use db::sqlite::SqliteProvider;
+use db::tree_order::{TreeOrder, TreeOrderState};
 use db::{
     CredentialDbState, DbState, HighlightDbState, LoginSequenceDbState, PgPoolState, PgUserState,
 };
@@ -2414,6 +2415,7 @@ pub fn run() {
                         provider as Arc<dyn db::DatabaseProvider>,
                     ));
                     app.manage(SessionHighlightState(None));
+                    app.manage(TreeOrderState(None));
                     app.manage(PgPoolState(None));
                     app.manage(PgUserState(None));
                     app.manage(DbStatusState(commands::DbStatus {
@@ -2441,12 +2443,18 @@ pub fn run() {
                         SessionHighlights::open(local_pool.clone()),
                     )
                     .map_err(std::io::Error::other)?;
+                    // Where other users' folders and sessions come among the
+                    // user's own is the user's as well, and kept locally.
+                    let tree_order =
+                        tauri::async_runtime::block_on(TreeOrder::open(local_pool.clone()))
+                            .map_err(std::io::Error::other)?;
                     let cred_provider =
                         Arc::new(SqliteProvider::new(local_pool)) as Arc<dyn db::DatabaseProvider>;
                     app.manage(CredentialDbState(cred_provider.clone()));
                     app.manage(LoginSequenceDbState(cred_provider.clone()));
                     app.manage(HighlightDbState(cred_provider.clone()));
                     app.manage(SessionHighlightState(Some(session_highlights.clone())));
+                    app.manage(TreeOrderState(Some(tree_order)));
 
                     // Host and database are whatever the config file holds,
                     // so they are logged escaped.
@@ -3431,6 +3439,202 @@ mod tests {
         assert_eq!(within, "10s");
         tx.commit().await.unwrap();
         assert_eq!(limit().await, "1min");
+    }
+
+    /// Where other users' rows come among a role's own after a reorder or a
+    /// sort, against a real server: the role's own rows are numbered, the
+    /// others' keep their owner's numbers, and the order kept locally lays
+    /// the place out as asked. Same server as for
+    /// `shared_rows_keep_their_owner`; run with `--ignored tree_order`.
+    #[tokio::test]
+    #[ignore = "needs a throwaway PostgreSQL server in SHELLSTATION_TEST_PG_URL"]
+    async fn a_tree_order_holds_among_other_users_rows() {
+        with_rls_test_database(check_a_tree_order_holds_among_other_users_rows).await;
+    }
+
+    async fn check_a_tree_order_holds_among_other_users_rows(
+        opts: sqlx::postgres::PgConnectOptions,
+        admin: String,
+        alice: String,
+        bob: String,
+    ) {
+        use db::tree_order::{Kind, TreeOrder};
+        use db::DatabaseProvider;
+
+        // One connection, so each SET ROLE holds for the statements after
+        // it, the app's own included.
+        let pool = PgPoolOptions::new()
+            .max_connections(1)
+            .connect_with(opts.clone())
+            .await
+            .unwrap();
+        prepare_rls_test_database(&pool, &admin, &alice, &bob).await;
+        let app = PostgresProvider::new(pool.clone());
+        let local = TreeOrder::open(
+            sqlx::sqlite::SqlitePoolOptions::new()
+                .max_connections(1)
+                .connect("sqlite::memory:")
+                .await
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+        // At the top level two folders of alice's and two that bob shares,
+        // numbered by each owner, and in alice's first folder two sessions
+        // of hers and one of bob's from before `shellstation_own_folder`.
+        // Made by a superuser, who may write any owner and put a row in any
+        // folder.
+        let [delta, bravo, charlie, alpha] = [(); 4].map(|()| uuid::Uuid::new_v4());
+        let [one, two, three] = [(); 3].map(|()| uuid::Uuid::new_v4());
+        for sql in [
+            "RESET ROLE".to_string(),
+            format!(
+                "INSERT INTO folders (id, name, parent_id, sort_order, owner, visibility) VALUES \
+                 ('{delta}', 'delta', NULL, 0, '{alice}', 'personal'), \
+                 ('{bravo}', 'bravo', NULL, 1, '{alice}', 'personal'), \
+                 ('{charlie}', 'charlie', NULL, 0, '{bob}', 'shared'), \
+                 ('{alpha}', 'alpha', NULL, 1, '{bob}', 'shared')"
+            ),
+            format!(
+                "INSERT INTO sessions (id, folder_id, name, hostname, username, sort_order, owner, visibility) VALUES \
+                 ('{one}', '{delta}', 'one', '10.0.0.2', '', 0, '{alice}', 'shared'), \
+                 ('{two}', '{delta}', 'two', '10.0.0.10', '', 0, '{bob}', 'shared'), \
+                 ('{three}', '{delta}', 'three', '10.0.0.1', '', 1, '{alice}', 'personal')"
+            ),
+            format!("SET ROLE {alice}"),
+        ] {
+            pg_exec(&pool, &sql).await.expect(&sql);
+        }
+
+        let top_level = || {
+            let (app, local, alice) = (&app, &local, alice.as_str());
+            async move {
+                let mut folders = app.list_folders().await.unwrap();
+                folders.retain(|f| f.parent_id.is_none());
+                local.arrange_folders(&mut folders, Some(alice)).await;
+                folders
+                    .into_iter()
+                    .map(|f| (f.name, f.sort_order))
+                    .collect::<Vec<_>>()
+            }
+        };
+        let in_delta = || {
+            let (app, local, alice) = (&app, &local, alice.as_str());
+            async move {
+                let mut sessions = app.list_all_sessions().await.unwrap();
+                sessions.retain(|s| s.folder_id == delta);
+                local.arrange_sessions(&mut sessions, Some(alice)).await;
+                sessions.into_iter().map(|s| s.name).collect::<Vec<_>>()
+            }
+        };
+        let names =
+            |listed: Vec<(String, i32)>| listed.into_iter().map(|(n, _)| n).collect::<Vec<_>>();
+
+        // A reorder numbers alice's own by their place in the list and leaves
+        // bob's numbers alone; the order kept puts bob's where she asked.
+        let order = [alpha, bravo, charlie, delta];
+        app.reorder_folders(None, order.to_vec()).await.unwrap();
+        local.record(Kind::Folder, None, &order).await.unwrap();
+        assert_eq!(
+            top_level().await,
+            [
+                ("alpha".to_string(), 1),
+                ("bravo".to_string(), 1),
+                ("charlie".to_string(), 0),
+                ("delta".to_string(), 3)
+            ]
+        );
+        let order = [delta, charlie, alpha, bravo];
+        app.reorder_folders(None, order.to_vec()).await.unwrap();
+        local.record(Kind::Folder, None, &order).await.unwrap();
+        assert_eq!(
+            names(top_level().await),
+            ["delta", "charlie", "alpha", "bravo"]
+        );
+
+        // A sort returns every folder there, bob's as well, in the order it
+        // sorted them into.
+        let sorted = app.sort_folders_alphabetically(None).await.unwrap();
+        assert_eq!(sorted, [alpha, bravo, charlie, delta]);
+        local.record(Kind::Folder, None, &sorted).await.unwrap();
+        assert_eq!(
+            names(top_level().await),
+            ["alpha", "bravo", "charlie", "delta"]
+        );
+
+        // The same for sessions, in a folder of alice's own with one of
+        // bob's in it. Bob holds the key share lock of a foreign key on
+        // alice's shared session `one`, with a mapping for it in a
+        // transaction he leaves open: that keeps the row from being
+        // deleted, not from being numbered, and her reorder does not wait
+        // for it.
+        let bobs_pool = PgPoolOptions::new()
+            .max_connections(1)
+            .connect_with(opts.clone())
+            .await
+            .unwrap();
+        pg_exec(&bobs_pool, &format!("SET ROLE {bob}"))
+            .await
+            .unwrap();
+        let mut bobs_tx = bobs_pool.begin().await.unwrap();
+        sqlx::query(
+            "INSERT INTO session_credentials (session_id, owner, user_ident, credential_profile_id) \
+             VALUES ($1, current_user, 'bob', $2)",
+        )
+        .bind(one.to_string())
+        .bind(uuid::Uuid::new_v4().to_string())
+        .execute(&mut *bobs_tx)
+        .await
+        .unwrap();
+        let order = [three, two, one];
+        let reordered = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            app.reorder_sessions(delta, order.to_vec()),
+        )
+        .await;
+        // Bob's transaction ends before anything is judged, so that a
+        // failure leaves no connection to keep the database from being
+        // dropped.
+        bobs_tx.rollback().await.unwrap();
+        bobs_pool.close().await;
+        reordered
+            .expect("the reorder waited for bob's lock")
+            .unwrap();
+        local
+            .record(Kind::Session, Some(delta), &order)
+            .await
+            .unwrap();
+        assert_eq!(in_delta().await, ["three", "two", "one"]);
+        let sorted = app.sort_sessions_by_hostname(delta).await.unwrap();
+        assert_eq!(sorted, [three, one, two]);
+        local
+            .record(Kind::Session, Some(delta), &sorted)
+            .await
+            .unwrap();
+        assert_eq!(in_delta().await, ["three", "one", "two"]);
+        let sorted = app.sort_sessions_alphabetically(delta).await.unwrap();
+        assert_eq!(sorted, [one, three, two]);
+        local
+            .record(Kind::Session, Some(delta), &sorted)
+            .await
+            .unwrap();
+        assert_eq!(in_delta().await, ["one", "three", "two"]);
+
+        // Bob's numbers are as he left them.
+        let bobs: Vec<(String, i32)> =
+            sqlx::query_as("SELECT name, sort_order FROM folders WHERE owner = $1 ORDER BY name")
+                .bind(&bob)
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        assert_eq!(bobs, [("alpha".to_string(), 1), ("charlie".to_string(), 0)]);
+        let two_sort: i32 = sqlx::query_scalar("SELECT sort_order FROM sessions WHERE id = $1")
+            .bind(two.to_string())
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(two_sort, 0);
     }
 
     /// `check_postgres_rls` against a real server: it finds nothing missing

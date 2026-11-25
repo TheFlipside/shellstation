@@ -843,22 +843,22 @@ describe("dragging in PostgreSQL mode", () => {
     expect(changes).toEqual([]);
   });
 
-  it("marks no place beside another user's row", async () => {
+  it("puts an item beside another user's row at the top level", async () => {
     stored = { ...stored, folders: [...stored.folders, folder("Mine too", null, "alice")] };
     await renderSidebar([]);
     expect(rows()).toEqual(["0:Mine", "0:Theirs", "0:Mine too"]);
     pickUp("Mine too");
-    moveOver(row("Theirs"), 0.1);
+    // Its own place, after Theirs, is no place to go.
+    moveOver(row("Theirs"), 0.9);
     expect(marks()).toEqual([]);
-    // Beside a folder of the user's own there is one.
-    moveOver(row("Mine"), 0.1);
-    expect(marks()).toEqual(["before Mine"]);
+    moveOver(row("Theirs"), 0.1);
+    expect(marks()).toEqual(["before Theirs"]);
     release();
     await settle();
     expect(changes).toEqual([
       {
         command: "folder_reorder",
-        args: { parentId: null, orderedIds: ["Mine too", "Mine", "Theirs"] },
+        args: { parentId: null, orderedIds: ["Mine", "Mine too", "Theirs"] },
       },
     ]);
   });
@@ -1046,7 +1046,7 @@ describe("moving an item without a pointer", () => {
       useAppStore.setState({ dbBackend: "postgres", pgUser: "alice" });
     });
 
-    it("goes past another user's folder, and moves none of theirs", async () => {
+    it("steps past another user's folder, and moves none of theirs", async () => {
       await renderSidebar([]);
       fireEvent.click(row("Theirs"));
       altKey("ArrowDown");
@@ -1059,7 +1059,7 @@ describe("moving an item without a pointer", () => {
       expect(changes).toEqual([
         {
           command: "folder_reorder",
-          args: { parentId: null, orderedIds: ["Mine too", "Mine", "Theirs"] },
+          args: { parentId: null, orderedIds: ["Mine", "Mine too", "Theirs"] },
         },
       ]);
     });
