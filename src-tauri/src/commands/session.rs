@@ -93,33 +93,14 @@ pub async fn folder_move(
     let folder_uuid = parse_uuid(&id)?;
     let parent = new_parent_id.map(|s| parse_uuid(&s)).transpose()?;
 
-    // Reject cycles: a folder cannot be moved into itself or any of its
-    // descendants. Without this, a recursive sort would stack-overflow.
-    if let Some(target_parent) = parent {
-        if target_parent == folder_uuid {
-            return Err("A folder cannot be moved into itself.".to_string());
-        }
-        let all_folders = state.0.list_folders().await?;
-        let mut current = Some(target_parent);
-        // A ring above the target that this folder is no part of, as a
-        // database may have from statements of someone's own, must not keep
-        // this from coming to an end. The database then decides about the
-        // move.
-        let mut seen = HashSet::new();
-        while let Some(cur) = current {
-            if cur == folder_uuid {
-                return Err("A folder cannot be moved into one of its descendants.".to_string());
-            }
-            if !seen.insert(cur) {
-                break;
-            }
-            current = all_folders
-                .iter()
-                .find(|f| f.id == cur)
-                .and_then(|f| f.parent_id);
-        }
+    // A folder cannot be moved into itself or below itself: the walks down
+    // a folder's tree would not end. Below itself is refused by the
+    // backend's `move_folder`, which looks up the tree in the move itself,
+    // so that two moves of the same moment cannot each pass on the tree as
+    // it was before the other.
+    if parent == Some(folder_uuid) {
+        return Err("A folder cannot be moved into itself.".to_string());
     }
-
     state.0.move_folder(folder_uuid, parent).await
 }
 
@@ -1990,7 +1971,14 @@ mod tests {
         folder("in zeta, second", Some(zeta)).await;
         folder("in zeta, first", Some(zeta)).await;
         folder("alpha", Some(ring_b)).await;
-        db.move_folder(ring_a, Some(ring_b)).await.unwrap();
+        // Ring a goes after zeta and alpha, at the end of ring b's folders,
+        // where a move would have put it.
+        sqlx::query("UPDATE folders SET parent_id = ?, sort_order = 2 WHERE id = ?")
+            .bind(ring_b.to_string())
+            .bind(ring_a.to_string())
+            .execute(&pool)
+            .await
+            .unwrap();
 
         let names_in = |parent: Uuid| {
             let db = db.clone();
@@ -2035,7 +2023,11 @@ mod tests {
         // A folder that names itself as its parent is gone into once as
         // well.
         let own = folder("its own", None).await;
-        db.move_folder(own, Some(own)).await.unwrap();
+        sqlx::query("UPDATE folders SET parent_id = id WHERE id = ?")
+            .bind(own.to_string())
+            .execute(&pool)
+            .await
+            .unwrap();
         tokio::time::timeout(
             std::time::Duration::from_secs(10),
             sort_children_alphabetically(&db, None, Some(own), true),

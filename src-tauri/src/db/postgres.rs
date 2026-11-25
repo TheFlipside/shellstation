@@ -15,6 +15,7 @@ use super::models::{
 use super::update_builder::{BindVal, Dialect, SessionColumn, UpdateBuilder};
 use super::{
     cmp_hostname, first_of_each, search_pattern, BulkSessionEdit, DatabaseProvider, DbResult,
+    INTO_ITSELF,
 };
 
 /// The limits every connection of the app sets for itself, as `name` and
@@ -443,6 +444,170 @@ async fn number_own_sessions(
     Ok(())
 }
 
+/// How often a folder move is tried that meets another move of the same
+/// moment (see [`try_move_folder`]).
+const MOVE_ATTEMPTS: u32 = 3;
+
+/// The answer to a folder move that met other changes at every attempt. The
+/// server's text, which is in the application log, says nothing more to the
+/// user.
+pub(crate) const MOVE_GIVEN_UP: &str =
+    "The folders changed at the same moment as this move. Please try again.";
+
+/// Why a folder move did not happen.
+enum MoveFailure {
+    /// It could not be serialized with a transaction of the same moment, as
+    /// another move of the role's that it could have made a ring with: it is
+    /// tried again.
+    Conflict(String),
+    /// Anything else, which is the answer.
+    Refused(String),
+}
+
+impl From<String> for MoveFailure {
+    fn from(e: String) -> Self {
+        MoveFailure::Refused(e)
+    }
+}
+
+/// What a statement of a folder move failed with, under `what`.
+fn move_failed(what: &'static str) -> impl Fn(sqlx::Error) -> MoveFailure {
+    move |e| {
+        // A serialization failure, or a deadlock, which the server ends one
+        // of the two for.
+        let conflict = matches!(
+            &e,
+            sqlx::Error::Database(db) if matches!(db.code().as_deref(), Some("40001" | "40P01"))
+        );
+        let text = format!("{what}: {e}");
+        if conflict {
+            MoveFailure::Conflict(text)
+        } else {
+            MoveFailure::Refused(text)
+        }
+    }
+}
+
+/// Whether the folder `$2` is the target `$1` or one of the folders above
+/// it, as far as the role can see them. `UNION` ends the look on a ring.
+const IS_ABOVE: &str = "WITH RECURSIVE up AS ( \
+         SELECT f.id, f.parent_id FROM folders f WHERE f.id = $1 \
+         UNION \
+         SELECT f.id, f.parent_id FROM folders f JOIN up ON f.id = up.parent_id) \
+     SELECT EXISTS (SELECT 1 FROM up WHERE up.id = $2)";
+
+/// Move the folder `id` to the end of the folders in `new_parent_id`
+/// (`None`: the top level), once.
+///
+/// The look up the tree for a ring is part of the move's transaction, which
+/// is `SERIALIZABLE`. Two moves of the same moment, each of a folder into
+/// one below the other, lock no row the other does, and at `READ COMMITTED`
+/// each looked at the tree as it was before the other and passed, and so
+/// did `shellstation_own_folder`, which looks the same way: the two put the
+/// folders into a ring. As two serializable transactions, one of the two
+/// fails, and is tried again on the tree the other left, where it is
+/// refused.
+///
+/// A ring takes two moves by the same role: the trigger requires every
+/// folder above a target to be the moving role's own, so another role's
+/// move cannot be one of the two. The `SERIALIZABLE` transaction holds the
+/// app's moves to this, and not a role's own statements at another
+/// isolation level. It can also fail a move that would make no ring, at a
+/// transaction of the same moment that read or wrote the same folders,
+/// such as another user's that adds a folder to the top level; that move
+/// is tried again as well.
+async fn try_move_folder(
+    pool: &PgPool,
+    id: Uuid,
+    new_parent_id: Option<Uuid>,
+) -> Result<(), MoveFailure> {
+    let id_str = id.to_string();
+    let parent_str = new_parent_id.map(|u| u.to_string());
+
+    let mut tx = pool
+        .begin_with("BEGIN ISOLATION LEVEL SERIALIZABLE")
+        .await
+        .map_err(move_failed("Failed to begin transaction"))?;
+
+    if sqlx::query("SELECT 1 FROM folders WHERE id = $1 AND owner = current_user FOR NO KEY UPDATE")
+        .bind(&id_str)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(move_failed("Failed to check folder ownership"))?
+        .is_none()
+    {
+        return Err("You can only move folders you own".to_string().into());
+    }
+
+    if let Some(ref target) = parent_str {
+        if sqlx::query(
+            "SELECT 1 FROM folders WHERE id = $1 AND owner = current_user FOR NO KEY UPDATE",
+        )
+        .bind(target)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(move_failed("Failed to check target folder ownership"))?
+        .is_none()
+        {
+            return Err("You can only move items into your own folders"
+                .to_string()
+                .into());
+        }
+
+        // Into itself or below itself: refused here, on the tree as this
+        // transaction sees it. This holds as far as the role can see the
+        // folders above the target; for a regular role the trigger requires
+        // all of them to be its own, and the owning role, which the trigger
+        // lets through, is checked here as well, up to a folder it cannot
+        // see.
+        let ring: bool = sqlx::query_scalar(IS_ABOVE)
+            .bind(target)
+            .bind(&id_str)
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(move_failed("Failed to check the folders above the target"))?;
+        if ring {
+            return Err(INTO_ITSELF.to_string().into());
+        }
+    }
+
+    // Lock the user's own siblings in the target parent to prevent
+    // sort_order races with the app's other statements, which are not
+    // serializable; see `create_folder` for why only those.
+    sqlx::query(
+        "SELECT id FROM folders \
+         WHERE parent_id IS NOT DISTINCT FROM $1 AND owner = current_user ORDER BY id FOR NO KEY UPDATE",
+    )
+    .bind(&parent_str)
+    .fetch_all(&mut *tx)
+    .await
+    .map_err(move_failed("Failed to lock sibling folders"))?;
+
+    let sort_order: i32 = sqlx::query_scalar(
+        "SELECT COALESCE(MAX(sort_order), -1) + 1 FROM folders \
+         WHERE parent_id IS NOT DISTINCT FROM $1",
+    )
+    .bind(&parent_str)
+    .fetch_one(&mut *tx)
+    .await
+    .map_err(move_failed("Failed to compute sort_order"))?;
+
+    let result = sqlx::query("UPDATE folders SET parent_id = $1, sort_order = $2 WHERE id = $3")
+        .bind(&parent_str)
+        .bind(sort_order)
+        .bind(&id_str)
+        .execute(&mut *tx)
+        .await
+        .map_err(move_failed("Failed to move folder"))?;
+
+    if result.rows_affected() == 0 {
+        return Err(format!("Folder {id} not found").into());
+    }
+
+    tx.commit().await.map_err(move_failed("Failed to commit"))?;
+    Ok(())
+}
+
 #[async_trait]
 impl DatabaseProvider for PostgresProvider {
     // ── Folders ──────────────────────────────────────────────────────────
@@ -628,78 +793,30 @@ impl DatabaseProvider for PostgresProvider {
     }
 
     async fn move_folder(&self, id: Uuid, new_parent_id: Option<Uuid>) -> DbResult<()> {
-        let id_str = id.to_string();
-        let parent_str = new_parent_id.map(|u| u.to_string());
-
-        let mut tx = self
-            .pool
-            .begin()
-            .await
-            .map_err(|e| format!("Failed to begin transaction: {e}"))?;
-
-        if sqlx::query(
-            "SELECT 1 FROM folders WHERE id = $1 AND owner = current_user FOR NO KEY UPDATE",
-        )
-        .bind(&id_str)
-        .fetch_optional(&mut *tx)
-        .await
-        .map_err(|e| format!("Failed to check folder ownership: {e}"))?
-        .is_none()
-        {
-            return Err("You can only move folders you own".to_string());
-        }
-
-        if let Some(ref target) = parent_str {
-            if sqlx::query(
-                "SELECT 1 FROM folders WHERE id = $1 AND owner = current_user FOR NO KEY UPDATE",
-            )
-            .bind(target)
-            .fetch_optional(&mut *tx)
-            .await
-            .map_err(|e| format!("Failed to check target folder ownership: {e}"))?
-            .is_none()
-            {
-                return Err("You can only move items into your own folders".to_string());
+        let mut attempt = 1;
+        loop {
+            match try_move_folder(&self.pool, id, new_parent_id).await {
+                Ok(()) => return Ok(()),
+                Err(MoveFailure::Conflict(e)) if attempt < MOVE_ATTEMPTS => {
+                    tracing::debug!(
+                        attempt,
+                        "A folder move met another one and is tried again: {e}"
+                    );
+                    // A little later each time, so that two moves that met
+                    // do not meet again in step.
+                    tokio::time::sleep(std::time::Duration::from_millis(20 * u64::from(attempt)))
+                        .await;
+                    attempt += 1;
+                }
+                Err(MoveFailure::Conflict(e)) => {
+                    tracing::warn!(
+                        "A folder move met other changes {MOVE_ATTEMPTS} times and was given up: {e}"
+                    );
+                    return Err(MOVE_GIVEN_UP.to_string());
+                }
+                Err(MoveFailure::Refused(e)) => return Err(e),
             }
         }
-
-        // Lock the user's own siblings in the target parent to prevent
-        // sort_order races; see `create_folder` for why only those.
-        sqlx::query(
-            "SELECT id FROM folders \
-             WHERE parent_id IS NOT DISTINCT FROM $1 AND owner = current_user ORDER BY id FOR NO KEY UPDATE",
-        )
-        .bind(&parent_str)
-        .fetch_all(&mut *tx)
-        .await
-        .map_err(|e| format!("Failed to lock sibling folders: {e}"))?;
-
-        let sort_order: i32 = sqlx::query_scalar(
-            "SELECT COALESCE(MAX(sort_order), -1) + 1 FROM folders \
-             WHERE parent_id IS NOT DISTINCT FROM $1",
-        )
-        .bind(&parent_str)
-        .fetch_one(&mut *tx)
-        .await
-        .map_err(|e| format!("Failed to compute sort_order: {e}"))?;
-
-        let result =
-            sqlx::query("UPDATE folders SET parent_id = $1, sort_order = $2 WHERE id = $3")
-                .bind(&parent_str)
-                .bind(sort_order)
-                .bind(&id_str)
-                .execute(&mut *tx)
-                .await
-                .map_err(|e| format!("Failed to move folder: {e}"))?;
-
-        if result.rows_affected() == 0 {
-            return Err(format!("Folder {id} not found"));
-        }
-
-        tx.commit()
-            .await
-            .map_err(|e| format!("Failed to commit: {e}"))?;
-        Ok(())
     }
 
     // RLS enforces access: owner_all + shared_delete (owner only).

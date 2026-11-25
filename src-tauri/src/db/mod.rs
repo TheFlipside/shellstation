@@ -46,6 +46,12 @@ pub(crate) fn search_pattern(query: &str) -> Option<String> {
     Some(pattern)
 }
 
+/// The refusal of a folder move that would put the folder into itself or
+/// below itself,
+/// which each backend's `move_folder` checks in the move itself.
+pub(crate) const INTO_ITSELF: &str =
+    "A folder cannot be moved into itself or one of its descendants.";
+
 /// `ids` with each one where it comes first. A reorder or sort numbers a row
 /// by its place in the list, in one statement for the whole list, so the
 /// list gives each row one place.

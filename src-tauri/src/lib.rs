@@ -3204,6 +3204,157 @@ mod tests {
         with_rls_test_database(check_folder_walks_end_on_a_loop).await;
     }
 
+    /// Two moves of the same moment against a real server, each of a folder
+    /// into one below the other, as one role from two clients: one of the
+    /// two fails, so the folders are put into no ring, and afterwards the
+    /// move that would make one is refused. Same server as for
+    /// `shared_rows_keep_their_owner`; run with `--ignored two_moves`.
+    #[tokio::test]
+    #[ignore = "needs a throwaway PostgreSQL server in SHELLSTATION_TEST_PG_URL"]
+    async fn two_moves_at_once_make_no_ring() {
+        with_rls_test_database(check_two_moves_at_once_make_no_ring).await;
+    }
+
+    async fn check_two_moves_at_once_make_no_ring(
+        opts: sqlx::postgres::PgConnectOptions,
+        admin: String,
+        alice: String,
+        bob: String,
+    ) {
+        use db::models::NewFolder;
+        use db::DatabaseProvider;
+
+        let server = PgPoolOptions::new()
+            .max_connections(1)
+            .connect_with(opts.clone())
+            .await
+            .unwrap();
+        prepare_rls_test_database(&server, &admin, &alice, &bob).await;
+        pg_exec(&server, "RESET ROLE").await.unwrap();
+        let (alice_pool, _) = app_connection_as(&opts, &alice).await;
+        let app = PostgresProvider::new(alice_pool.clone());
+        let folder = |name: &'static str, parent_id| {
+            let app = &app;
+            async move {
+                app.create_folder(NewFolder {
+                    name: name.to_string(),
+                    parent_id,
+                })
+                .await
+                .unwrap()
+                .id
+            }
+        };
+        let a = folder("a", None).await;
+        let a1 = folder("a1", Some(a)).await;
+        let b = folder("b", None).await;
+        let b1 = folder("b1", Some(b)).await;
+
+        // Alice from another client, in a transaction such as the app's
+        // move: it looks above a1, finds no b there, and moves b into a1,
+        // which `shellstation_own_folder` looks at the same way. It stays
+        // open while the app moves a into b1, which on the tree as it was
+        // before is no ring either, and locks no row the other locks.
+        let other = PgPoolOptions::new()
+            .max_connections(1)
+            .connect_with(opts.clone())
+            .await
+            .unwrap();
+        pg_exec(&other, &format!("SET ROLE {alice}")).await.unwrap();
+        let above = "WITH RECURSIVE up AS ( \
+                         SELECT f.id, f.parent_id FROM folders f WHERE f.id = $1 \
+                         UNION \
+                         SELECT f.id, f.parent_id FROM folders f JOIN up ON f.id = up.parent_id) \
+                     SELECT EXISTS (SELECT 1 FROM up WHERE up.id = $2)";
+        let mut tx = other
+            .begin_with("BEGIN ISOLATION LEVEL SERIALIZABLE")
+            .await
+            .unwrap();
+        let ring: bool = sqlx::query_scalar(above)
+            .bind(a1.to_string())
+            .bind(b.to_string())
+            .fetch_one(&mut *tx)
+            .await
+            .unwrap();
+        assert!(!ring);
+        sqlx::query("UPDATE folders SET parent_id = $1 WHERE id = $2")
+            .bind(a1.to_string())
+            .bind(b.to_string())
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        let moved = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            app.move_folder(a, Some(b1)),
+        )
+        .await
+        .expect("the app's move waited for the other");
+        let committed = tx.commit().await;
+        other.close().await;
+        // Exactly one of the two fails, and for the other: the app's move
+        // after its three attempts, the other client's at its commit.
+        match (&moved, &committed) {
+            (Ok(()), Err(e)) => assert!(
+                e.to_string().contains("could not serialize"),
+                "the other client failed for another reason: {e}"
+            ),
+            (Err(e), Ok(())) => assert_eq!(e, db::postgres::MOVE_GIVEN_UP),
+            other => panic!("one move, and only one, fails: {other:?}"),
+        }
+
+        // Each of the four folders still has the top level above it.
+        for start in [a, a1, b, b1] {
+            let reaches_top: bool = sqlx::query_scalar(
+                "WITH RECURSIVE up AS ( \
+                     SELECT f.id, f.parent_id FROM folders f WHERE f.id = $1 \
+                     UNION \
+                     SELECT f.id, f.parent_id FROM folders f JOIN up ON f.id = up.parent_id) \
+                 SELECT EXISTS (SELECT 1 FROM up WHERE up.parent_id IS NULL)",
+            )
+            .bind(start.to_string())
+            .fetch_one(&server)
+            .await
+            .unwrap();
+            assert!(reaches_top, "{start} is in a ring");
+        }
+
+        // The move that would make the ring now is refused, whichever of
+        // the two went through.
+        let refused = if moved.is_ok() {
+            app.move_folder(b, Some(a1)).await
+        } else {
+            app.move_folder(a, Some(b1)).await
+        };
+        assert_eq!(refused.unwrap_err(), db::INTO_ITSELF);
+
+        // The owning role's moves are let through by the trigger, and
+        // refused by the move itself.
+        let (admin_pool, _) = app_connection_as(&opts, &admin).await;
+        let admin_app = PostgresProvider::new(admin_pool.clone());
+        let x = admin_app
+            .create_folder(NewFolder {
+                name: "x".to_string(),
+                parent_id: None,
+            })
+            .await
+            .unwrap()
+            .id;
+        let x1 = admin_app
+            .create_folder(NewFolder {
+                name: "x1".to_string(),
+                parent_id: Some(x),
+            })
+            .await
+            .unwrap()
+            .id;
+        assert_eq!(
+            admin_app.move_folder(x, Some(x1)).await.unwrap_err(),
+            db::INTO_ITSELF
+        );
+        admin_pool.close().await;
+        alice_pool.close().await;
+    }
+
     /// The search against a real server: a role finds its own folders and
     /// sessions and other users' shared ones, by `ILIKE` and with the query
     /// taken as written, and a statement of a search gives up at the

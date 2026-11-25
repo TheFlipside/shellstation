@@ -15,6 +15,7 @@ use super::models::{
 use super::update_builder::{BindVal, Dialect, SessionColumn, UpdateBuilder};
 use super::{
     cmp_hostname, first_of_each, search_pattern, BulkSessionEdit, DatabaseProvider, DbResult,
+    INTO_ITSELF,
 };
 
 pub struct SqliteProvider {
@@ -52,6 +53,23 @@ const NUMBER_FOLDERS: &str = "UPDATE folders SET sort_order = o.key \
 const NUMBER_SESSIONS: &str = "UPDATE sessions SET sort_order = o.key \
      FROM json_each(?1) AS o \
      WHERE sessions.id = o.value AND sessions.folder_id = ?2";
+
+/// The statement of [`SqliteProvider::move_folder`]: the folder `?1` to the
+/// end of the folders in `?2` (`NULL`: the top level), unless `?1` is `?2`
+/// or one of the folders above it. The look up the tree and the move are one
+/// statement, and so one write: a look that came before the move, as it did,
+/// let two moves at the same moment each pass on the tree as it was before
+/// the other, and so put two folders each below the other. `UNION` ends the
+/// look on a ring above `?2`, which statements past the app can leave.
+const MOVE_FOLDER: &str = "WITH RECURSIVE above(id) AS ( \
+         SELECT ?2 WHERE ?2 IS NOT NULL \
+         UNION \
+         SELECT f.parent_id FROM folders f JOIN above ON f.id = above.id \
+         WHERE f.parent_id IS NOT NULL) \
+     UPDATE folders SET parent_id = ?2, \
+         sort_order = (SELECT COALESCE(MAX(sort_order), -1) + 1 FROM folders \
+                       WHERE parent_id IS ?2) \
+     WHERE id = ?1 AND NOT EXISTS (SELECT 1 FROM above WHERE above.id = ?1)";
 
 /// `ids`, each where it comes first, as the JSON array that
 /// [`NUMBER_FOLDERS`] and [`NUMBER_SESSIONS`] take.
@@ -258,29 +276,32 @@ impl DatabaseProvider for SqliteProvider {
     }
 
     async fn move_folder(&self, id: Uuid, new_parent_id: Option<Uuid>) -> DbResult<()> {
+        let id_str = id.to_string();
         let parent_str = new_parent_id.map(|u| u.to_string());
 
-        // Append at end of new parent's sibling list.
-        let sort_order: i32 = sqlx::query_scalar(
-            "SELECT COALESCE(MAX(sort_order), -1) + 1 FROM folders WHERE parent_id IS ?",
-        )
-        .bind(&parent_str)
-        .fetch_one(&self.pool)
-        .await
-        .map_err(|e| format!("Failed to compute sort_order: {e}"))?;
-
-        let result = sqlx::query("UPDATE folders SET parent_id = ?, sort_order = ? WHERE id = ?")
+        let result = sqlx::query(MOVE_FOLDER)
+            .bind(&id_str)
             .bind(&parent_str)
-            .bind(sort_order)
-            .bind(id.to_string())
             .execute(&self.pool)
             .await
             .map_err(|e| format!("Failed to move folder: {e}"))?;
-
-        if result.rows_affected() == 0 {
-            return Err(format!("Folder {id} not found"));
+        if result.rows_affected() > 0 {
+            return Ok(());
         }
-        Ok(())
+
+        // Nothing moved: the folder is not there, or the move would have put
+        // it into itself or below itself.
+        let exists = sqlx::query("SELECT 1 FROM folders WHERE id = ?")
+            .bind(&id_str)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|e| format!("Failed to move folder: {e}"))?
+            .is_some();
+        if exists {
+            Err(INTO_ITSELF.to_string())
+        } else {
+            Err(format!("Folder {id} not found"))
+        }
     }
 
     async fn delete_folder(&self, id: Uuid) -> DbResult<()> {
@@ -1737,5 +1758,142 @@ mod tests {
             sessions_in(&db, other).await,
             [("p".to_string(), 0), ("q".to_string(), 1)]
         );
+    }
+
+    /// The parent of `folder`, as the table has it.
+    async fn parent_of(db: &SqliteProvider, folder: Uuid) -> Option<Uuid> {
+        db.list_folders()
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|f| f.id == folder)
+            .unwrap()
+            .parent_id
+    }
+
+    async fn folder_in(db: &SqliteProvider, name: &str, parent_id: Option<Uuid>) -> Uuid {
+        db.create_folder(NewFolder {
+            name: name.to_string(),
+            parent_id,
+        })
+        .await
+        .unwrap()
+        .id
+    }
+
+    #[tokio::test]
+    async fn a_folder_is_not_moved_into_itself_or_below_itself() {
+        let db = database_with(&[]).await;
+        let lab = db.list_folders().await.unwrap()[0].id;
+        let inner = folder_in(&db, "inner", Some(lab)).await;
+        let deep = folder_in(&db, "deep", Some(inner)).await;
+        let other = folder_in(&db, "other", None).await;
+
+        for target in [lab, inner, deep] {
+            assert_eq!(
+                db.move_folder(lab, Some(target)).await.unwrap_err(),
+                INTO_ITSELF
+            );
+        }
+        assert_eq!(parent_of(&db, lab).await, None);
+
+        // Anywhere else it goes, to the end there.
+        folder_in(&db, "first in other", Some(other)).await;
+        db.move_folder(inner, Some(other)).await.unwrap();
+        assert_eq!(
+            folders_in(&db, Some(other)).await,
+            [("first in other".to_string(), 0), ("inner".to_string(), 1)]
+        );
+        db.move_folder(deep, None).await.unwrap();
+        assert_eq!(parent_of(&db, deep).await, None);
+
+        // A folder that is not there.
+        let gone = Uuid::new_v4();
+        assert_eq!(
+            db.move_folder(gone, None).await.unwrap_err(),
+            format!("Folder {gone} not found")
+        );
+    }
+
+    #[tokio::test]
+    async fn a_move_ends_on_a_ring_above_its_target() {
+        let db = database_with(&[]).await;
+        let lab = db.list_folders().await.unwrap()[0].id;
+        let ring_a = folder_in(&db, "ring a", None).await;
+        let ring_b = folder_in(&db, "ring b", Some(ring_a)).await;
+        // Two folders that name each other, as only a statement past the
+        // app leaves them.
+        sqlx::query("UPDATE folders SET parent_id = ? WHERE id = ?")
+            .bind(ring_b.to_string())
+            .bind(ring_a.to_string())
+            .execute(&db.pool)
+            .await
+            .unwrap();
+
+        // A folder that is no part of the ring goes into it.
+        db.move_folder(lab, Some(ring_b)).await.unwrap();
+        assert_eq!(parent_of(&db, lab).await, Some(ring_b));
+        // One of the ring is not put below itself again.
+        assert_eq!(
+            db.move_folder(ring_a, Some(lab)).await.unwrap_err(),
+            INTO_ITSELF
+        );
+        // And out of it, which ends the ring.
+        db.move_folder(ring_a, None).await.unwrap();
+        assert_eq!(parent_of(&db, ring_a).await, None);
+    }
+
+    /// Two moves of the same moment, each of which would be no ring on the
+    /// tree as it was before the other, on a database with two connections:
+    /// one of them is refused, whichever comes first.
+    #[tokio::test]
+    async fn two_moves_at_once_make_no_ring() {
+        /// Takes the test's directory away also where an assertion fails.
+        struct TempDir(std::path::PathBuf);
+        impl Drop for TempDir {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+        let dir = TempDir(std::env::temp_dir().join(format!("ss-moves-{}", Uuid::new_v4())));
+        std::fs::create_dir(&dir.0).unwrap();
+        let pool = SqlitePoolOptions::new()
+            .max_connections(2)
+            .connect_with(
+                SqliteConnectOptions::new()
+                    .filename(dir.0.join("sessions.db"))
+                    .create_if_missing(true)
+                    .pragma("foreign_keys", "ON")
+                    .busy_timeout(std::time::Duration::from_secs(10)),
+            )
+            .await
+            .unwrap();
+        sqlx::migrate!().run(&pool).await.unwrap();
+        let db = SqliteProvider::new(pool.clone());
+
+        for _ in 0..20 {
+            let a = folder_in(&db, "a", None).await;
+            let a1 = folder_in(&db, "a1", Some(a)).await;
+            let b = folder_in(&db, "b", None).await;
+            let b1 = folder_in(&db, "b1", Some(b)).await;
+            let (first, second) =
+                tokio::join!(db.move_folder(a, Some(b1)), db.move_folder(b, Some(a1)));
+            match (first, second) {
+                (Ok(()), Err(e)) => {
+                    assert_eq!(e, INTO_ITSELF);
+                    assert_eq!(parent_of(&db, b).await, None);
+                }
+                (Err(e), Ok(())) => {
+                    assert_eq!(e, INTO_ITSELF);
+                    assert_eq!(parent_of(&db, a).await, None);
+                }
+                other => panic!("one move, and only one, is refused: {other:?}"),
+            }
+            sqlx::query("DELETE FROM folders")
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        pool.close().await;
     }
 }
